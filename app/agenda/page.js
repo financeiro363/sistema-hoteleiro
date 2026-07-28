@@ -1,190 +1,249 @@
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+// ============================================================================
+// AGENDA TELEFÔNICA
+// - Exige login (senão manda para /login)
+// - Mostra e cadastra contatos apenas do hotel da pessoa logada
+// - A segurança de verdade está no banco (RLS); o filtro aqui é reforço
+// ============================================================================
+
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { supabase } from '../../lib/supabaseClient';
 
 export default function AgendaTelefonica() {
   const router = useRouter();
 
   const [verificandoLogin, setVerificandoLogin] = useState(true);
-  const [usuario, setUsuario] = useState(null); // { nome, hotel_id, papel }
+  const [usuario, setUsuario] = useState(null); // { id, nome, hotel_id, papel }
 
   const [contatos, setContatos] = useState([]);
   const [carregando, setCarregando] = useState(true);
-  const [erro, setErro] = useState("");
+  const [erro, setErro] = useState('');
+  const [busca, setBusca] = useState('');
 
-  const [nomeCompleto, setNomeCompleto] = useState("");
-  const [telefone, setTelefone] = useState("");
-  const [email, setEmail] = useState("");
-  const [funcao, setFuncao] = useState("");
+  // Formulário de novo contato
+  const [mostrarFormulario, setMostrarFormulario] = useState(false);
+  const [nomeCompleto, setNomeCompleto] = useState('');
+  const [telefone, setTelefone] = useState('');
+  const [email, setEmail] = useState('');
+  const [funcao, setFuncao] = useState('');
   const [salvando, setSalvando] = useState(false);
+  const [avisoSucesso, setAvisoSucesso] = useState('');
 
-  // Passo 1: ao abrir a página, confere se a pessoa está logada. Se não
-  // estiver, manda ela direto para a tela de login.
+  // Passo 1: confere se a pessoa está logada; se não, vai para o login
   useEffect(() => {
+    let ativo = true;
     async function verificar() {
       const { data: sessao } = await supabase.auth.getSession();
-      if (!sessao.session) {
-        router.push("/login");
+      if (!sessao?.session) {
+        router.push('/login');
         return;
       }
-
       const { data: dadosUsuario, error } = await supabase
-        .from("usuarios")
-        .select("*")
-        .eq("auth_id", sessao.session.user.id)
+        .from('usuarios')
+        .select('*')
+        .eq('auth_id', sessao.session.user.id)
         .single();
 
       if (error || !dadosUsuario) {
-        router.push("/login");
+        router.push('/login');
         return;
       }
-
+      if (!ativo) return;
       setUsuario(dadosUsuario);
       setVerificandoLogin(false);
     }
     verificar();
+    return () => { ativo = false; };
   }, [router]);
 
-  // Passo 2: só depois de saber quem é o usuário (e de qual hotel), busca os
-  // contatos — e só os contatos DAQUELE hotel específico.
-  async function carregarContatos(hotelId) {
+  // Passo 2: com o usuário identificado, busca os contatos do hotel dele
+  const carregarContatos = useCallback(async (hotelId) => {
     setCarregando(true);
-    setErro("");
+    setErro('');
     const { data, error } = await supabase
-      .from("agenda_telefonica")
-      .select("*")
-      .eq("hotel_id", hotelId)
-      .order("nome_completo", { ascending: true });
+      .from('agenda_telefonica')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .order('nome_completo', { ascending: true });
 
     if (error) {
-      setErro("Não foi possível carregar os contatos: " + error.message);
+      setErro('Não foi possível carregar os contatos. Detalhe técnico: ' + error.message);
     } else {
-      setContatos(data);
+      setContatos(data || []);
     }
     setCarregando(false);
-  }
+  }, []);
 
   useEffect(() => {
-    if (usuario) {
-      carregarContatos(usuario.hotel_id);
-    }
-  }, [usuario]);
+    if (usuario?.hotel_id) carregarContatos(usuario.hotel_id);
+  }, [usuario, carregarContatos]);
 
-  async function salvarContato(e) {
-    e.preventDefault();
-    if (!nomeCompleto.trim() || !telefone.trim()) return;
+  // Cadastrar novo contato
+  async function salvarContato(evento) {
+    evento.preventDefault();
+    if (salvando) return;
+    setErro('');
+    setAvisoSucesso('');
+
+    if (!nomeCompleto.trim() || !telefone.trim()) {
+      setErro('Preencha pelo menos o nome e o telefone.');
+      return;
+    }
 
     setSalvando(true);
-    setErro("");
-    const { error } = await supabase.from("agenda_telefonica").insert({
+    const { error } = await supabase.from('agenda_telefonica').insert({
       nome_completo: nomeCompleto.trim(),
       telefone: telefone.trim(),
-      email: email.trim(),
-      funcao: funcao.trim(),
+      email: email.trim() || null,
+      funcao: funcao.trim() || null,
       hotel_id: usuario.hotel_id,
     });
+    setSalvando(false);
 
     if (error) {
-      setErro("Não foi possível salvar: " + error.message);
-    } else {
-      setNomeCompleto("");
-      setTelefone("");
-      setEmail("");
-      setFuncao("");
-      await carregarContatos(usuario.hotel_id);
+      setErro('Não foi possível salvar o contato. Detalhe técnico: ' + error.message);
+      return;
     }
-    setSalvando(false);
+
+    setNomeCompleto('');
+    setTelefone('');
+    setEmail('');
+    setFuncao('');
+    setMostrarFormulario(false);
+    setAvisoSucesso('Contato salvo com sucesso!');
+    setTimeout(() => setAvisoSucesso(''), 4000);
+    carregarContatos(usuario.hotel_id);
   }
 
-  async function sair() {
-    await supabase.auth.signOut();
-    router.push("/login");
-  }
+  // Busca simples (nome, função, telefone ou e-mail)
+  const contatosFiltrados = contatos.filter((c) => {
+    const texto = busca.trim().toLowerCase();
+    if (!texto) return true;
+    return (
+      (c.nome_completo || '').toLowerCase().includes(texto) ||
+      (c.funcao || '').toLowerCase().includes(texto) ||
+      (c.telefone || '').toLowerCase().includes(texto) ||
+      (c.email || '').toLowerCase().includes(texto)
+    );
+  });
 
   if (verificandoLogin) {
     return (
-      <main style={{ padding: 40, textAlign: "center", color: "#6B7280" }}>
-        Verificando login...
+      <main className="conteudo">
+        <p className="texto-suave">Verificando seu acesso…</p>
       </main>
     );
   }
 
   return (
-    <main style={{ padding: 40, maxWidth: 640, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: 13, color: "#6B7280" }}>Olá, {usuario.nome}</div>
-          <h1 style={{ color: "#111827", margin: "4px 0 0" }}>Agenda Telefônica</h1>
-        </div>
+    <main className="conteudo">
+      <span className="olho">Contatos do hotel</span>
+      <div className="barra-pagina">
+        <h1 style={{ margin: 0 }}>Agenda Telefônica</h1>
         <button
-          onClick={sair}
-          style={{ padding: "8px 14px", background: "#fff", border: "1px solid #E5E7EB", borderRadius: 8, cursor: "pointer", color: "#6B7280", fontSize: 13 }}
+          type="button"
+          className="botao botao-principal"
+          onClick={() => setMostrarFormulario(!mostrarFormulario)}
         >
-          Sair
+          {mostrarFormulario ? 'Fechar formulário' : '+ Novo contato'}
         </button>
       </div>
 
-      <form
-        onSubmit={salvarContato}
-        style={{
-          background: "#fff",
-          border: "1px solid #E5E7EB",
-          borderRadius: 12,
-          padding: 20,
-          marginTop: 20,
-          marginBottom: 24,
-        }}
-      >
-        <h3 style={{ marginTop: 0, fontSize: 15, color: "#111827" }}>Novo contato</h3>
-        <Campo label="Nome completo">
-          <input style={inputStyle} value={nomeCompleto} onChange={(e) => setNomeCompleto(e.target.value)} />
-        </Campo>
-        <Campo label="Telefone">
-          <input style={inputStyle} value={telefone} onChange={(e) => setTelefone(e.target.value)} />
-        </Campo>
-        <Campo label="E-mail (opcional)">
-          <input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} />
-        </Campo>
-        <Campo label="O que ele faz (opcional)">
-          <input style={inputStyle} value={funcao} onChange={(e) => setFuncao(e.target.value)} />
-        </Campo>
-        <button
-          type="submit"
-          disabled={salvando}
-          style={{
-            padding: "10px 18px",
-            background: "#0E7C66",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: 600,
-            cursor: "pointer",
-            opacity: salvando ? 0.6 : 1,
-          }}
-        >
-          {salvando ? "Salvando..." : "Salvar contato"}
-        </button>
-      </form>
+      {avisoSucesso && <div className="aviso-sucesso">{avisoSucesso}</div>}
+      {erro && <div className="aviso-erro">{erro}</div>}
 
-      {erro && <p style={{ color: "#B91C1C" }}>{erro}</p>}
+      {/* Formulário de cadastro */}
+      {mostrarFormulario && (
+        <form className="cartao" style={{ marginBottom: 20 }} onSubmit={salvarContato}>
+          <h2 style={{ fontSize: '1.2rem', marginBottom: 4 }}>Novo contato</h2>
 
+          <label className="rotulo" htmlFor="contato-nome">Nome completo *</label>
+          <input
+            id="contato-nome"
+            className="campo"
+            type="text"
+            value={nomeCompleto}
+            onChange={(e) => setNomeCompleto(e.target.value)}
+            placeholder="Ex.: João da Silva — Gás Central"
+          />
+
+          <label className="rotulo" htmlFor="contato-telefone">Telefone *</label>
+          <input
+            id="contato-telefone"
+            className="campo"
+            type="tel"
+            value={telefone}
+            onChange={(e) => setTelefone(e.target.value)}
+            placeholder="(88) 90000-0000"
+          />
+
+          <label className="rotulo" htmlFor="contato-email">E-mail</label>
+          <input
+            id="contato-email"
+            className="campo"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="contato@empresa.com.br"
+          />
+
+          <label className="rotulo" htmlFor="contato-funcao">Função / Empresa</label>
+          <input
+            id="contato-funcao"
+            className="campo"
+            type="text"
+            value={funcao}
+            onChange={(e) => setFuncao(e.target.value)}
+            placeholder="Ex.: Fornecedor de gás"
+          />
+
+          <button
+            type="submit"
+            className="botao botao-principal"
+            disabled={salvando}
+            style={{ marginTop: 18 }}
+          >
+            {salvando ? 'Salvando…' : 'Salvar contato'}
+          </button>
+        </form>
+      )}
+
+      {/* Busca */}
+      <input
+        className="campo"
+        type="search"
+        value={busca}
+        onChange={(e) => setBusca(e.target.value)}
+        placeholder="Buscar por nome, função, telefone ou e-mail…"
+        aria-label="Buscar contatos"
+        style={{ marginBottom: 16 }}
+      />
+
+      {/* Lista de contatos */}
       {carregando ? (
-        <p style={{ color: "#6B7280" }}>Carregando...</p>
-      ) : contatos.length === 0 ? (
-        <p style={{ color: "#9CA3AF" }}>Nenhum contato cadastrado ainda.</p>
+        <p className="texto-suave">Carregando contatos…</p>
+      ) : contatosFiltrados.length === 0 ? (
+        <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>
+          {busca
+            ? 'Nenhum contato encontrado com essa busca.'
+            : 'Nenhum contato cadastrado ainda. Use o botão "+ Novo contato" para começar.'}
+        </div>
       ) : (
-        <div style={{ display: "grid", gap: 10 }}>
-          {contatos.map((c) => (
-            <div
-              key={c.id}
-              style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 10, padding: 14 }}
-            >
-              <div style={{ fontWeight: 700, color: "#111827" }}>{c.nome_completo}</div>
-              {c.funcao && <div style={{ fontSize: 12, color: "#0E7C66" }}>{c.funcao}</div>}
-              <div style={{ fontSize: 13, color: "#374151", marginTop: 4 }}>{c.telefone}</div>
-              {c.email && <div style={{ fontSize: 13, color: "#374151" }}>{c.email}</div>}
+        <div className="grade-contatos">
+          {contatosFiltrados.map((c) => (
+            <div key={c.id} className="contato-cartao">
+              <div className="contato-nome">{c.nome_completo}</div>
+              {c.funcao && <span className="contato-funcao">{c.funcao}</span>}
+              <div className="contato-linha">
+                📞 <a href={`tel:${(c.telefone || '').replace(/[^\d+]/g, '')}`}>{c.telefone}</a>
+              </div>
+              {c.email && (
+                <div className="contato-linha">
+                  ✉️ <a href={`mailto:${c.email}`}>{c.email}</a>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -192,23 +251,3 @@ export default function AgendaTelefonica() {
     </main>
   );
 }
-
-function Campo({ label, children }) {
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
-        {label}
-      </label>
-      {children}
-    </div>
-  );
-}
-
-const inputStyle = {
-  width: "100%",
-  padding: "8px 10px",
-  border: "1px solid #D1D5DB",
-  borderRadius: 6,
-  fontSize: 14,
-  boxSizing: "border-box",
-};

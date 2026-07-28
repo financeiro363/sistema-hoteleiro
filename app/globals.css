@@ -1,0 +1,444 @@
+/* ============================================================================
+   SISTEMA HOTELEIRO — Estilos globais (design system)
+   Mobile-first: os estilos base são para celular; as media queries no final
+   ajustam para tablets e telas grandes.
+   ============================================================================ */
+
+/* ---- Variáveis do design (troque aqui para mudar o site inteiro) ---------- */
+:root {
+  /* Cores */
+  --marca: #0E5A4E;          /* verde-recepção: cor principal da marca */
+  --marca-escura: #0A453C;   /* versão mais escura (hover) */
+  --marca-clara: #E2EFEA;    /* fundo suave da marca */
+  --latao: #A8842C;          /* dourado/latão: detalhes pequenos */
+  --latao-texto: #755A14;    /* latão escurecido p/ texto acessível */
+  --tinta: #1F2B27;          /* cor do texto principal */
+  --texto-suave: #5A6660;    /* textos secundários */
+  --fundo: #F4F5F2;          /* fundo geral da página */
+  --branco: #FFFFFF;
+  --borda: #E1E4DF;
+  --erro-fundo: #FBDDDD;
+  --erro-texto: #A31212;
+  --sucesso-fundo: #DDF2E4;
+  --sucesso-texto: #1E6B3C;
+
+  /* Tipografia */
+  --fonte-titulo: 'Bricolage Grotesque', 'Segoe UI', Arial, sans-serif;
+  --fonte-corpo: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+
+  /* Medidas */
+  --raio: 12px;              /* cantos arredondados padrão */
+  --raio-pilula: 999px;
+  --sombra: 0 1px 3px rgba(20, 40, 35, 0.06), 0 4px 14px rgba(20, 40, 35, 0.04);
+  --largura-conteudo: 1040px;
+}
+
+/* ---- Reset básico ---------------------------------------------------------- */
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--tinta);
+  font-family: var(--fonte-corpo);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+img { max-width: 100%; display: block; }
+
+/* ---- Escala tipográfica ---------------------------------------------------- */
+h1, h2, h3 {
+  font-family: var(--fonte-titulo);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.5em;
+  color: var(--tinta);
+  font-weight: 700;
+}
+h1 { font-size: clamp(1.9rem, 5vw, 3rem); }
+h2 { font-size: clamp(1.35rem, 3vw, 1.9rem); }
+h3 { font-size: clamp(1.1rem, 2.2vw, 1.3rem); }
+p  { margin: 0 0 1em; }
+
+a { color: var(--marca); }
+a:hover { color: var(--marca-escura); }
+
+/* "Olho" — etiqueta pequena acima dos títulos */
+.olho {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--latao-texto);
+  margin-bottom: 10px;
+}
+
+/* ---- Foco visível (acessibilidade por teclado) ----------------------------- */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--marca);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Respeita quem prefere menos movimento */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+/* ---- Botões (padrão único do site) ----------------------------------------- */
+.botao {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 12px 22px;
+  border: 1px solid transparent;
+  border-radius: var(--raio);
+  font-family: var(--fonte-corpo);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+              color 0.15s ease, transform 0.1s ease;
+}
+.botao:active { transform: translateY(1px); }
+.botao:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.botao-principal { background: var(--marca); color: var(--branco); }
+.botao-principal:hover { background: var(--marca-escura); color: var(--branco); }
+
+.botao-contorno {
+  background: transparent;
+  border-color: var(--marca);
+  color: var(--marca);
+}
+.botao-contorno:hover { background: var(--marca-clara); color: var(--marca-escura); }
+
+.botao-suave { background: #E9ECE8; color: var(--tinta); }
+.botao-suave:hover { background: #DEE2DD; }
+
+.botao-perigo { background: var(--erro-fundo); color: var(--erro-texto); }
+.botao-perigo:hover { background: #F5C7C7; }
+
+/* ---- Formulários ------------------------------------------------------------ */
+.rotulo {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 14px 0 6px;
+  color: var(--tinta);
+}
+.campo {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 16px; /* 16px evita zoom automático no iPhone */
+  font-family: var(--fonte-corpo);
+  color: var(--tinta);
+  background: var(--branco);
+  border: 1px solid #C7CEC9;
+  border-radius: 10px;
+}
+textarea.campo { resize: vertical; }
+
+/* ---- Cartões e avisos ------------------------------------------------------- */
+.cartao {
+  background: var(--branco);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  padding: 20px;
+  box-shadow: var(--sombra);
+}
+.aviso-erro {
+  background: var(--erro-fundo);
+  color: var(--erro-texto);
+  border: 1px solid #F0B4B4;
+  border-radius: 10px;
+  padding: 13px 16px;
+  margin: 12px 0;
+  font-size: 15px;
+}
+.aviso-sucesso {
+  background: var(--sucesso-fundo);
+  color: var(--sucesso-texto);
+  border: 1px solid #A5D9B8;
+  border-radius: 10px;
+  padding: 13px 16px;
+  margin: 12px 0;
+  font-size: 15px;
+}
+.texto-suave { color: var(--texto-suave); }
+
+/* ---- Estrutura das páginas -------------------------------------------------- */
+.conteudo {
+  max-width: var(--largura-conteudo);
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+/* ============================================================================
+   CABEÇALHO (header fixo com menu)
+   ============================================================================ */
+.cabecalho {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--borda);
+}
+.cabecalho-interno {
+  max-width: var(--largura-conteudo);
+  margin: 0 auto;
+  padding: 0 16px;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Logo / marca */
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--tinta);
+  font-family: var(--fonte-titulo);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.logo:hover { color: var(--marca-escura); }
+.logo-simbolo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--marca);
+  color: var(--branco);
+  font-size: 16px;
+}
+
+/* Navegação */
+.navegacao {
+  display: none; /* no celular fica escondida; abre pelo botão ☰ */
+  position: absolute;
+  top: 64px;
+  left: 0;
+  right: 0;
+  background: var(--branco);
+  border-bottom: 1px solid var(--borda);
+  box-shadow: var(--sombra);
+  flex-direction: column;
+  padding: 8px 16px 16px;
+  gap: 4px;
+}
+.navegacao.aberta { display: flex; }
+.navegacao a {
+  display: block;
+  padding: 12px 12px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--tinta);
+  font-weight: 600;
+  font-size: 15px;
+}
+.navegacao a:hover { background: var(--marca-clara); color: var(--marca-escura); }
+.navegacao a.ativa { background: var(--marca); color: var(--branco); }
+
+.cabecalho-acoes { display: flex; align-items: center; gap: 8px; }
+.cabecalho-usuario { display: none; font-size: 14px; color: var(--texto-suave); }
+
+/* Botão hambúrguer (só aparece no celular) */
+.botao-menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--borda);
+  border-radius: 10px;
+  background: var(--branco);
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--tinta);
+}
+
+/* ---- Rodapé ----------------------------------------------------------------- */
+.rodape {
+  border-top: 1px solid var(--borda);
+  background: var(--branco);
+  margin-top: 40px;
+}
+.rodape-interno {
+  max-width: var(--largura-conteudo);
+  margin: 0 auto;
+  padding: 28px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--texto-suave);
+}
+
+/* ============================================================================
+   PÁGINA INICIAL
+   ============================================================================ */
+.hero {
+  padding: 48px 0 36px;
+  max-width: 720px;
+}
+.hero p.hero-sub {
+  font-size: clamp(1rem, 2.4vw, 1.15rem);
+  color: var(--texto-suave);
+  max-width: 560px;
+}
+.hero-botoes { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+
+.grade-modulos {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+/* Cartão de módulo no estilo "chaveiro de recepção" */
+.modulo {
+  position: relative;
+  display: block;
+  background: var(--branco);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  padding: 20px 20px 20px 24px;
+  text-decoration: none;
+  color: var(--tinta);
+  box-shadow: var(--sombra);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+  overflow: hidden;
+}
+.modulo::before {           /* a "fita" lateral, como etiqueta de chave */
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 6px;
+  background: var(--marca);
+}
+.modulo:hover { border-color: var(--marca); transform: translateY(-2px); color: var(--tinta); }
+.modulo h3 { margin-bottom: 4px; }
+.modulo p { margin: 0; font-size: 14px; color: var(--texto-suave); }
+.modulo-etiqueta {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--latao-texto);
+  background: #F4ECD7;
+  border-radius: var(--raio-pilula);
+  padding: 3px 10px;
+  margin-bottom: 10px;
+}
+.modulo-em-breve {
+  opacity: 0.75;
+  cursor: default;
+  box-shadow: none;
+}
+.modulo-em-breve::before { background: var(--borda); }
+.modulo-em-breve:hover { border-color: var(--borda); transform: none; }
+.modulo-em-breve .modulo-etiqueta { background: #EDEFEC; color: var(--texto-suave); }
+
+/* ============================================================================
+   PÁGINA DE LOGIN
+   ============================================================================ */
+.caixa-login {
+  max-width: 420px;
+  margin: 8vh auto 0;
+}
+.caixa-login .cartao { padding: 28px 24px; }
+
+/* ============================================================================
+   AGENDA TELEFÔNICA
+   ============================================================================ */
+.barra-pagina {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 18px;
+}
+.grade-contatos {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+.contato-cartao {
+  background: var(--branco);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  padding: 16px;
+  box-shadow: var(--sombra);
+}
+.contato-nome { font-weight: 700; font-size: 16px; }
+.contato-funcao {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--marca);
+  background: var(--marca-clara);
+  border-radius: var(--raio-pilula);
+  padding: 2px 10px;
+  margin-top: 4px;
+}
+.contato-linha { font-size: 14px; color: var(--texto-suave); margin-top: 6px; }
+.contato-linha a { color: var(--marca); text-decoration: none; font-weight: 600; }
+.contato-linha a:hover { text-decoration: underline; }
+
+/* ============================================================================
+   TABLET (a partir de 640px)
+   ============================================================================ */
+@media (min-width: 640px) {
+  .conteudo { padding: 32px 24px 72px; }
+  .grade-modulos { grid-template-columns: 1fr 1fr; }
+  .grade-contatos { grid-template-columns: 1fr 1fr; }
+  .rodape-interno { flex-direction: row; justify-content: space-between; }
+}
+
+/* ============================================================================
+   DESKTOP (a partir de 900px)
+   ============================================================================ */
+@media (min-width: 900px) {
+  /* menu vira horizontal e o botão ☰ some */
+  .botao-menu { display: none; }
+  .navegacao {
+    display: flex;
+    position: static;
+    flex-direction: row;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    gap: 4px;
+  }
+  .navegacao a { padding: 9px 14px; font-size: 14px; }
+  .cabecalho-usuario { display: inline; }
+
+  .grade-modulos { grid-template-columns: 1fr 1fr 1fr; }
+  .grade-contatos { grid-template-columns: 1fr 1fr 1fr; }
+  .hero { padding: 72px 0 48px; }
+}
