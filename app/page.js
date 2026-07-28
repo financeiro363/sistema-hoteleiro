@@ -3,10 +3,10 @@ export default function Home() {
     <main style={{ padding: 40, maxWidth: 640, margin: "0 auto" }}>
       <h1 style={{ color: "#0E7C66" }}>Sistema Hoteleiro</h1>
       <p style={{ color: "#374151", lineHeight: 1.6 }}>
-        Esta é a primeira versão real do sistema, já conectada ao banco de dados de verdade.
+        Bem-vindo(a). Faça login para acessar o sistema.
       </p>
       <a
-        href="/agenda"
+        href="/login"
         style={{
           display: "inline-block",
           marginTop: 16,
@@ -18,7 +18,7 @@ export default function Home() {
           fontWeight: 600,
         }}
       >
-        Abrir Agenda Telefônica →
+        Entrar no sistema →
       </a>
     </main>
   );

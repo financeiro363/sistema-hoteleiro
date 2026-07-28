@@ -1,9 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 export default function AgendaTelefonica() {
+  const router = useRouter();
+
+  const [verificandoLogin, setVerificandoLogin] = useState(true);
+  const [usuario, setUsuario] = useState(null); // { nome, hotel_id, papel }
+
   const [contatos, setContatos] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
@@ -14,12 +20,42 @@ export default function AgendaTelefonica() {
   const [funcao, setFuncao] = useState("");
   const [salvando, setSalvando] = useState(false);
 
-  async function carregarContatos() {
+  // Passo 1: ao abrir a página, confere se a pessoa está logada. Se não
+  // estiver, manda ela direto para a tela de login.
+  useEffect(() => {
+    async function verificar() {
+      const { data: sessao } = await supabase.auth.getSession();
+      if (!sessao.session) {
+        router.push("/login");
+        return;
+      }
+
+      const { data: dadosUsuario, error } = await supabase
+        .from("usuarios")
+        .select("*")
+        .eq("auth_id", sessao.session.user.id)
+        .single();
+
+      if (error || !dadosUsuario) {
+        router.push("/login");
+        return;
+      }
+
+      setUsuario(dadosUsuario);
+      setVerificandoLogin(false);
+    }
+    verificar();
+  }, [router]);
+
+  // Passo 2: só depois de saber quem é o usuário (e de qual hotel), busca os
+  // contatos — e só os contatos DAQUELE hotel específico.
+  async function carregarContatos(hotelId) {
     setCarregando(true);
     setErro("");
     const { data, error } = await supabase
       .from("agenda_telefonica")
       .select("*")
+      .eq("hotel_id", hotelId)
       .order("nome_completo", { ascending: true });
 
     if (error) {
@@ -31,8 +67,10 @@ export default function AgendaTelefonica() {
   }
 
   useEffect(() => {
-    carregarContatos();
-  }, []);
+    if (usuario) {
+      carregarContatos(usuario.hotel_id);
+    }
+  }, [usuario]);
 
   async function salvarContato(e) {
     e.preventDefault();
@@ -45,6 +83,7 @@ export default function AgendaTelefonica() {
       telefone: telefone.trim(),
       email: email.trim(),
       funcao: funcao.trim(),
+      hotel_id: usuario.hotel_id,
     });
 
     if (error) {
@@ -54,17 +93,38 @@ export default function AgendaTelefonica() {
       setTelefone("");
       setEmail("");
       setFuncao("");
-      await carregarContatos();
+      await carregarContatos(usuario.hotel_id);
     }
     setSalvando(false);
   }
 
+  async function sair() {
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
+
+  if (verificandoLogin) {
+    return (
+      <main style={{ padding: 40, textAlign: "center", color: "#6B7280" }}>
+        Verificando login...
+      </main>
+    );
+  }
+
   return (
     <main style={{ padding: 40, maxWidth: 640, margin: "0 auto" }}>
-      <a href="/" style={{ color: "#0E7C66", textDecoration: "none", fontSize: 14 }}>
-        ← Voltar
-      </a>
-      <h1 style={{ color: "#111827" }}>Agenda Telefônica</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 13, color: "#6B7280" }}>Olá, {usuario.nome}</div>
+          <h1 style={{ color: "#111827", margin: "4px 0 0" }}>Agenda Telefônica</h1>
+        </div>
+        <button
+          onClick={sair}
+          style={{ padding: "8px 14px", background: "#fff", border: "1px solid #E5E7EB", borderRadius: 8, cursor: "pointer", color: "#6B7280", fontSize: 13 }}
+        >
+          Sair
+        </button>
+      </div>
 
       <form
         onSubmit={salvarContato}
@@ -73,6 +133,7 @@ export default function AgendaTelefonica() {
           border: "1px solid #E5E7EB",
           borderRadius: 12,
           padding: 20,
+          marginTop: 20,
           marginBottom: 24,
         }}
       >
