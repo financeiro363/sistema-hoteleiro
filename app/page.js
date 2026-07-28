@@ -21,6 +21,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Lista de Espera',
     descricao: 'Fila de prioridade de reservas, com confirmação automática por WhatsApp e e-mail.',
   },
+  {
+    href: '/creditos',
+    titulo: 'Créditos e Devoluções',
+    descricao: 'Pagamentos antecipados guardados e pedidos de reembolso (depósito, cartão ou Pix), com comprovantes.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [

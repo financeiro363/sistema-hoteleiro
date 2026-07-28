@@ -17,6 +17,7 @@ const LINKS_DO_MENU = [
   { href: '/agenda', rotulo: 'Agenda Telefônica' },
   { href: '/solicitacoes', rotulo: 'Solicitações' },
   { href: '/lista-espera', rotulo: 'Lista de Espera' },
+  { href: '/creditos', rotulo: 'Créditos e Devoluções' },
 ];
 
 export default function CabecalhoSite() {
