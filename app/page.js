@@ -16,6 +16,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Solicitações',
     descricao: 'Delegue e acompanhe tarefas da equipe, como um e-mail interno com histórico completo.',
   },
+  {
+    href: '/lista-espera',
+    titulo: 'Lista de Espera',
+    descricao: 'Fila de prioridade de reservas, com confirmação automática por WhatsApp e e-mail.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
