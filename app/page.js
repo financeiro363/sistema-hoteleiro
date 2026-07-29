@@ -36,6 +36,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Depósitos Bancários',
     descricao: 'Conferência dos depósitos na conta do hotel, com importação de CSV, baixa por hóspede e estorno.',
   },
+  {
+    href: '/recibos',
+    titulo: 'Recibos',
+    descricao: 'Recibos de pagamento com valor por extenso, numeração automática e reimpressão rastreada.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [

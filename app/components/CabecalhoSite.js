@@ -20,6 +20,7 @@ const LINKS_DO_MENU = [
   { href: '/creditos', rotulo: 'Créditos e Devoluções' },
   { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
   { href: '/depositos', rotulo: 'Depósitos Bancários' },
+  { href: '/recibos', rotulo: 'Recibos' },
 ];
 
 export default function CabecalhoSite() {
