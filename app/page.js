@@ -41,6 +41,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Recibos',
     descricao: 'Recibos de pagamento com valor por extenso, numeração automática e reimpressão rastreada.',
   },
+  {
+    href: '/sala-reuniao',
+    titulo: 'Sala de Reunião',
+    descricao: 'Calendário semanal de reservas com contrato de locação automático para assinatura.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [

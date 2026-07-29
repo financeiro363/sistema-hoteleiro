@@ -21,6 +21,7 @@ const LINKS_DO_MENU = [
   { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
   { href: '/depositos', rotulo: 'Depósitos Bancários' },
   { href: '/recibos', rotulo: 'Recibos' },
+  { href: '/sala-reuniao', rotulo: 'Sala de Reunião' },
 ];
 
 export default function CabecalhoSite() {
