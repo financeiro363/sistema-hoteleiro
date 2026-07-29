@@ -19,6 +19,7 @@ const LINKS_DO_MENU = [
   { href: '/lista-espera', rotulo: 'Lista de Espera' },
   { href: '/creditos', rotulo: 'Créditos e Devoluções' },
   { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
+  { href: '/depositos', rotulo: 'Depósitos Bancários' },
 ];
 
 export default function CabecalhoSite() {

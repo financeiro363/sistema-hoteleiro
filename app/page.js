@@ -31,6 +31,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Achados e Perdidos',
     descricao: 'Itens esquecidos com foto, fluxo antifraude de devolução e recibo para assinatura.',
   },
+  {
+    href: '/depositos',
+    titulo: 'Depósitos Bancários',
+    descricao: 'Conferência dos depósitos na conta do hotel, com importação de CSV, baixa por hóspede e estorno.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
