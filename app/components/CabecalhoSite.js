@@ -18,6 +18,7 @@ const LINKS_DO_MENU = [
   { href: '/solicitacoes', rotulo: 'Solicitações' },
   { href: '/lista-espera', rotulo: 'Lista de Espera' },
   { href: '/creditos', rotulo: 'Créditos e Devoluções' },
+  { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
 ];
 
 export default function CabecalhoSite() {

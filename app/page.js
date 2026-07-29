@@ -26,6 +26,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Créditos e Devoluções',
     descricao: 'Pagamentos antecipados guardados e pedidos de reembolso (depósito, cartão ou Pix), com comprovantes.',
   },
+  {
+    href: '/achados-perdidos',
+    titulo: 'Achados e Perdidos',
+    descricao: 'Itens esquecidos com foto, fluxo antifraude de devolução e recibo para assinatura.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
