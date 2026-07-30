@@ -22,6 +22,7 @@ const LINKS_DO_MENU = [
   { href: '/depositos', rotulo: 'Depósitos Bancários' },
   { href: '/recibos', rotulo: 'Recibos' },
   { href: '/sala-reuniao', rotulo: 'Sala de Reunião' },
+  { href: '/lavanderia', rotulo: 'Lavanderia' },
 ];
 
 export default function CabecalhoSite() {

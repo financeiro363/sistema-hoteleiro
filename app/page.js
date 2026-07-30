@@ -46,6 +46,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Sala de Reunião',
     descricao: 'Calendário semanal de reservas com contrato de locação automático para assinatura.',
   },
+  {
+    href: '/lavanderia',
+    titulo: 'Lavanderia',
+    descricao: 'Catálogo de preços, entrada de roupas com comprovante e acompanhamento do ciclo até a entrega.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
