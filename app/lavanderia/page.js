@@ -179,10 +179,26 @@ export default function Lavanderia() {
     if (usuario) carregarTudo(usuario);
   }, [usuario, carregarTudo]);
 
+  // Recarrega só a lista do log (para o admin ver os passos na hora)
+  const recarregarLogs = useCallback(async () => {
+    if (usuario?.papel !== 'ADMIN') return;
+    const { data: ls } = await supabase
+      .from('lavanderia_log').select('*')
+      .order('data_hora', { ascending: false }).limit(300);
+    setLogs(ls || []);
+  }, [usuario]);
+
   async function registrarLog(acao, detalhe) {
-    await supabase.from('lavanderia_log').insert({
+    const { error } = await supabase.from('lavanderia_log').insert({
       usuario_id: usuario.id, acao, detalhe, hotel_id: usuario.hotel_id,
     });
+    if (error) {
+      // Não engole o erro: avisa na tela para não passar despercebido
+      setErro('O passo foi salvo, mas não consegui registrar no histórico. Detalhe técnico: ' + error.message);
+      return;
+    }
+    // Atualiza a lista do log na hora (se estiver na aba de log)
+    await recarregarLogs();
   }
 
   // ---- Nova Entrada ----
@@ -778,6 +794,14 @@ export default function Lavanderia() {
       {/* ================= LOG (admin) ================= */}
       {subAba === 'log' && souAdmin && (
         <section className="lv-lista">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <p className="texto-suave" style={{ fontSize: 13, margin: 0 }}>
+              Histórico completo de cada peça: entrada, início da lavagem, conclusão e entrega — com o usuário e a data de cada passo.
+            </p>
+            <button type="button" className="botao botao-suave" onClick={recarregarLogs}>
+              ↻ Atualizar
+            </button>
+          </div>
           {logs.length === 0 ? (
             <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>
               Nenhum registro no log ainda.

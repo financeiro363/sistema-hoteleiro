@@ -23,6 +23,7 @@ const LINKS_DO_MENU = [
   { href: '/recibos', rotulo: 'Recibos' },
   { href: '/sala-reuniao', rotulo: 'Sala de Reunião' },
   { href: '/lavanderia', rotulo: 'Lavanderia' },
+  { href: '/ocorrencias', rotulo: 'Ocorrências' },
 ];
 
 export default function CabecalhoSite() {

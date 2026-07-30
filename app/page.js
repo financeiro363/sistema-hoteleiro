@@ -51,6 +51,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Lavanderia',
     descricao: 'Catálogo de preços, entrada de roupas com comprovante e acompanhamento do ciclo até a entrega.',
   },
+  {
+    href: '/ocorrencias',
+    titulo: 'Ocorrências',
+    descricao: 'Registro de incidentes por gravidade, com status, responsável e linha do tempo de andamentos.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
