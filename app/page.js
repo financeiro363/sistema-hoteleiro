@@ -61,12 +61,16 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Manutenção',
     descricao: 'Chamados de reparo em quadro Kanban, com visão do técnico, indicadores e log completo.',
   },
+  {
+    href: '/estoque',
+    titulo: 'Estoque',
+    descricao: 'Dar baixa com carrinho, gerenciar produtos com alerta de mínimo e histórico completo.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
   { titulo: 'Financeiro', descricao: 'Contas a pagar e receber, fluxo de caixa e depósitos.' },
   { titulo: 'Governança', descricao: 'Rotina das camareiras com conferência por QR code.' },
-  { titulo: 'Estoque', descricao: 'Controle de entradas e saídas de itens do hotel.' },
   { titulo: 'Ponto', descricao: 'Folha de ponto conforme a convenção coletiva.' },
 ];
 

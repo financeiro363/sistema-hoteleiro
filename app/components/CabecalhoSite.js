@@ -25,6 +25,7 @@ const LINKS_DO_MENU = [
   { href: '/lavanderia', rotulo: 'Lavanderia' },
   { href: '/ocorrencias', rotulo: 'Ocorrências' },
   { href: '/manutencao', rotulo: 'Manutenção' },
+  { href: '/estoque', rotulo: 'Estoque' },
 ];
 
 export default function CabecalhoSite() {
