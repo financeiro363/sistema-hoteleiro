@@ -56,12 +56,17 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Ocorrências',
     descricao: 'Registro de incidentes por gravidade, com status, responsável e linha do tempo de andamentos.',
   },
+  {
+    href: '/manutencao',
+    titulo: 'Manutenção',
+    descricao: 'Chamados de reparo em quadro Kanban, com visão do técnico, indicadores e log completo.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
   { titulo: 'Financeiro', descricao: 'Contas a pagar e receber, fluxo de caixa e depósitos.' },
   { titulo: 'Governança', descricao: 'Rotina das camareiras com conferência por QR code.' },
-  { titulo: 'Manutenção', descricao: 'Chamados de reparo por quarto e área do hotel.' },
+  { titulo: 'Estoque', descricao: 'Controle de entradas e saídas de itens do hotel.' },
   { titulo: 'Ponto', descricao: 'Folha de ponto conforme a convenção coletiva.' },
 ];
 
