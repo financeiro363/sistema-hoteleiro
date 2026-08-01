@@ -26,6 +26,7 @@ const LINKS_DO_MENU = [
   { href: '/ocorrencias', rotulo: 'Ocorrências' },
   { href: '/manutencao', rotulo: 'Manutenção' },
   { href: '/estoque', rotulo: 'Estoque' },
+  { href: '/governanca', rotulo: 'Governança' },
 ];
 
 export default function CabecalhoSite() {

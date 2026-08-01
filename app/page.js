@@ -66,11 +66,15 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Estoque',
     descricao: 'Dar baixa com carrinho, gerenciar produtos com alerta de mínimo e histórico completo.',
   },
+  {
+    href: '/governanca',
+    titulo: 'Governança',
+    descricao: 'Rotina das camareiras por quarto, com checklist, integração com Manutenção e Achados e Perdidos.',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
   { titulo: 'Financeiro', descricao: 'Contas a pagar e receber, fluxo de caixa e depósitos.' },
-  { titulo: 'Governança', descricao: 'Rotina das camareiras com conferência por QR code.' },
   { titulo: 'Ponto', descricao: 'Folha de ponto conforme a convenção coletiva.' },
 ];
 
