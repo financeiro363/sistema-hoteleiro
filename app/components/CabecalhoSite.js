@@ -29,6 +29,7 @@ const LINKS_DO_MENU = [
   { href: '/governanca', rotulo: 'Governança' },
   { href: '/financeiro', rotulo: 'Financeiro', soAdmin: true },
   { href: '/ponto', rotulo: 'Ponto', soAdmin: true },
+  { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
 ];
 
 export default function CabecalhoSite() {
@@ -97,7 +98,14 @@ export default function CabecalhoSite() {
           className={menuAberto ? 'navegacao aberta' : 'navegacao'}
           aria-label="Menu principal"
         >
-          {LINKS_DO_MENU.filter((link) => !link.soAdmin || papelUsuario === 'ADMIN').map((link) => (
+          {LINKS_DO_MENU.filter((link) => {
+            // Contador tem visão restrita: só enxerga os links marcados para ele
+            // (na prática, só "Contabilidade") — nada mais aparece no menu.
+            if (papelUsuario === 'CONTADOR') return !!link.contadorVe;
+            if (link.soAdmin) return papelUsuario === 'ADMIN';
+            if (link.soAdminOuContador) return papelUsuario === 'ADMIN';
+            return true;
+          }).map((link) => (
             <Link
               key={link.href}
               href={link.href}

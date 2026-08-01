@@ -1,4 +1,9 @@
+'use client';
+
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { supabase } from '../lib/supabaseClient';
 
 // ============================================================================
 // PÁGINA INICIAL
@@ -81,9 +86,38 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Ponto',
     descricao: 'Folha de ponto e banco de horas conforme a CCT Sindhotel-PB, com alertas jurídicos. (Só admin)',
   },
+  {
+    href: '/contabilidade',
+    titulo: 'Contabilidade',
+    descricao: 'Lançamentos com link do Drive, extratos bancários por ano e log de auditoria. (Admin e Contador)',
+  },
 ];
 
 export default function PaginaInicial() {
+  const router = useRouter();
+  const [verificando, setVerificando] = useState(true);
+
+  // Se quem está logado é Contador, manda direto para a Contabilidade —
+  // ele não usa mais nada do resto do sistema.
+  useEffect(() => {
+    let ativo = true;
+    async function verificar() {
+      const { data: sessao } = await supabase.auth.getSession();
+      if (!sessao?.session) { if (ativo) setVerificando(false); return; }
+      const { data: perfil } = await supabase
+        .from('usuarios').select('papel').eq('auth_id', sessao.session.user.id).single();
+      if (!ativo) return;
+      if (perfil?.papel === 'CONTADOR') { router.push('/contabilidade'); return; }
+      setVerificando(false);
+    }
+    verificar();
+    return () => { ativo = false; };
+  }, [router]);
+
+  if (verificando) {
+    return <main className="conteudo"><p className="texto-suave">Carregando…</p></main>;
+  }
+
   return (
     <main className="conteudo">
       {/* Hero: apresentação principal */}
