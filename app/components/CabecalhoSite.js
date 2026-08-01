@@ -12,32 +12,58 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 
-const LINKS_DO_MENU = [
-  { href: '/', rotulo: 'Início' },
-  { href: '/agenda', rotulo: 'Agenda Telefônica' },
-  { href: '/solicitacoes', rotulo: 'Solicitações' },
-  { href: '/lista-espera', rotulo: 'Lista de Espera' },
-  { href: '/creditos', rotulo: 'Créditos e Devoluções' },
-  { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
-  { href: '/depositos', rotulo: 'Depósitos Bancários' },
-  { href: '/recibos', rotulo: 'Recibos' },
-  { href: '/sala-reuniao', rotulo: 'Sala de Reunião' },
-  { href: '/lavanderia', rotulo: 'Lavanderia' },
-  { href: '/ocorrencias', rotulo: 'Ocorrências' },
-  { href: '/manutencao', rotulo: 'Manutenção' },
-  { href: '/estoque', rotulo: 'Estoque' },
-  { href: '/governanca', rotulo: 'Governança' },
-  { href: '/financeiro', rotulo: 'Financeiro', soAdmin: true },
-  { href: '/ponto', rotulo: 'Ponto', soAdmin: true },
-  { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
-  { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
+const CATEGORIAS_MENU = [
+  {
+    chave: 'atendimento',
+    nome: 'Atendimento',
+    links: [
+      { href: '/agenda', rotulo: 'Agenda Telefônica' },
+      { href: '/solicitacoes', rotulo: 'Solicitações' },
+      { href: '/lista-espera', rotulo: 'Lista de Espera' },
+      { href: '/creditos', rotulo: 'Créditos e Devoluções' },
+      { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
+      { href: '/recibos', rotulo: 'Recibos' },
+    ],
+  },
+  {
+    chave: 'operacoes',
+    nome: 'Operações',
+    links: [
+      { href: '/depositos', rotulo: 'Depósitos Bancários' },
+      { href: '/sala-reuniao', rotulo: 'Sala de Reunião' },
+      { href: '/lavanderia', rotulo: 'Lavanderia' },
+      { href: '/ocorrencias', rotulo: 'Ocorrências' },
+      { href: '/manutencao', rotulo: 'Manutenção' },
+      { href: '/estoque', rotulo: 'Estoque' },
+      { href: '/governanca', rotulo: 'Governança' },
+    ],
+  },
+  {
+    chave: 'administracao',
+    nome: 'Administração',
+    links: [
+      { href: '/financeiro', rotulo: 'Financeiro', soAdmin: true },
+      { href: '/ponto', rotulo: 'Ponto', soAdmin: true },
+      { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
+      { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
+    ],
+  },
 ];
+
+// Decide se um link específico pode aparecer para o papel atual
+function linkVisivelPara(link, papelUsuario) {
+  if (papelUsuario === 'CONTADOR') return !!link.contadorVe;
+  if (link.soAdmin) return papelUsuario === 'ADMIN';
+  if (link.soAdminOuContador) return papelUsuario === 'ADMIN';
+  return true;
+}
 
 export default function CabecalhoSite() {
   const caminhoAtual = usePathname();
   const router = useRouter();
 
   const [menuAberto, setMenuAberto] = useState(false);
+  const [categoriaAberta, setCategoriaAberta] = useState(null);
   const [logado, setLogado] = useState(false);
   const [nomeUsuario, setNomeUsuario] = useState('');
   const [papelUsuario, setPapelUsuario] = useState('');
@@ -74,10 +100,21 @@ export default function CabecalhoSite() {
     };
   }, []);
 
-  // Fecha o menu hambúrguer sempre que muda de página
+  // Fecha o menu hambúrguer e o dropdown de categoria sempre que muda de página
   useEffect(() => {
     setMenuAberto(false);
+    setCategoriaAberta(null);
   }, [caminhoAtual]);
+
+  // Fecha o dropdown de categoria se a pessoa clicar fora dele
+  useEffect(() => {
+    if (!categoriaAberta) return;
+    function aoClicarFora(evento) {
+      if (!evento.target.closest('.menu-categoria')) setCategoriaAberta(null);
+    }
+    document.addEventListener('click', aoClicarFora);
+    return () => document.removeEventListener('click', aoClicarFora);
+  }, [categoriaAberta]);
 
   async function sair() {
     await supabase.auth.signOut();
@@ -99,22 +136,46 @@ export default function CabecalhoSite() {
           className={menuAberto ? 'navegacao aberta' : 'navegacao'}
           aria-label="Menu principal"
         >
-          {LINKS_DO_MENU.filter((link) => {
-            // Contador tem visão restrita: só enxerga os links marcados para ele
-            // (na prática, só "Contabilidade") — nada mais aparece no menu.
-            if (papelUsuario === 'CONTADOR') return !!link.contadorVe;
-            if (link.soAdmin) return papelUsuario === 'ADMIN';
-            if (link.soAdminOuContador) return papelUsuario === 'ADMIN';
-            return true;
-          }).map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={caminhoAtual === link.href ? 'ativa' : ''}
-            >
-              {link.rotulo}
+          {papelUsuario !== 'CONTADOR' && (
+            <Link href="/" className={caminhoAtual === '/' ? 'ativa' : ''}>
+              Início
             </Link>
-          ))}
+          )}
+
+          {papelUsuario === 'CONTADOR' ? (
+            // Visão restrita do Contador: só existe um destino possível
+            <Link href="/contabilidade" className={caminhoAtual === '/contabilidade' ? 'ativa' : ''}>
+              Contabilidade
+            </Link>
+          ) : (
+            CATEGORIAS_MENU.map((categoria) => {
+              const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario));
+              if (linksVisiveis.length === 0) return null; // esconde a categoria inteira se ninguém dentro dela é visível
+              const temPaginaAtiva = linksVisiveis.some((link) => link.href === caminhoAtual);
+              return (
+                <div key={categoria.chave} className="menu-categoria">
+                  <button
+                    type="button"
+                    className={temPaginaAtiva ? 'menu-categoria-botao ativa' : 'menu-categoria-botao'}
+                    aria-expanded={categoriaAberta === categoria.chave}
+                    onClick={() => setCategoriaAberta(categoriaAberta === categoria.chave ? null : categoria.chave)}
+                  >
+                    {categoria.nome}
+                    <span className="menu-seta" aria-hidden="true">{categoriaAberta === categoria.chave ? '▲' : '▼'}</span>
+                  </button>
+                  {categoriaAberta === categoria.chave && (
+                    <div className="menu-dropdown">
+                      {linksVisiveis.map((link) => (
+                        <Link key={link.href} href={link.href} className={caminhoAtual === link.href ? 'ativa' : ''}>
+                          {link.rotulo}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </nav>
 
         {/* Ações do lado direito */}

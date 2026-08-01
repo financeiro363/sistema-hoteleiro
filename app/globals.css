@@ -261,6 +261,22 @@ textarea.campo { resize: vertical; }
 .navegacao a:hover { background: var(--marca-clara); color: var(--marca-escura); }
 .navegacao a.ativa { background: var(--marca); color: var(--branco); }
 
+/* Categorias do menu (Atendimento / Operações / Administração) */
+.menu-categoria { display: flex; flex-direction: column; }
+.menu-categoria-botao {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; text-align: left; border: none; background: none; cursor: pointer;
+  padding: 12px 12px; border-radius: 10px; font-family: inherit;
+  color: var(--tinta); font-weight: 700; font-size: 15px;
+}
+.menu-categoria-botao:hover { background: var(--marca-clara); color: var(--marca-escura); }
+.menu-categoria-botao.ativa { background: var(--marca); color: var(--branco); }
+.menu-seta { font-size: 10px; opacity: 0.7; }
+.menu-dropdown {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 2px 0 6px 14px;
+}
+
 .cabecalho-acoes { display: flex; align-items: center; gap: 8px; }
 .cabecalho-usuario { display: none; font-size: 14px; color: var(--texto-suave); }
 
@@ -441,6 +457,16 @@ textarea.campo { resize: vertical; }
   }
   .navegacao a { padding: 8px 11px; font-size: 13.5px; }
   .cabecalho-usuario { display: inline; }
+
+  /* No desktop, cada categoria vira um botão com um painel flutuante */
+  .menu-categoria { position: relative; }
+  .menu-categoria-botao { padding: 8px 11px; font-size: 13.5px; white-space: nowrap; }
+  .menu-dropdown {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 70;
+    background: var(--branco); border: 1px solid var(--borda); border-radius: 12px;
+    box-shadow: var(--sombra); padding: 8px; min-width: 220px;
+  }
+  .menu-dropdown a { padding: 10px 12px; white-space: nowrap; }
 
   .grade-modulos { grid-template-columns: 1fr 1fr 1fr; }
   .grade-contatos { grid-template-columns: 1fr 1fr 1fr; }
