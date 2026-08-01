@@ -11,6 +11,21 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 
+// Telefone brasileiro: máscara ao vivo (fixo ou celular) + validação de DDD
+function formatarTelefoneBR(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+function validarTelefoneBR(texto) {
+  const d = String(texto || '').replace(/\D/g, '');
+  if (d.length !== 10 && d.length !== 11) return false;
+  const ddd = Number(d.slice(0, 2));
+  return ddd >= 11 && ddd <= 99;
+}
+
 export default function AgendaTelefonica() {
   const router = useRouter();
 
@@ -89,6 +104,10 @@ export default function AgendaTelefonica() {
 
     if (!nomeCompleto.trim() || !telefone.trim()) {
       setErro('Preencha pelo menos o nome e o telefone.');
+      return;
+    }
+    if (!validarTelefoneBR(telefone)) {
+      setErro('O telefone precisa ter DDD + número (10 ou 11 dígitos). Ex.: (88) 90000-0000.');
       return;
     }
 
@@ -174,8 +193,9 @@ export default function AgendaTelefonica() {
             id="contato-telefone"
             className="campo"
             type="tel"
+            inputMode="numeric"
             value={telefone}
-            onChange={(e) => setTelefone(e.target.value)}
+            onChange={(e) => setTelefone(formatarTelefoneBR(e.target.value))}
             placeholder="(88) 90000-0000"
           />
 

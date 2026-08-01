@@ -81,6 +81,50 @@ function formatarDocumento(texto) {
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
 }
 
+// Validação REAL de CPF (dígitos verificadores)
+function validarCPF(cpf) {
+  const d = String(cpf || '').replace(/\D/g, '');
+  if (d.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false;
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += Number(d[i]) * (10 - i);
+  let dv1 = (soma * 10) % 11;
+  if (dv1 === 10) dv1 = 0;
+  if (dv1 !== Number(d[9])) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += Number(d[i]) * (11 - i);
+  let dv2 = (soma * 10) % 11;
+  if (dv2 === 10) dv2 = 0;
+  return dv2 === Number(d[10]);
+}
+
+// Validação REAL de CNPJ (dígitos verificadores)
+function validarCNPJ(cnpj) {
+  const d = String(cnpj || '').replace(/\D/g, '');
+  if (d.length !== 14) return false;
+  if (/^(\d)\1{13}$/.test(d)) return false;
+  function calcularDV(base) {
+    const tamanho = base.length;
+    let pos = tamanho - 7;
+    let soma = 0;
+    for (let i = tamanho; i >= 1; i--) {
+      soma += Number(base.charAt(tamanho - i)) * pos--;
+      if (pos < 2) pos = 9;
+    }
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  }
+  if (calcularDV(d.substring(0, 12)) !== Number(d.charAt(12))) return false;
+  return calcularDV(d.substring(0, 13)) === Number(d.charAt(13));
+}
+
+function validarDocumento(texto) {
+  const d = String(texto || '').replace(/\D/g, '');
+  if (d.length === 11) return validarCPF(d);
+  if (d.length === 14) return validarCNPJ(d);
+  return null;
+}
+
 // Valor por extenso (mesma função validada no módulo Recibos)
 function valorPorExtenso(valor) {
   const unidades = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'];
@@ -326,6 +370,11 @@ export default function SalaReuniao() {
       return;
     }
     if (!form.responsavel.trim()) { setErroForm('Informe o nome de quem vai usar a sala.'); return; }
+    if (form.documento.trim()) {
+      const documentoValido = validarDocumento(form.documento);
+      if (documentoValido === null) { setErroForm('O CPF/CNPJ está incompleto — confira os números.'); return; }
+      if (documentoValido === false) { setErroForm('O CPF/CNPJ digitado é inválido — confira os números.'); return; }
+    }
 
     const conflito = verificarConflito(form.salaId, form.data, form.horaInicio, form.horaFim, form.editandoId);
     if (conflito) {
@@ -708,6 +757,12 @@ export default function SalaReuniao() {
                 <input className="campo" type="text" inputMode="numeric" value={form.documento}
                   onChange={(e) => setForm({ ...form, documento: formatarDocumento(e.target.value) })}
                   placeholder="000.000.000-00" />
+                {(() => {
+                  const status = form.documento.trim() ? validarDocumento(form.documento) : null;
+                  if (status === true) return <p className="sr-doc-ok">✓ documento válido</p>;
+                  if (status === false) return <p className="sr-doc-erro">✗ documento inválido</p>;
+                  return null;
+                })()}
               </div>
               <div>
                 <label className="rotulo">Valor da locação (R$)</label>
@@ -1007,6 +1062,8 @@ function EstilosSala() {
 
       .sr-duas { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
       .sr-tres { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
+      .sr-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
+      .sr-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
 
       .sr-ficha { margin-top: 8px; }
       .sr-linha { display: flex; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px dashed var(--borda); font-size: 14px; }

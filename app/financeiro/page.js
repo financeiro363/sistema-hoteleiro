@@ -54,7 +54,171 @@ function formatarDocumento(texto) {
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
 }
 
+// Validação REAL de CPF (dígitos verificadores)
+function validarCPF(cpf) {
+  const d = String(cpf || '').replace(/\D/g, '');
+  if (d.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false;
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += Number(d[i]) * (10 - i);
+  let dv1 = (soma * 10) % 11;
+  if (dv1 === 10) dv1 = 0;
+  if (dv1 !== Number(d[9])) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += Number(d[i]) * (11 - i);
+  let dv2 = (soma * 10) % 11;
+  if (dv2 === 10) dv2 = 0;
+  return dv2 === Number(d[10]);
+}
+
+// Validação REAL de CNPJ (dígitos verificadores)
+function validarCNPJ(cnpj) {
+  const d = String(cnpj || '').replace(/\D/g, '');
+  if (d.length !== 14) return false;
+  if (/^(\d)\1{13}$/.test(d)) return false;
+  function calcularDV(base) {
+    const tamanho = base.length;
+    let pos = tamanho - 7;
+    let soma = 0;
+    for (let i = tamanho; i >= 1; i--) {
+      soma += Number(base.charAt(tamanho - i)) * pos--;
+      if (pos < 2) pos = 9;
+    }
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  }
+  if (calcularDV(d.substring(0, 12)) !== Number(d.charAt(12))) return false;
+  return calcularDV(d.substring(0, 13)) === Number(d.charAt(13));
+}
+
+function validarDocumento(texto) {
+  const d = String(texto || '').replace(/\D/g, '');
+  if (d.length === 11) return validarCPF(d);
+  if (d.length === 14) return validarCNPJ(d);
+  return null;
+}
+
+// Telefone brasileiro: máscara ao vivo + validação de DDD/quantidade de dígitos
+function formatarTelefoneBR(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+function validarTelefoneBR(texto) {
+  const d = String(texto || '').replace(/\D/g, '');
+  if (d.length !== 10 && d.length !== 11) return false;
+  const ddd = Number(d.slice(0, 2));
+  return ddd >= 11 && ddd <= 99;
+}
+
 function apenasNumeros(texto) { return String(texto || '').replace(/\D/g, ''); }
+
+// ---- Linha digitável do boleto: decodificação (matemática pura, sem libs) --
+//
+// A "linha digitável" de um boleto bancário (47 números) tem, escondidos nela,
+// o valor e a data de vencimento — não é preciso ler nada, é só matemática.
+// Os 3 primeiros blocos têm um dígito verificador (Módulo 10) que usamos para
+// confirmar que os números fazem sentido antes de confiar neles.
+
+function mod10Boleto(digitosTexto) {
+  const digitos = String(digitosTexto).split('').map(Number);
+  let soma = 0;
+  let peso = 2;
+  for (let i = digitos.length - 1; i >= 0; i--) {
+    let produto = digitos[i] * peso;
+    if (produto > 9) produto = Math.floor(produto / 10) + (produto % 10);
+    soma += produto;
+    peso = peso === 2 ? 1 : 2;
+  }
+  const dv = 10 - (soma % 10);
+  return dv === 10 ? 0 : dv;
+}
+
+function limparLinhaDigitavel(texto) {
+  return apenasNumeros(texto).slice(0, 47);
+}
+
+// Só para deixar mais fácil de ler enquanto digita/cola — não precisa ser
+// perfeito, é cosmético.
+function formatarLinhaDigitavelVisual(texto) {
+  return limparLinhaDigitavel(texto).replace(/(\d{5})(?=\d)/g, '$1 ').trim();
+}
+
+function decodificarLinhaDigitavel(textoDigitado) {
+  const d = limparLinhaDigitavel(textoDigitado);
+  if (d.length !== 47) return { valido: false, motivo: 'A linha digitável de boleto bancário tem 47 números.' };
+
+  const campo1Dados = d.slice(0, 9);
+  const campo1DV = d.slice(9, 10);
+  const campo2Dados = d.slice(10, 20);
+  const campo2DV = d.slice(20, 21);
+  const campo3Dados = d.slice(21, 31);
+  const campo3DV = d.slice(31, 32);
+  const campo5 = d.slice(33, 47); // 14 dígitos: fator de vencimento (4) + valor (10)
+
+  const dvOk =
+    String(mod10Boleto(campo1Dados)) === campo1DV &&
+    String(mod10Boleto(campo2Dados)) === campo2DV &&
+    String(mod10Boleto(campo3Dados)) === campo3DV;
+
+  const fator = Number(campo5.slice(0, 4));
+  const valorCentavos = Number(campo5.slice(4, 14));
+  const valor = valorCentavos / 100;
+
+  let vencimento = null;
+  if (fator > 0) {
+    const base = new Date(Date.UTC(1997, 9, 7)); // 7 de outubro de 1997 (padrão Febraban)
+    const data = new Date(base);
+    data.setUTCDate(data.getUTCDate() + fator);
+    vencimento = data.toISOString().slice(0, 10);
+  }
+
+  return { valido: dvOk, valor, vencimento, fator };
+}
+
+// ---- Leitura automática do PDF do boleto (carrega a bibliteca só quando
+// precisa, direto de um CDN — não exige instalar nada no projeto) ----------
+
+async function carregarPdfJs() {
+  if (typeof window === 'undefined') return null;
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Não foi possível carregar o leitor de PDF.'));
+    document.head.appendChild(script);
+  });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+  return window.pdfjsLib;
+}
+
+async function extrairTextoPDF(arquivo) {
+  const pdfjsLib = await carregarPdfJs();
+  const buffer = await arquivo.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  let textoCompleto = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const pagina = await pdf.getPage(i);
+    const conteudo = await pagina.getTextContent();
+    textoCompleto += conteudo.items.map((it) => it.str).join(' ') + '\n';
+  }
+  return textoCompleto;
+}
+
+// Procura, dentro do texto extraído do PDF, uma sequência de dígitos (com
+// pontos/espaços no meio, como o boleto imprime) que dê 47 números limpos.
+function localizarLinhaDigitavelNoTexto(texto) {
+  const candidatos = texto.match(/[\d][\d.\s]{40,70}[\d]/g) || [];
+  for (const c of candidatos) {
+    const limpo = limparLinhaDigitavel(c);
+    if (limpo.length === 47) return limpo;
+  }
+  return null;
+}
 
 // ---- Componente principal ---------------------------------------------------
 
@@ -408,6 +572,14 @@ function PainelContasReceber({ contas, clientes, centrosCusto, planoContas, nome
     window.open(`https://wa.me/${numeroCompleto}?text=${encodeURIComponent(msg)}`, '_blank');
   }
 
+  function enviarEmail(conta) {
+    const cliente = clientes.find((c) => c.id === conta.cliente_id);
+    if (!cliente?.email) { mostrarAviso('Este cliente não tem e-mail cadastrado.'); return; }
+    const assunto = `Cobrança — ${conta.descricao}`;
+    const corpo = `Olá, ${cliente.nome}!\n\nAqui é da ${nomeHotel || 'nossa equipe'}.\n\nCobrança referente a: ${conta.descricao}\nValor: ${dinheiro(conta.valor)}\nVencimento: ${formatarData(conta.data_vencimento)}\n\nQualquer dúvida, estamos à disposição!`;
+    window.location.href = `mailto:${cliente.email}?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(corpo)}`;
+  }
+
   const termo = busca.trim().toLowerCase();
   const filtradas = contas
     .filter((c) => !termo || (c.descricao || '').toLowerCase().includes(termo) || nomeCliente(c.cliente_id).toLowerCase().includes(termo))
@@ -476,6 +648,7 @@ function PainelContasReceber({ contas, clientes, centrosCusto, planoContas, nome
         campoEntidade="cliente_id" campoData="data_recebimento"
         onBaixar={(c) => { setReceberBaixa(c); setDataRecebimento(hojeISO()); setFormaRecebimento('Pix'); setComprovanteArquivo(null); }}
         onWhatsapp={enviarWhatsapp}
+        onEmail={enviarEmail}
         rotuloBaixa="Confirmar Recebimento"
       />
 
@@ -521,6 +694,9 @@ function PainelContasPagar({ contas, fornecedores, centrosCusto, planoContas, no
   const [fCentro, setFCentro] = useState('');
   const [fPlano, setFPlano] = useState('');
   const [boletoArquivo, setBoletoArquivo] = useState(null);
+  const [linhaDigitavel, setLinhaDigitavel] = useState('');
+  const [lendoPdf, setLendoPdf] = useState(false);
+  const [avisoDecode, setAvisoDecode] = useState('');
   const [erroForm, setErroForm] = useState('');
 
   const [pagarBaixa, setPagarBaixa] = useState(null);
@@ -529,6 +705,45 @@ function PainelContasPagar({ contas, fornecedores, centrosCusto, planoContas, no
   const [comprovanteArquivo, setComprovanteArquivo] = useState(null);
 
   const planoDespesa = planoContas.filter((p) => p.tipo === 'DESPESA');
+
+  function aplicarDecodificacao(linhaLimpa) {
+    const resultado = decodificarLinhaDigitavel(linhaLimpa);
+    if (!resultado.valido) {
+      setAvisoDecode('Os números da linha digitável não bateram na conferência — confira se foi digitado certo, ou preencha valor e vencimento manualmente.');
+      return;
+    }
+    setFValor(resultado.valor.toFixed(2));
+    if (resultado.vencimento) setFVencimento(resultado.vencimento);
+    setAvisoDecode('✔ Valor e vencimento preenchidos automaticamente a partir do código de barras — confira antes de salvar (bancos podem ter mudado esse padrão a partir de 2025).');
+  }
+
+  function aoDigitarLinhaDigitavel(texto) {
+    setLinhaDigitavel(formatarLinhaDigitavelVisual(texto));
+    const limpo = limparLinhaDigitavel(texto);
+    if (limpo.length === 47) aplicarDecodificacao(limpo);
+    else setAvisoDecode('');
+  }
+
+  async function aoEscolherBoleto(arquivo) {
+    setBoletoArquivo(arquivo);
+    setAvisoDecode('');
+    if (!arquivo || arquivo.type !== 'application/pdf') return;
+    setLendoPdf(true);
+    try {
+      const texto = await extrairTextoPDF(arquivo);
+      const achada = localizarLinhaDigitavelNoTexto(texto);
+      if (achada) {
+        setLinhaDigitavel(formatarLinhaDigitavelVisual(achada));
+        aplicarDecodificacao(achada);
+      } else {
+        setAvisoDecode('Não conseguimos localizar a linha digitável automaticamente neste PDF (comum em boletos escaneados/foto). Digite manualmente abaixo, se tiver o número.');
+      }
+    } catch (e) {
+      setAvisoDecode('Não foi possível ler o PDF automaticamente. Digite a linha digitável manualmente, se tiver o número.');
+    } finally {
+      setLendoPdf(false);
+    }
+  }
 
   async function lancar(evento) {
     evento.preventDefault();
@@ -550,6 +765,7 @@ function PainelContasPagar({ contas, fornecedores, centrosCusto, planoContas, no
       fornecedor_id: fFornecedor ? Number(fFornecedor) : null,
       descricao: fDescricao.trim(), valor: Number(fValor), data_vencimento: fVencimento,
       centro_custo_id: fCentro ? Number(fCentro) : null, plano_contas_id: fPlano ? Number(fPlano) : null,
+      linha_digitavel: limparLinhaDigitavel(linhaDigitavel) || null,
       ...(caminho ? { comprovante_caminho: caminho, comprovante_nome: nomeArq } : {}),
       criado_por_id: usuario.id, hotel_id: usuario.hotel_id,
     });
@@ -557,6 +773,7 @@ function PainelContasPagar({ contas, fornecedores, centrosCusto, planoContas, no
     if (error) { setErroForm('Não foi possível lançar. Detalhe técnico: ' + error.message); return; }
     await registrarLog('Contas a Pagar', 'Lançamento criado', `${fDescricao.trim()} — ${dinheiro(fValor)}, vence em ${formatarData(fVencimento)}.`);
     setFFornecedor(''); setFDescricao(''); setFValor(''); setFVencimento(''); setFCentro(''); setFPlano(''); setBoletoArquivo(null);
+    setLinhaDigitavel(''); setAvisoDecode('');
     setMostrarForm(false);
     mostrarAviso('Conta lançada!');
     recarregar();
@@ -640,8 +857,27 @@ function PainelContasPagar({ contas, fornecedores, centrosCusto, planoContas, no
               </select>
             </div>
           </div>
-          <label className="rotulo">Boleto (opcional)</label>
-          <input className="campo" type="file" accept=".pdf,image/*" onChange={(e) => setBoletoArquivo(e.target.files?.[0] || null)} />
+          <label className="rotulo">Boleto em PDF (opcional)</label>
+          <input className="campo" type="file" accept=".pdf,image/*" onChange={(e) => aoEscolherBoleto(e.target.files?.[0] || null)} />
+          <p className="texto-suave" style={{ fontSize: 12, marginTop: 4 }}>
+            Se for um PDF com o boleto (não uma foto), o sistema tenta ler a linha digitável sozinho.
+          </p>
+
+          <label className="rotulo">Linha digitável do boleto</label>
+          <input className="campo" type="text" inputMode="numeric" value={linhaDigitavel}
+            onChange={(e) => aoDigitarLinhaDigitavel(e.target.value)}
+            placeholder="00190.00009 03444.640005 03953.402009 8 92850000010500" />
+          {lendoPdf && <p className="texto-suave" style={{ fontSize: 13 }}>🔎 Lendo o PDF, aguarde…</p>}
+          {avisoDecode && (
+            <div className={avisoDecode.startsWith('✔') ? 'aviso-sucesso' : 'aviso-erro'} style={{ fontSize: 13 }}>
+              {avisoDecode}
+            </div>
+          )}
+          <p className="texto-suave" style={{ fontSize: 12 }}>
+            Digitando ou colando os 47 números (com ou sem pontos/espaços), o sistema preenche o
+            valor e o vencimento sozinho — mas sempre confira antes de salvar.
+          </p>
+
           {erroForm && <div className="aviso-erro">{erroForm}</div>}
           <button type="submit" className="botao botao-principal" disabled={salvando} style={{ marginTop: 12 }}>
             {salvando ? 'Lançando…' : 'Lançar Conta'}
@@ -683,7 +919,7 @@ function PainelContasPagar({ contas, fornecedores, centrosCusto, planoContas, no
 }
 
 // ---- Lista reutilizada por Receber e Pagar ----
-function ListaContas({ contas, tipoLabel, nomeEntidade, campoEntidade, campoData, onBaixar, onWhatsapp, rotuloBaixa }) {
+function ListaContas({ contas, tipoLabel, nomeEntidade, campoEntidade, campoData, onBaixar, onWhatsapp, onEmail, rotuloBaixa }) {
   if (contas.length === 0) {
     return <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>Nenhum lançamento encontrado.</div>;
   }
@@ -706,6 +942,11 @@ function ListaContas({ contas, tipoLabel, nomeEntidade, campoEntidade, campoData
                 {c[campoData] ? ` · confirmado em ${formatarData(c[campoData])}` : ''}
                 {c.comprovante_nome ? ` · 📎 ${c.comprovante_nome}` : ''}
               </div>
+              {c.linha_digitavel && (
+                <div className="texto-suave" style={{ fontSize: 12, marginTop: 2 }}>
+                  🔢 {formatarLinhaDigitavelVisual(c.linha_digitavel)}
+                </div>
+              )}
             </div>
             <div className="fn-item-dir">
               <div className="fn-valor">{dinheiro(c.valor)}</div>
@@ -715,6 +956,9 @@ function ListaContas({ contas, tipoLabel, nomeEntidade, campoEntidade, campoData
                 )}
                 {onWhatsapp && status !== 'OK' && (
                   <button type="button" className="botao botao-contorno" onClick={() => onWhatsapp(c)}>💬 Cobrar</button>
+                )}
+                {onEmail && status !== 'OK' && (
+                  <button type="button" className="botao botao-contorno" onClick={() => onEmail(c)}>✉️ E-mail</button>
                 )}
               </div>
             </div>
@@ -745,7 +989,8 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
     setMostrarForm(true);
   }
   function abrirEdicao(r) {
-    setEditandoId(r.id); setNome(r.nome); setDocumento(r.documento || ''); setEmail(r.email || ''); setTelefone(r.telefone || '');
+    setEditandoId(r.id); setNome(r.nome); setDocumento(r.documento || ''); setEmail(r.email || '');
+    setTelefone(r.telefone ? formatarTelefoneBR(r.telefone) : '');
     setErroForm(''); setMostrarForm(true);
   }
 
@@ -754,6 +999,15 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
     if (salvando) return;
     setErroForm('');
     if (!nome.trim()) { setErroForm('Informe o nome.'); return; }
+    if (documento.trim()) {
+      const documentoValido = validarDocumento(documento);
+      if (documentoValido === null) { setErroForm('O CPF/CNPJ está incompleto — confira os números.'); return; }
+      if (documentoValido === false) { setErroForm('O CPF/CNPJ digitado é inválido — confira os números.'); return; }
+    }
+    if (telefone.trim() && !validarTelefoneBR(telefone)) {
+      setErroForm('O telefone precisa ter DDD + número (10 ou 11 dígitos). Ex.: (83) 90000-0000.');
+      return;
+    }
     const dados = { nome: nome.trim(), documento: documento.trim() || null, email: email.trim() || null, telefone: telefone.trim() || null };
 
     setSalvando(true);
@@ -806,11 +1060,19 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
           <div className="fn-duas">
             <div>
               <label className="rotulo">CPF ou CNPJ</label>
-              <input className="campo" type="text" value={documento} onChange={(e) => setDocumento(formatarDocumento(e.target.value))} placeholder="000.000.000-00" />
+              <input className="campo" type="text" inputMode="numeric" value={documento}
+                onChange={(e) => setDocumento(formatarDocumento(e.target.value))} placeholder="000.000.000-00" />
+              {(() => {
+                const status = documento.trim() ? validarDocumento(documento) : null;
+                if (status === true) return <p className="fn-doc-ok">✓ documento válido</p>;
+                if (status === false) return <p className="fn-doc-erro">✗ documento inválido</p>;
+                return null;
+              })()}
             </div>
             <div>
               <label className="rotulo">Telefone</label>
-              <input className="campo" type="text" value={telefone} onChange={(e) => setTelefone(e.target.value)} placeholder="(83) 90000-0000" />
+              <input className="campo" type="tel" inputMode="numeric" value={telefone}
+                onChange={(e) => setTelefone(formatarTelefoneBR(e.target.value))} placeholder="(83) 90000-0000" />
             </div>
           </div>
           <label className="rotulo">E-mail</label>
@@ -957,6 +1219,8 @@ function EstilosFinanceiro() {
       .fn-barra { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
       .fn-duas { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
       .fn-duas-colunas { display: grid; grid-template-columns: 1fr; gap: 16px; }
+      .fn-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
+      .fn-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
 
       .fn-subtitulo { font-size: 14px; color: var(--texto-suave); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.04em; }
       .fn-numeros { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

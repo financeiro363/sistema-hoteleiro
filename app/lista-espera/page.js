@@ -54,6 +54,15 @@ function normalizarTelefone(texto) {
   return null;
 }
 
+// Máscara ao vivo enquanto digita (fixo ou celular, sem o 55 do Brasil)
+function formatarTelefoneBR(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+
 function emailValido(texto) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(texto || '').trim());
 }
@@ -346,8 +355,9 @@ export default function ListaEspera() {
                 id="le-telefone"
                 className="campo"
                 type="tel"
+                inputMode="numeric"
                 value={telefoneWhatsapp}
-                onChange={(e) => setTelefoneWhatsapp(e.target.value)}
+                onChange={(e) => setTelefoneWhatsapp(formatarTelefoneBR(e.target.value))}
                 placeholder="(88) 99999-0000"
               />
             </div>

@@ -956,11 +956,15 @@ function EstilosDepositos() {
         padding: 10px 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
         font-size: 13px; color: var(--erro-texto); max-height: 200px; overflow-y: auto;
       }
+      .dp-ignorada { padding: 3px 0; border-bottom: 1px dashed rgba(163, 18, 18, 0.25); }
+      .dp-ignorada:last-child { border-bottom: none; }
       .dp-previa-lista {
         background: var(--fundo); border-radius: 10px; padding: 10px 12px; margin-top: 10px;
         display: flex; flex-direction: column; gap: 4px; font-size: 13px;
         max-height: 220px; overflow-y: auto;
       }
+      .dp-previa-linha { padding: 3px 0; border-bottom: 1px dashed var(--borda); }
+      .dp-previa-linha:last-child { border-bottom: none; }
 
       .dp-log-acao {
         font-size: 12px; font-weight: 700; color: var(--marca);

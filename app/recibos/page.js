@@ -58,6 +58,51 @@ function formatarDocumento(texto) {
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
 }
 
+// Validação REAL de CPF (dígitos verificadores)
+function validarCPF(cpf) {
+  const d = String(cpf || '').replace(/\D/g, '');
+  if (d.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false; // todos iguais (111.111.111-11 etc.)
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += Number(d[i]) * (10 - i);
+  let dv1 = (soma * 10) % 11;
+  if (dv1 === 10) dv1 = 0;
+  if (dv1 !== Number(d[9])) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += Number(d[i]) * (11 - i);
+  let dv2 = (soma * 10) % 11;
+  if (dv2 === 10) dv2 = 0;
+  return dv2 === Number(d[10]);
+}
+
+// Validação REAL de CNPJ (dígitos verificadores)
+function validarCNPJ(cnpj) {
+  const d = String(cnpj || '').replace(/\D/g, '');
+  if (d.length !== 14) return false;
+  if (/^(\d)\1{13}$/.test(d)) return false; // todos iguais
+  function calcularDV(base) {
+    const tamanho = base.length;
+    let pos = tamanho - 7;
+    let soma = 0;
+    for (let i = tamanho; i >= 1; i--) {
+      soma += Number(base.charAt(tamanho - i)) * pos--;
+      if (pos < 2) pos = 9;
+    }
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  }
+  if (calcularDV(d.substring(0, 12)) !== Number(d.charAt(12))) return false;
+  return calcularDV(d.substring(0, 13)) === Number(d.charAt(13));
+}
+
+// Confere CPF (11 dígitos) ou CNPJ (14) automaticamente, conforme o tamanho
+function validarDocumento(texto) {
+  const d = String(texto || '').replace(/\D/g, '');
+  if (d.length === 11) return validarCPF(d);
+  if (d.length === 14) return validarCNPJ(d);
+  return null; // incompleto — ainda não dá pra saber
+}
+
 // Valor monetário por extenso, em português (validado no protótipo)
 function valorPorExtenso(valor) {
   const unidades = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'];
@@ -251,6 +296,11 @@ export default function Recibos() {
     if (!fNome.trim()) { setErroForm('Informe o nome completo ou razão social.'); return; }
     if (!(Number(fValor) > 0)) { setErroForm('Informe um valor maior que zero.'); return; }
     if (!fReferente.trim()) { setErroForm('Descreva a que se refere o pagamento.'); return; }
+    if (fDocumento.trim()) {
+      const documentoValido = validarDocumento(fDocumento);
+      if (documentoValido === null) { setErroForm('O CPF/CNPJ está incompleto — confira os números.'); return; }
+      if (documentoValido === false) { setErroForm('O CPF/CNPJ digitado é inválido — confira os números.'); return; }
+    }
 
     setSalvando(true);
     let salvo = null;
@@ -411,6 +461,12 @@ export default function Recibos() {
               <input className="campo" type="text" inputMode="numeric" value={fDocumento}
                 onChange={(e) => setFDocumento(formatarDocumento(e.target.value))}
                 placeholder="000.000.000-00" />
+              {(() => {
+                const status = fDocumento.trim() ? validarDocumento(fDocumento) : null;
+                if (status === true) return <p className="rc-doc-ok">✓ documento válido</p>;
+                if (status === false) return <p className="rc-doc-erro">✗ documento inválido</p>;
+                return null;
+              })()}
             </div>
             <div>
               <label className="rotulo">Valor (R$) *</label>
@@ -590,6 +646,8 @@ function EstilosRecibos() {
         font-size: 13px; color: var(--marca); background: var(--marca-clara);
         border-radius: 10px; padding: 8px 12px; margin: 8px 0 0;
       }
+      .rc-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
+      .rc-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
 
       .rc-cidade-form { display: inline-flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
       .rc-cidade-form .campo { width: auto; flex: 1; min-width: 180px; }
