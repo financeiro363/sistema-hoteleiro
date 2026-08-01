@@ -6,6 +6,7 @@
 // ============================================================================
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 
@@ -133,8 +134,14 @@ export default function PaginaLogin() {
             </button>
           </form>
 
-          <p className="texto-suave" style={{ fontSize: 13, marginTop: 16, marginBottom: 0 }}>
-            Esqueceu a senha ou ainda não tem acesso? Fale com o administrador do seu hotel.
+          <p className="texto-suave" style={{ fontSize: 13, marginTop: 16, marginBottom: 4 }}>
+            Esqueceu a senha?{' '}
+            <Link href="/esqueci-senha" style={{ color: 'var(--marca)', fontWeight: 600 }}>
+              Clique aqui para redefinir
+            </Link>
+          </p>
+          <p className="texto-suave" style={{ fontSize: 13, marginBottom: 0 }}>
+            Ainda não tem acesso? Fale com o administrador do seu hotel.
           </p>
         </div>
       </div>

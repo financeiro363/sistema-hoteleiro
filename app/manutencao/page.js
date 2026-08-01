@@ -25,7 +25,7 @@ import { supabase } from '../../lib/supabaseClient';
 
 const PRIORIDADE_LABEL = { BAIXA: 'Baixa', MEDIA: 'Média', ALTA: 'Alta' };
 const PRIORIDADE_COR = {
-  BAIXA: { fundo: '#F0F0F0', texto: '#555555' },
+  BAIXA: { fundo: '#DDF2E4', texto: '#1E6B3C' },
   MEDIA: { fundo: '#FDF3D7', texto: '#8A6100' },
   ALTA: { fundo: '#FBDDDD', texto: '#A31212' },
 };

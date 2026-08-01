@@ -26,8 +26,8 @@ const COR_STATUS = {
 
 // Cores das etiquetas de prioridade
 const COR_PRIORIDADE = {
-  'Baixa':   { fundo: '#F0F0F0', texto: '#555555' },
-  'Média':   { fundo: '#E3EEF9', texto: '#2A5E9C' },
+  'Baixa':   { fundo: '#DDF2E4', texto: '#1E6B3C' },
+  'Média':   { fundo: '#FDF3D7', texto: '#8A6100' },
   'Alta':    { fundo: '#FCE8D9', texto: '#A34E00' },
   'Urgente': { fundo: '#FBDDDD', texto: '#A31212' },
 };
