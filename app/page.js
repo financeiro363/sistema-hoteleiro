@@ -71,10 +71,14 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Governança',
     descricao: 'Rotina das camareiras por quarto, com checklist, integração com Manutenção e Achados e Perdidos.',
   },
+  {
+    href: '/financeiro',
+    titulo: 'Financeiro',
+    descricao: 'Contas a pagar e receber, clientes, fornecedores, categorias e dashboard com fluxo de caixa. (Só admin)',
+  },
 ];
 
 const MODULOS_EM_BREVE = [
-  { titulo: 'Financeiro', descricao: 'Contas a pagar e receber, fluxo de caixa e depósitos.' },
   { titulo: 'Ponto', descricao: 'Folha de ponto conforme a convenção coletiva.' },
 ];
 

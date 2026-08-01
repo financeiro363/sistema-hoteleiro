@@ -27,6 +27,7 @@ const LINKS_DO_MENU = [
   { href: '/manutencao', rotulo: 'Manutenção' },
   { href: '/estoque', rotulo: 'Estoque' },
   { href: '/governanca', rotulo: 'Governança' },
+  { href: '/financeiro', rotulo: 'Financeiro', soAdmin: true },
 ];
 
 export default function CabecalhoSite() {
@@ -36,6 +37,7 @@ export default function CabecalhoSite() {
   const [menuAberto, setMenuAberto] = useState(false);
   const [logado, setLogado] = useState(false);
   const [nomeUsuario, setNomeUsuario] = useState('');
+  const [papelUsuario, setPapelUsuario] = useState('');
 
   // Observa o login: mostra "Entrar" ou "Sair" conforme a sessão
   useEffect(() => {
@@ -48,17 +50,18 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('nome')
+          .select('nome, papel')
           .eq('auth_id', data.session.user.id)
           .single();
         if (ativo && perfil?.nome) setNomeUsuario(perfil.nome.split(' ')[0]);
+        if (ativo) setPapelUsuario(perfil?.papel || '');
       }
     }
     carregarSessao();
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) setNomeUsuario('');
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); }
       else carregarSessao();
     });
 
@@ -93,7 +96,7 @@ export default function CabecalhoSite() {
           className={menuAberto ? 'navegacao aberta' : 'navegacao'}
           aria-label="Menu principal"
         >
-          {LINKS_DO_MENU.map((link) => (
+          {LINKS_DO_MENU.filter((link) => !link.soAdmin || papelUsuario === 'ADMIN').map((link) => (
             <Link
               key={link.href}
               href={link.href}
