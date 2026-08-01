@@ -28,6 +28,7 @@ const LINKS_DO_MENU = [
   { href: '/estoque', rotulo: 'Estoque' },
   { href: '/governanca', rotulo: 'Governança' },
   { href: '/financeiro', rotulo: 'Financeiro', soAdmin: true },
+  { href: '/ponto', rotulo: 'Ponto', soAdmin: true },
 ];
 
 export default function CabecalhoSite() {

@@ -76,10 +76,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Financeiro',
     descricao: 'Contas a pagar e receber, clientes, fornecedores, categorias e dashboard com fluxo de caixa. (Só admin)',
   },
-];
-
-const MODULOS_EM_BREVE = [
-  { titulo: 'Ponto', descricao: 'Folha de ponto conforme a convenção coletiva.' },
+  {
+    href: '/ponto',
+    titulo: 'Ponto',
+    descricao: 'Folha de ponto e banco de horas conforme a CCT Sindhotel-PB, com alertas jurídicos. (Só admin)',
+  },
 ];
 
 export default function PaginaInicial() {
@@ -117,20 +118,14 @@ export default function PaginaInicial() {
         </div>
       </section>
 
-      {/* Próximos módulos */}
-      <section aria-labelledby="titulo-em-breve" style={{ marginTop: 36 }}>
-        <h2 id="titulo-em-breve">Em migração</h2>
-        <p className="texto-suave" style={{ maxWidth: 560 }}>
-          O sistema está sendo construído módulo por módulo. Estes são os próximos da fila:
-        </p>
-        <div className="grade-modulos">
-          {MODULOS_EM_BREVE.map((m) => (
-            <div key={m.titulo} className="modulo modulo-em-breve">
-              <span className="modulo-etiqueta">Em breve</span>
-              <h3>{m.titulo}</h3>
-              <p>{m.descricao}</p>
-            </div>
-          ))}
+      {/* Sistema completo */}
+      <section aria-labelledby="titulo-completo" style={{ marginTop: 36 }}>
+        <div className="cartao" style={{ textAlign: 'center', padding: '28px 20px' }}>
+          <h2 id="titulo-completo" style={{ marginTop: 0 }}>🎉 Sistema completo</h2>
+          <p className="texto-suave" style={{ maxWidth: 560, margin: '0 auto' }}>
+            Todos os módulos planejados já estão em produção. Encontrou algo que precisa de ajuste?
+            Fale com quem cuida do sistema.
+          </p>
         </div>
       </section>
     </main>
