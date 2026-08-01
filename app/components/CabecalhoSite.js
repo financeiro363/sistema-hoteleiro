@@ -30,6 +30,7 @@ const LINKS_DO_MENU = [
   { href: '/financeiro', rotulo: 'Financeiro', soAdmin: true },
   { href: '/ponto', rotulo: 'Ponto', soAdmin: true },
   { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
+  { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
 ];
 
 export default function CabecalhoSite() {

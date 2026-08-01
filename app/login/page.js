@@ -48,12 +48,25 @@ export default function PaginaLogin() {
       email: email.trim(),
       password: senha,
     });
-    setEntrando(false);
 
     if (error) {
+      setEntrando(false);
       setErro(traduzirErro(error.message));
       return;
     }
+
+    // Confere se o acesso dessa pessoa não foi desativado pelo admin
+    const { data: sessao } = await supabase.auth.getSession();
+    const { data: perfil } = await supabase
+      .from('usuarios').select('ativo').eq('auth_id', sessao.session.user.id).single();
+    setEntrando(false);
+
+    if (perfil && perfil.ativo === false) {
+      await supabase.auth.signOut();
+      setErro('Seu acesso foi desativado. Fale com o administrador do hotel.');
+      return;
+    }
+
     router.push('/');
   }
 

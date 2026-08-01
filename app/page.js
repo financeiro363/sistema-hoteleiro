@@ -91,6 +91,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Contabilidade',
     descricao: 'Lançamentos com link do Drive, extratos bancários por ano e log de auditoria. (Admin e Contador)',
   },
+  {
+    href: '/usuarios',
+    titulo: 'Controle de Acesso',
+    descricao: 'Ative, desative e defina o papel de cada usuário do sistema. (Só admin)',
+  },
 ];
 
 export default function PaginaInicial() {
