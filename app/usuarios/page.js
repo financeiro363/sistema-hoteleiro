@@ -8,10 +8,11 @@
 // - Trocar o papel (ADMIN / COLABORADOR / CONTADOR) direto na tela — não
 //   precisa mais editar no Supabase para isso
 // - O admin NÃO consegue desativar a própria conta (trava na tela E no banco)
-// - Criar uma conta NOVA (usuário que ainda não existe) continua exigindo um
-//   passo manual no Supabase (Authentication → Add user), porque isso exige
-//   uma chave de administrador que não pode ficar exposta no site — está
-//   documentado no LEIA-ME.
+// - Criar uma conta NOVA agora é feito direto aqui: preenche nome, e-mail e
+//   papel, e o sistema convida a pessoa por e-mail (ela escolhe a própria
+//   senha, o admin nunca vê/define a senha dela). Por trás dos panos, isso
+//   chama uma rota de servidor (/api/criar-usuario) que usa a chave mestra
+//   do Supabase — essa chave nunca fica exposta no navegador.
 // ============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
@@ -45,7 +46,52 @@ export default function ControleUsuarios() {
   const [busca, setBusca] = useState('');
   const [confirmandoId, setConfirmandoId] = useState(null); // confirmação de desativar
 
+  // Novo usuário
+  const [mostrarFormNovo, setMostrarFormNovo] = useState(false);
+  const [novoNome, setNovoNome] = useState('');
+  const [novoEmail, setNovoEmail] = useState('');
+  const [novoPapel, setNovoPapel] = useState('COLABORADOR');
+  const [criandoUsuario, setCriandoUsuario] = useState(false);
+  const [erroNovoUsuario, setErroNovoUsuario] = useState('');
+
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 5000); }
+
+  async function criarUsuario(evento) {
+    evento.preventDefault();
+    if (criandoUsuario) return;
+    setErroNovoUsuario('');
+
+    if (!novoNome.trim()) { setErroNovoUsuario('Informe o nome.'); return; }
+    if (!novoEmail.trim()) { setErroNovoUsuario('Informe o e-mail.'); return; }
+
+    setCriandoUsuario(true);
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/criar-usuario', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessao.session.access_token}`,
+        },
+        body: JSON.stringify({ nome: novoNome.trim(), email: novoEmail.trim(), papel: novoPapel }),
+      });
+      const resultado = await resposta.json();
+      setCriandoUsuario(false);
+
+      if (!resposta.ok || resultado.erro) {
+        setErroNovoUsuario(resultado.erro || 'Não foi possível criar o usuário.');
+        return;
+      }
+
+      setNovoNome(''); setNovoEmail(''); setNovoPapel('COLABORADOR');
+      setMostrarFormNovo(false);
+      mostrarAviso(`Convite enviado para ${novoEmail.trim()}! A pessoa vai receber um e-mail para escolher a própria senha.`);
+      carregarTudo(usuario);
+    } catch (e) {
+      setCriandoUsuario(false);
+      setErroNovoUsuario('Falha de conexão com o servidor. Tente novamente.');
+    }
+  }
 
   useEffect(() => {
     let ativo = true;
@@ -119,14 +165,35 @@ export default function ControleUsuarios() {
       {aviso && <div className="aviso-sucesso">{aviso}</div>}
       {erro && <div className="aviso-erro">{erro}</div>}
 
-      <div className="aviso-erro" style={{ background: 'var(--marca-clara)', color: 'var(--marca)', fontSize: 13 }}>
-        Para criar uma conta NOVA (pessoa que ainda não tem login), é preciso um passo manual no
-        Supabase (Authentication → Add user) — veja o LEIA-ME. Aqui você só ativa/desativa acesso e
-        troca o papel de quem já existe.
+      <div className="us-barra">
+        <input className="campo" type="search" value={busca} onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar por nome ou e-mail…" />
+        <button type="button" className="botao botao-principal" onClick={() => { setMostrarFormNovo(!mostrarFormNovo); setErroNovoUsuario(''); }}>
+          {mostrarFormNovo ? 'Fechar' : '+ Novo Usuário'}
+        </button>
       </div>
 
-      <input className="campo" type="search" value={busca} onChange={(e) => setBusca(e.target.value)}
-        placeholder="Buscar por nome ou e-mail…" style={{ margin: '14px 0' }} />
+      {mostrarFormNovo && (
+        <form className="cartao" style={{ marginBottom: 16 }} onSubmit={criarUsuario}>
+          <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>Novo usuário</h2>
+          <p className="texto-suave" style={{ fontSize: 13 }}>
+            A pessoa recebe um e-mail de convite e escolhe a própria senha — você não define a
+            senha dela, e ela nunca fica visível para ninguém.
+          </p>
+          <label className="rotulo">Nome completo *</label>
+          <input className="campo" type="text" value={novoNome} onChange={(e) => setNovoNome(e.target.value)} />
+          <label className="rotulo">E-mail *</label>
+          <input className="campo" type="email" value={novoEmail} onChange={(e) => setNovoEmail(e.target.value)} placeholder="pessoa@seuhotel.com.br" />
+          <label className="rotulo">Papel</label>
+          <select className="campo" value={novoPapel} onChange={(e) => setNovoPapel(e.target.value)}>
+            {Object.entries(PAPEL_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
+          </select>
+          {erroNovoUsuario && <div className="aviso-erro">{erroNovoUsuario}</div>}
+          <button type="submit" className="botao botao-principal" disabled={criandoUsuario} style={{ marginTop: 12 }}>
+            {criandoUsuario ? 'Enviando convite…' : 'Enviar convite'}
+          </button>
+        </form>
+      )}
 
       {carregando ? <p className="texto-suave">Carregando…</p> : filtrados.length === 0 ? (
         <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>Nenhum usuário encontrado.</div>
@@ -179,6 +246,7 @@ function EstilosUsuarios() {
   return (
     <style>{`
       .us-lista { display: flex; flex-direction: column; gap: 12px; }
+      .us-barra { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
       .us-item { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
       .us-item-topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       .us-item-topo strong { font-size: 16px; }
@@ -188,6 +256,8 @@ function EstilosUsuarios() {
       .us-confirmar { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--erro-texto); flex-wrap: wrap; }
 
       @media (min-width: 640px) {
+        .us-barra { flex-direction: row; align-items: center; }
+        .us-barra .campo { flex: 1; }
         .us-item { flex-direction: row; justify-content: space-between; align-items: center; }
         .us-item-dir { align-items: flex-end; }
       }
