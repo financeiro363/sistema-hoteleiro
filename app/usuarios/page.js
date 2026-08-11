@@ -214,7 +214,7 @@ export default function ControleUsuarios() {
                   <div className="texto-suave" style={{ fontSize: 13 }}>{u.email}</div>
                 </div>
                 <div className="us-item-dir">
-                  <select className="campo us-select-papel" value={u.papel} disabled={salvandoId === u.id}
+                  <select className="campo us-select-papel" value={u.papel} disabled={salvandoId === u.id || souEu}
                     onChange={(e) => trocarPapel(u, e.target.value)}>
                     {Object.entries(PAPEL_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
                   </select>
