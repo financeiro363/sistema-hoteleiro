@@ -27,6 +27,63 @@ function formatarDataHora(valor) {
   } catch (e) { return String(valor); }
 }
 
+// Máscara CPF/CNPJ (hotéis normalmente têm CNPJ, mas aceita CPF também
+// para casos de pessoa física/MEI)
+function formatarDocumento(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 14);
+  if (d.length <= 11) {
+    if (d.length <= 3) return d;
+    if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+    if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+    return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+  }
+  return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+}
+
+// Validação REAL de CPF (dígitos verificadores)
+function validarCPF(cpf) {
+  const d = String(cpf || '').replace(/\D/g, '');
+  if (d.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false;
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += Number(d[i]) * (10 - i);
+  let dv1 = (soma * 10) % 11;
+  if (dv1 === 10) dv1 = 0;
+  if (dv1 !== Number(d[9])) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += Number(d[i]) * (11 - i);
+  let dv2 = (soma * 10) % 11;
+  if (dv2 === 10) dv2 = 0;
+  return dv2 === Number(d[10]);
+}
+
+// Validação REAL de CNPJ (dígitos verificadores)
+function validarCNPJ(cnpj) {
+  const d = String(cnpj || '').replace(/\D/g, '');
+  if (d.length !== 14) return false;
+  if (/^(\d)\1{13}$/.test(d)) return false;
+  function calcularDV(base) {
+    const tamanho = base.length;
+    let pos = tamanho - 7;
+    let soma = 0;
+    for (let i = tamanho; i >= 1; i--) {
+      soma += Number(base.charAt(tamanho - i)) * pos--;
+      if (pos < 2) pos = 9;
+    }
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  }
+  if (calcularDV(d.substring(0, 12)) !== Number(d.charAt(12))) return false;
+  return calcularDV(d.substring(0, 13)) === Number(d.charAt(13));
+}
+
+function validarDocumento(texto) {
+  const d = String(texto || '').replace(/\D/g, '');
+  if (d.length === 11) return validarCPF(d);
+  if (d.length === 14) return validarCNPJ(d);
+  return null;
+}
+
 export default function Propriedades() {
   const router = useRouter();
 
@@ -143,6 +200,11 @@ function PainelHoteis({ hoteis, usuario, salvando, setSalvando, mostrarAviso, se
 
     if (!nomeFantasia.trim()) { setErroForm('Informe o nome do hotel.'); return; }
     if (!nomeAdmin.trim() || !emailAdmin.trim()) { setErroForm('Informe o nome e o e-mail do primeiro administrador.'); return; }
+    if (documento.trim()) {
+      const documentoValido = validarDocumento(documento);
+      if (documentoValido === null) { setErroForm('O CPF/CNPJ está incompleto — confira os números.'); return; }
+      if (documentoValido === false) { setErroForm('O CPF/CNPJ digitado é inválido — confira os números.'); return; }
+    }
 
     setCriando(true);
     const { data: sessao } = await supabase.auth.getSession();
@@ -211,7 +273,14 @@ function PainelHoteis({ hoteis, usuario, salvando, setSalvando, mostrarAviso, se
             </div>
             <div>
               <label className="rotulo">CNPJ</label>
-              <input className="campo" type="text" value={documento} onChange={(e) => setDocumento(e.target.value)} placeholder="00.000.000/0000-00" />
+              <input className="campo" type="text" inputMode="numeric" value={documento}
+                onChange={(e) => setDocumento(formatarDocumento(e.target.value))} placeholder="00.000.000/0000-00" />
+              {(() => {
+                const status = documento.trim() ? validarDocumento(documento) : null;
+                if (status === true) return <p className="pr-doc-ok">✓ documento válido</p>;
+                if (status === false) return <p className="pr-doc-erro">✗ documento inválido</p>;
+                return null;
+              })()}
             </div>
           </div>
 
@@ -389,6 +458,8 @@ function EstilosPropriedades() {
       .pr-barra { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
       .pr-duas { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
       .pr-divisor { font-size: 13px; font-weight: 700; color: var(--texto-suave); margin: 14px 0 6px; border-top: 1px solid var(--borda); padding-top: 12px; }
+      .pr-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
+      .pr-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
 
       .pr-lista { display: flex; flex-direction: column; gap: 12px; }
       .pr-item { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
