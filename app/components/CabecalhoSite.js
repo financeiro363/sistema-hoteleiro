@@ -67,6 +67,7 @@ export default function CabecalhoSite() {
   const [logado, setLogado] = useState(false);
   const [nomeUsuario, setNomeUsuario] = useState('');
   const [papelUsuario, setPapelUsuario] = useState('');
+  const [souSuperAdmin, setSouSuperAdmin] = useState(false);
 
   // Observa o login: mostra "Entrar" ou "Sair" conforme a sessão
   useEffect(() => {
@@ -79,18 +80,19 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('nome, papel')
+          .select('nome, papel, super_admin')
           .eq('auth_id', data.session.user.id)
           .single();
         if (ativo && perfil?.nome) setNomeUsuario(perfil.nome.split(' ')[0]);
         if (ativo) setPapelUsuario(perfil?.papel || '');
+        if (ativo) setSouSuperAdmin(perfil?.super_admin === true);
       }
     }
     carregarSessao();
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); }
       else carregarSessao();
     });
 
@@ -182,6 +184,11 @@ export default function CabecalhoSite() {
         <div className="cabecalho-acoes">
           {logado ? (
             <>
+              {souSuperAdmin && (
+                <Link href="/propriedades" className={caminhoAtual === '/propriedades' ? 'botao botao-principal' : 'botao botao-contorno'}>
+                  🏢 Propriedades
+                </Link>
+              )}
               {nomeUsuario && <span className="cabecalho-usuario">Olá, {nomeUsuario}</span>}
               <button type="button" className="botao botao-suave" onClick={sair}>
                 Sair

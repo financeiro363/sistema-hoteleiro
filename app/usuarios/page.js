@@ -135,6 +135,10 @@ export default function ControleUsuarios() {
 
   async function trocarPapel(pessoa, novoPapel) {
     if (novoPapel === pessoa.papel) return;
+    if (pessoa.id === usuario.id) {
+      setErro('Você não pode trocar o seu próprio papel — peça para outro administrador fazer isso, se for realmente necessário.');
+      return;
+    }
     setSalvandoId(pessoa.id);
     const { error } = await supabase.from('usuarios').update({ papel: novoPapel }).eq('id', pessoa.id);
     setSalvandoId(null);
@@ -215,6 +219,7 @@ export default function ControleUsuarios() {
                 </div>
                 <div className="us-item-dir">
                   <select className="campo us-select-papel" value={u.papel} disabled={salvandoId === u.id || souEu}
+                    title={souEu ? 'Você não pode trocar o próprio papel' : undefined}
                     onChange={(e) => trocarPapel(u, e.target.value)}>
                     {Object.entries(PAPEL_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
                   </select>
