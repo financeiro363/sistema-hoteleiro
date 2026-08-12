@@ -169,6 +169,7 @@ function VisaoAdmin({ usuario, nomeHotel }) {
   const [subAba, setSubAba] = useState('novo');
   const [atestados, setAtestados] = useState([]);
   const [funcionarios, setFuncionarios] = useState([]);
+  const [usuarios, setUsuarios] = useState([]);
   const [logs, setLogs] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
@@ -179,14 +180,16 @@ function VisaoAdmin({ usuario, nomeHotel }) {
   const carregarTudo = useCallback(async () => {
     setCarregando(true);
     setErro('');
-    const [a, f, l] = await Promise.all([
+    const [a, f, u, l] = await Promise.all([
       supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
+      supabase.from('usuarios').select('id, nome'),
       supabase.from('atestados_log').select('*').order('data_hora', { ascending: false }).limit(300),
     ]);
     if (a.error) setErro('Não foi possível carregar. Detalhe técnico: ' + a.error.message);
     setAtestados(a.data || []);
     setFuncionarios(f.data || []);
+    setUsuarios(u.data || []);
     setLogs(l.data || []);
     setCarregando(false);
   }, []);
@@ -194,6 +197,7 @@ function VisaoAdmin({ usuario, nomeHotel }) {
   useEffect(() => { carregarTudo(); }, [carregarTudo]);
 
   const nomeFuncionario = useCallback((id) => funcionarios.find((f) => f.id === id)?.nome || `#${id}`, [funcionarios]);
+  const nomeUsuario = useCallback((id) => usuarios.find((u) => u.id === id)?.nome || `Usuário #${id}`, [usuarios]);
 
   return (
     <>
@@ -214,9 +218,9 @@ function VisaoAdmin({ usuario, nomeHotel }) {
           )}
           {subAba === 'listagem' && (
             <ListagemAtestados atestados={atestados} usuario={usuario} nomeHotel={nomeHotel} nomeFuncionario={nomeFuncionario}
-              mostrarAviso={mostrarAviso} setErro={setErro} recarregar={carregarTudo} souAdmin />
+              nomeUsuario={nomeUsuario} mostrarAviso={mostrarAviso} setErro={setErro} recarregar={carregarTudo} souAdmin />
           )}
-          {subAba === 'log' && <LogAuditoria logs={logs} />}
+          {subAba === 'log' && <LogAuditoria logs={logs} nomeUsuario={nomeUsuario} />}
         </>
       )}
     </>
@@ -230,6 +234,7 @@ function VisaoAdmin({ usuario, nomeHotel }) {
 function VisaoContador({ usuario }) {
   const [atestados, setAtestados] = useState([]);
   const [funcionarios, setFuncionarios] = useState([]);
+  const [usuarios, setUsuarios] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
   const [aviso, setAviso] = useState('');
@@ -238,26 +243,29 @@ function VisaoContador({ usuario }) {
 
   const carregarTudo = useCallback(async () => {
     setCarregando(true);
-    const [a, f] = await Promise.all([
+    const [a, f, u] = await Promise.all([
       supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
+      supabase.from('usuarios').select('id, nome'),
     ]);
     if (a.error) setErro('Não foi possível carregar. Detalhe técnico: ' + a.error.message);
     setAtestados(a.data || []);
     setFuncionarios(f.data || []);
+    setUsuarios(u.data || []);
     setCarregando(false);
   }, []);
 
   useEffect(() => { carregarTudo(); }, [carregarTudo]);
 
   const nomeFuncionario = useCallback((id) => funcionarios.find((f) => f.id === id)?.nome || `#${id}`, [funcionarios]);
+  const nomeUsuario = useCallback((id) => usuarios.find((u) => u.id === id)?.nome || `Usuário #${id}`, [usuarios]);
 
   return (
     <>
       {aviso && <div className="aviso-sucesso">{aviso}</div>}
       {erro && <div className="aviso-erro">{erro}</div>}
       {carregando ? <p className="texto-suave">Carregando…</p> : (
-        <ListagemAtestados atestados={atestados} usuario={usuario} nomeFuncionario={nomeFuncionario}
+        <ListagemAtestados atestados={atestados} usuario={usuario} nomeFuncionario={nomeFuncionario} nomeUsuario={nomeUsuario}
           mostrarAviso={mostrarAviso} setErro={setErro} recarregar={carregarTudo} souAdmin={false} />
       )}
     </>
@@ -336,7 +344,7 @@ function FormularioNovoAtestado({ usuario, nomeHotel, atestadosExistentes, funci
     const ano = new Date().getFullYear();
 
     // Sobe a foto primeiro (bucket exclusivo "atestados")
-    const extensao = foto.name.split('.').pop() || 'jpg';
+    const extensao = (foto.name || 'foto.jpg').split('.').pop() || 'jpg';
     const caminhoFoto = `${usuario.hotel_id}/${Date.now()}.${extensao}`;
     const { error: erroUpload } = await supabase.storage.from('atestados').upload(caminhoFoto, foto);
     if (erroUpload) {
@@ -371,21 +379,33 @@ function FormularioNovoAtestado({ usuario, nomeHotel, atestadosExistentes, funci
 
     if (!salvo) { setErroForm('Não foi possível salvar. Detalhe técnico: ' + erroFinal); return; }
 
-    const ip = await meuIP();
     const nomeColaborador = funcionarios.find((f) => f.id === Number(funcionarioId))?.nome || '';
-    await supabase.from('atestados_log').insert({
-      usuario_id: usuario.id, atestado_id: salvo.id, acao: 'INCLUSAO',
-      detalhe: `Atestado ${salvo.protocolo} incluído para ${nomeColaborador}.`,
-      ip_origem: ip, hotel_id: usuario.hotel_id,
-    });
 
+    // Mostra o recibo JÁ, garantido — o registro no log de auditoria vai
+    // depois, isolado, e nunca pode travar nem atrasar o recibo aparecer.
     setReciboAberto({ ...salvo, _fotoPreview: fotoPreview, _nomeColaborador: nomeColaborador });
-    // Limpa o formulário
+    if (mostrarAviso) mostrarAviso(`Atestado ${salvo.protocolo} registrado!`);
+    if (recarregar) recarregar();
+
+    // Limpa o formulário (guarda o valor da foto antes de limpar, para não
+    // afetar o recibo que já está com sua própria cópia)
     setFuncionarioId(''); setBuscaFuncionario(''); setApresentadorTipo('PROPRIO'); setApresentadorNome(''); setApresentadorCpf('');
     setProfissionalNome(''); setProfissionalConselho(''); setDataEmissao(hoje()); setDiasAfastamento(''); setCid('');
     setFoto(null); setFotoPreview(null); setAvisoDuplicidade('');
-    if (mostrarAviso) mostrarAviso(`Atestado ${salvo.protocolo} registrado!`);
-    if (recarregar) recarregar();
+
+    // Log de auditoria — melhor esforço; se falhar por qualquer motivo
+    // (rede, etc.), não afeta em nada o que a pessoa já viu na tela.
+    try {
+      const ip = await meuIP();
+      await supabase.from('atestados_log').insert({
+        usuario_id: usuario.id, atestado_id: salvo.id, acao: 'INCLUSAO',
+        detalhe: `Atestado ${salvo.protocolo} incluído para ${nomeColaborador}.`,
+        ip_origem: ip, hotel_id: usuario.hotel_id,
+      });
+    } catch (e) {
+      // Silencioso de propósito — não é motivo para incomodar quem está
+      // atendendo o colaborador na recepção.
+    }
   }
 
   return (
@@ -574,13 +594,15 @@ function LinhasAssinatura({ atestado }) {
 // LISTAGEM (Admin: completa / Contador: só leitura)
 // ============================================================================
 
-function ListagemAtestados({ atestados, usuario, nomeHotel, nomeFuncionario, mostrarAviso, setErro, recarregar, souAdmin }) {
+function ListagemAtestados({ atestados, usuario, nomeHotel, nomeFuncionario, nomeUsuario, mostrarAviso, setErro, recarregar, souAdmin }) {
   const [busca, setBusca] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('TODOS');
   const [fotoAberta, setFotoAberta] = useState(null); // { atestado, url }
   const [carregandoFoto, setCarregandoFoto] = useState(null);
   const [excluindoId, setExcluindoId] = useState(null);
   const [salvando, setSalvando] = useState(false);
+  const [reciboReimpresso, setReciboReimpresso] = useState(null);
+  const [carregandoRecibo, setCarregandoRecibo] = useState(null);
 
   async function registrarLog(atestadoId, acao, detalhe) {
     const ip = await meuIP();
@@ -596,6 +618,22 @@ function ListagemAtestados({ atestados, usuario, nomeHotel, nomeFuncionario, mos
     if (error) { setErro('Não foi possível carregar a foto. Detalhe técnico: ' + error.message); return; }
     await registrarLog(atestado.id, 'VISUALIZACAO_FOTO', `Foto do atestado ${atestado.protocolo} visualizada.`);
     setFotoAberta({ atestado, url: data.signedUrl });
+  }
+
+  async function reimprimirRecibo(atestado) {
+    setCarregandoRecibo(atestado.id);
+    const { data, error } = await supabase.storage.from('atestados').createSignedUrl(atestado.foto_caminho, 300);
+    setCarregandoRecibo(null);
+    if (error) { setErro('Não foi possível carregar a foto para o recibo. Detalhe técnico: ' + error.message); return; }
+    await registrarLog(atestado.id, 'VISUALIZACAO_FOTO', `Recibo do atestado ${atestado.protocolo} reimpresso.`);
+    // IMPORTANTE: usa o "criado_em" gravado no banco (relógio do servidor no
+    // momento original do atendimento) — NUNCA a data/hora de agora, mesmo
+    // sendo uma reimpressão feita dias depois.
+    setReciboReimpresso({
+      ...atestado,
+      _fotoPreview: data.signedUrl,
+      _nomeColaborador: nomeFuncionario(atestado.funcionario_id),
+    });
   }
 
   async function mudarStatus(atestado, novoStatus) {
@@ -654,11 +692,19 @@ function ListagemAtestados({ atestados, usuario, nomeHotel, nomeFuncionario, mos
                   {a.profissional_nome} ({a.profissional_tipo === 'MEDICO' ? 'CRM' : 'CRO'} {a.profissional_conselho}/{a.profissional_uf})
                   {a.cid ? ` · CID ${a.cid}` : ''}
                 </div>
+                <div className="texto-suave" style={{ fontSize: 12 }}>
+                  Registrado por {nomeUsuario(a.criado_por_id)} em {formatarDataHora(a.criado_em)}
+                </div>
               </div>
               <div className="at-item-dir">
                 <button type="button" className="botao botao-contorno" onClick={() => verFoto(a)} disabled={carregandoFoto === a.id}>
                   {carregandoFoto === a.id ? 'Abrindo…' : '📷 Ver foto'}
                 </button>
+                {souAdmin && (
+                  <button type="button" className="botao botao-contorno" onClick={() => reimprimirRecibo(a)} disabled={carregandoRecibo === a.id}>
+                    {carregandoRecibo === a.id ? 'Preparando…' : '🖨️ Reimprimir recibo'}
+                  </button>
+                )}
                 {souAdmin && (
                   <select className="campo at-select-status" value={a.status} disabled={salvando} onChange={(e) => mudarStatus(a, e.target.value)}>
                     {Object.entries(STATUS_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
@@ -693,6 +739,10 @@ function ListagemAtestados({ atestados, usuario, nomeHotel, nomeFuncionario, mos
           </div>
         </div>
       )}
+
+      {reciboReimpresso && (
+        <ReciboAtestado atestado={reciboReimpresso} nomeHotel={nomeHotel} usuario={usuario} onFechar={() => setReciboReimpresso(null)} />
+      )}
     </section>
   );
 }
@@ -701,7 +751,7 @@ function ListagemAtestados({ atestados, usuario, nomeHotel, nomeFuncionario, mos
 // LOG DE AUDITORIA (só admin)
 // ============================================================================
 
-function LogAuditoria({ logs }) {
+function LogAuditoria({ logs, nomeUsuario }) {
   const ACAO_LABEL = { INCLUSAO: 'Inclusão', VISUALIZACAO_FOTO: 'Visualização de Foto', ALTERACAO_STATUS: 'Alteração de Status', EXCLUSAO: 'Exclusão' };
   return (
     <section className="at-lista">
@@ -711,6 +761,7 @@ function LogAuditoria({ logs }) {
         logs.map((l) => (
           <div key={l.id} className="cartao" style={{ padding: '12px 16px' }}>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+              <strong>{nomeUsuario(l.usuario_id)}</strong>
               <span className="at-log-acao">{ACAO_LABEL[l.acao] || l.acao}</span>
               <span className="texto-suave" style={{ fontSize: 12 }}>IP: {l.ip_origem || '—'}</span>
             </div>
