@@ -177,8 +177,8 @@ function VisaoAdmin({ usuario, nomeHotel }) {
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 5000); }
 
-  const carregarTudo = useCallback(async () => {
-    setCarregando(true);
+  const carregarTudo = useCallback(async (mostrarCarregando = true) => {
+    if (mostrarCarregando) setCarregando(true);
     setErro('');
     const [a, f, u, l] = await Promise.all([
       supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
@@ -191,10 +191,15 @@ function VisaoAdmin({ usuario, nomeHotel }) {
     setFuncionarios(f.data || []);
     setUsuarios(u.data || []);
     setLogs(l.data || []);
-    setCarregando(false);
+    if (mostrarCarregando) setCarregando(false);
   }, []);
 
-  useEffect(() => { carregarTudo(); }, [carregarTudo]);
+  useEffect(() => { carregarTudo(true); }, [carregarTudo]);
+
+  // Usado depois de salvar/editar algo: atualiza os dados por baixo dos
+  // panos, SEM mostrar "Carregando…" — isso evita que a tela pisque e
+  // derrube modais abertos (como o recibo recém-emitido).
+  const recarregarEmSilencio = useCallback(() => carregarTudo(false), [carregarTudo]);
 
   const nomeFuncionario = useCallback((id) => funcionarios.find((f) => f.id === id)?.nome || `#${id}`, [funcionarios]);
   const nomeUsuario = useCallback((id) => usuarios.find((u) => u.id === id)?.nome || `Usuário #${id}`, [usuarios]);
@@ -214,11 +219,11 @@ function VisaoAdmin({ usuario, nomeHotel }) {
         <>
           {subAba === 'novo' && (
             <FormularioNovoAtestado usuario={usuario} nomeHotel={nomeHotel} atestadosExistentes={atestados}
-              funcionarios={funcionarios} mostrarAviso={mostrarAviso} recarregar={carregarTudo} />
+              funcionarios={funcionarios} mostrarAviso={mostrarAviso} recarregar={recarregarEmSilencio} />
           )}
           {subAba === 'listagem' && (
             <ListagemAtestados atestados={atestados} usuario={usuario} nomeHotel={nomeHotel} nomeFuncionario={nomeFuncionario}
-              nomeUsuario={nomeUsuario} mostrarAviso={mostrarAviso} setErro={setErro} recarregar={carregarTudo} souAdmin />
+              nomeUsuario={nomeUsuario} mostrarAviso={mostrarAviso} setErro={setErro} recarregar={recarregarEmSilencio} souAdmin />
           )}
           {subAba === 'log' && <LogAuditoria logs={logs} nomeUsuario={nomeUsuario} />}
         </>
@@ -241,8 +246,8 @@ function VisaoContador({ usuario }) {
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 5000); }
 
-  const carregarTudo = useCallback(async () => {
-    setCarregando(true);
+  const carregarTudo = useCallback(async (mostrarCarregando = true) => {
+    if (mostrarCarregando) setCarregando(true);
     const [a, f, u] = await Promise.all([
       supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
@@ -252,10 +257,11 @@ function VisaoContador({ usuario }) {
     setAtestados(a.data || []);
     setFuncionarios(f.data || []);
     setUsuarios(u.data || []);
-    setCarregando(false);
+    if (mostrarCarregando) setCarregando(false);
   }, []);
 
-  useEffect(() => { carregarTudo(); }, [carregarTudo]);
+  useEffect(() => { carregarTudo(true); }, [carregarTudo]);
+  const recarregarEmSilencio = useCallback(() => carregarTudo(false), [carregarTudo]);
 
   const nomeFuncionario = useCallback((id) => funcionarios.find((f) => f.id === id)?.nome || `#${id}`, [funcionarios]);
   const nomeUsuario = useCallback((id) => usuarios.find((u) => u.id === id)?.nome || `Usuário #${id}`, [usuarios]);
@@ -266,7 +272,7 @@ function VisaoContador({ usuario }) {
       {erro && <div className="aviso-erro">{erro}</div>}
       {carregando ? <p className="texto-suave">Carregando…</p> : (
         <ListagemAtestados atestados={atestados} usuario={usuario} nomeFuncionario={nomeFuncionario} nomeUsuario={nomeUsuario}
-          mostrarAviso={mostrarAviso} setErro={setErro} recarregar={carregarTudo} souAdmin={false} />
+          mostrarAviso={mostrarAviso} setErro={setErro} recarregar={recarregarEmSilencio} souAdmin={false} />
       )}
     </>
   );
