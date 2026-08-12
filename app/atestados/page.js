@@ -343,6 +343,7 @@ function FormularioNovoAtestado({ usuario, nomeHotel, atestadosExistentes, funci
     }
     if (!profissionalNome.trim() || !profissionalConselho.trim()) { setErroForm('Informe os dados do profissional emissor.'); return; }
     if (!dataEmissao) { setErroForm('Informe a data de emissão.'); return; }
+    if (dataEmissao > hoje()) { setErroForm('A data de emissão não pode ser no futuro — confira a data digitada.'); return; }
     if (!(Number(diasAfastamento) > 0)) { setErroForm('Informe a quantidade de dias de afastamento.'); return; }
     if (!foto) { setErroForm('A foto do atestado é obrigatória.'); return; }
 
@@ -486,8 +487,9 @@ function FormularioNovoAtestado({ usuario, nomeHotel, atestadosExistentes, funci
         <div className="at-duas">
           <div>
             <label className="rotulo">Data de emissão *</label>
-            <input className="campo" type="date" value={dataEmissao}
+            <input className="campo" type="date" value={dataEmissao} max={hoje()}
               onChange={(e) => { setDataEmissao(e.target.value); verificarDuplicidade(funcionarioId, e.target.value, diasAfastamento); }} />
+            <p className="texto-suave" style={{ fontSize: 11, marginTop: 3 }}>Não é possível informar uma data futura.</p>
           </div>
           <div>
             <label className="rotulo">Dias de afastamento *</label>
