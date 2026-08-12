@@ -147,6 +147,17 @@ export default function ControleUsuarios() {
     carregarTudo(usuario);
   }
 
+  async function alternarPermissaoAtestado(pessoa) {
+    setSalvandoId(pessoa.id);
+    const { error } = await supabase.from('usuarios').update({ pode_incluir_atestado: !pessoa.pode_incluir_atestado }).eq('id', pessoa.id);
+    setSalvandoId(null);
+    if (error) { setErro('Não foi possível atualizar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso(pessoa.pode_incluir_atestado
+      ? `${pessoa.nome} não pode mais registrar atestados.`
+      : `${pessoa.nome} agora pode registrar atestados médicos/odontológicos.`);
+    carregarTudo(usuario);
+  }
+
   const termo = busca.trim().toLowerCase();
   const filtrados = usuarios.filter((u) =>
     !termo || u.nome.toLowerCase().includes(termo) || (u.email || '').toLowerCase().includes(termo)
@@ -223,6 +234,13 @@ export default function ControleUsuarios() {
                     onChange={(e) => trocarPapel(u, e.target.value)}>
                     {Object.entries(PAPEL_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
                   </select>
+                  {u.papel !== 'ADMIN' && (
+                    <label className="us-checkbox-atestado">
+                      <input type="checkbox" checked={!!u.pode_incluir_atestado} disabled={salvandoId === u.id}
+                        onChange={() => alternarPermissaoAtestado(u)} />
+                      Pode registrar atestados médicos/odontológicos
+                    </label>
+                  )}
                   {souEu ? (
                     <span className="texto-suave" style={{ fontSize: 12 }}>Você não pode desativar a própria conta.</span>
                   ) : confirmandoId === u.id ? (
@@ -258,6 +276,8 @@ function EstilosUsuarios() {
       .us-badge { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
       .us-item-dir { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
       .us-select-papel { width: auto; min-width: 220px; }
+      .us-checkbox-atestado { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; max-width: 240px; }
+      .us-checkbox-atestado input { width: 18px; height: 18px; flex-shrink: 0; }
       .us-confirmar { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--erro-texto); flex-wrap: wrap; }
 
       @media (min-width: 640px) {

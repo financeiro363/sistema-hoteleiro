@@ -96,6 +96,11 @@ const MODULOS_DISPONIVEIS = [
     titulo: 'Controle de Acesso',
     descricao: 'Ative, desative e defina o papel de cada usuário do sistema. (Só admin)',
   },
+  {
+    href: '/atestados',
+    titulo: 'Atestados',
+    descricao: 'Registro de atestados médicos/odontológicos com recibo em 2 vias. (Admin, Contador ou permissão especial)',
+  },
 ];
 
 export default function PaginaInicial() {

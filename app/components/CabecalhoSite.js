@@ -46,6 +46,7 @@ const CATEGORIAS_MENU = [
       { href: '/ponto', rotulo: 'Ponto', soAdmin: true },
       { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
       { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
+      { href: '/atestados', rotulo: 'Atestados', soAdminOuContador: true, contadorVe: true },
     ],
   },
 ];
@@ -68,6 +69,7 @@ export default function CabecalhoSite() {
   const [nomeUsuario, setNomeUsuario] = useState('');
   const [papelUsuario, setPapelUsuario] = useState('');
   const [souSuperAdmin, setSouSuperAdmin] = useState(false);
+  const [podeIncluirAtestado, setPodeIncluirAtestado] = useState(false);
 
   // Observa o login: mostra "Entrar" ou "Sair" conforme a sessão
   useEffect(() => {
@@ -80,19 +82,20 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('nome, papel, super_admin')
+          .select('nome, papel, super_admin, pode_incluir_atestado')
           .eq('auth_id', data.session.user.id)
           .single();
         if (ativo && perfil?.nome) setNomeUsuario(perfil.nome.split(' ')[0]);
         if (ativo) setPapelUsuario(perfil?.papel || '');
         if (ativo) setSouSuperAdmin(perfil?.super_admin === true);
+        if (ativo) setPodeIncluirAtestado(perfil?.pode_incluir_atestado === true);
       }
     }
     carregarSessao();
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); }
       else carregarSessao();
     });
 
@@ -145,38 +148,53 @@ export default function CabecalhoSite() {
           )}
 
           {papelUsuario === 'CONTADOR' ? (
-            // Visão restrita do Contador: só existe um destino possível
-            <Link href="/contabilidade" className={caminhoAtual === '/contabilidade' ? 'ativa' : ''}>
-              Contabilidade
-            </Link>
+            // Visão restrita do Contador: só os destinos que ele pode acessar
+            <>
+              <Link href="/contabilidade" className={caminhoAtual === '/contabilidade' ? 'ativa' : ''}>
+                Contabilidade
+              </Link>
+              <Link href="/atestados" className={caminhoAtual === '/atestados' ? 'ativa' : ''}>
+                Atestados
+              </Link>
+            </>
           ) : (
-            CATEGORIAS_MENU.map((categoria) => {
-              const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario));
-              if (linksVisiveis.length === 0) return null; // esconde a categoria inteira se ninguém dentro dela é visível
-              const temPaginaAtiva = linksVisiveis.some((link) => link.href === caminhoAtual);
-              return (
-                <div key={categoria.chave} className="menu-categoria">
-                  <button
-                    type="button"
-                    className={temPaginaAtiva ? 'menu-categoria-botao ativa' : 'menu-categoria-botao'}
-                    aria-expanded={categoriaAberta === categoria.chave}
-                    onClick={() => setCategoriaAberta(categoriaAberta === categoria.chave ? null : categoria.chave)}
-                  >
-                    {categoria.nome}
-                    <span className="menu-seta" aria-hidden="true">{categoriaAberta === categoria.chave ? '▲' : '▼'}</span>
-                  </button>
-                  {categoriaAberta === categoria.chave && (
-                    <div className="menu-dropdown">
-                      {linksVisiveis.map((link) => (
-                        <Link key={link.href} href={link.href} className={caminhoAtual === link.href ? 'ativa' : ''}>
-                          {link.rotulo}
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })
+            <>
+              {CATEGORIAS_MENU.map((categoria) => {
+                const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario));
+                if (linksVisiveis.length === 0) return null; // esconde a categoria inteira se ninguém dentro dela é visível
+                const temPaginaAtiva = linksVisiveis.some((link) => link.href === caminhoAtual);
+                return (
+                  <div key={categoria.chave} className="menu-categoria">
+                    <button
+                      type="button"
+                      className={temPaginaAtiva ? 'menu-categoria-botao ativa' : 'menu-categoria-botao'}
+                      aria-expanded={categoriaAberta === categoria.chave}
+                      onClick={() => setCategoriaAberta(categoriaAberta === categoria.chave ? null : categoria.chave)}
+                    >
+                      {categoria.nome}
+                      <span className="menu-seta" aria-hidden="true">{categoriaAberta === categoria.chave ? '▲' : '▼'}</span>
+                    </button>
+                    {categoriaAberta === categoria.chave && (
+                      <div className="menu-dropdown">
+                        {linksVisiveis.map((link) => (
+                          <Link key={link.href} href={link.href} className={caminhoAtual === link.href ? 'ativa' : ''}>
+                            {link.rotulo}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {/* Permissão avulsa: alguém que não é admin/contador mas pode
+                  registrar atestados (ex.: recepção) — link extra, fora das
+                  categorias normais, já que essa permissão não segue o papel. */}
+              {papelUsuario !== 'ADMIN' && podeIncluirAtestado && (
+                <Link href="/atestados" className={caminhoAtual === '/atestados' ? 'ativa' : ''}>
+                  Atestados
+                </Link>
+              )}
+            </>
           )}
         </nav>
 
