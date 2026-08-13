@@ -348,7 +348,6 @@ function FormularioNovoAtestado({ usuario, nomeHotel, atestadosExistentes, funci
     if (!foto) { setErroForm('A foto do atestado é obrigatória.'); return; }
 
     setSalvando(true);
-    const ano = new Date().getFullYear();
 
     // Sobe a foto primeiro (bucket exclusivo "atestados")
     const extensao = (foto.name || 'foto.jpg').split('.').pop() || 'jpg';
@@ -360,31 +359,28 @@ function FormularioNovoAtestado({ usuario, nomeHotel, atestadosExistentes, funci
       return;
     }
 
-    let salvo = null, erroFinal = null;
-    for (let tentativa = 0; tentativa < 3; tentativa++) {
-      const { data, error } = await supabase.from('atestados').insert({
-        protocolo: proximoProtocolo(atestadosExistentes || [], ano, tentativa),
-        funcionario_id: Number(funcionarioId),
-        apresentador_tipo: apresentadorTipo,
-        apresentador_nome: apresentadorTipo === 'TERCEIRO' ? apresentadorNome.trim() : null,
-        apresentador_cpf: apresentadorTipo === 'TERCEIRO' ? apresentadorCpf.replace(/\D/g, '') : null,
-        profissional_tipo: profissionalTipo,
-        profissional_nome: profissionalNome.trim(),
-        profissional_conselho: profissionalConselho.trim(),
-        profissional_uf: profissionalUf,
-        data_emissao: dataEmissao,
-        dias_afastamento: Number(diasAfastamento),
-        cid: cid.trim() || null,
-        foto_caminho: caminhoFoto,
-        criado_por_id: usuario.id,
-        hotel_id: usuario.hotel_id,
-      }).select().single();
-      if (!data) { erroFinal = error?.message; if (!/duplicate|unique/i.test(error?.message || '')) break; continue; }
-      salvo = data; break;
-    }
+    // O protocolo é gerado sozinho pelo banco de dados (trigger), sempre
+    // único — não depende de conseguir ler a lista de outros atestados.
+    const { data: salvo, error: erroInsert } = await supabase.from('atestados').insert({
+      protocolo: 'temp', // o banco substitui este valor automaticamente
+      funcionario_id: Number(funcionarioId),
+      apresentador_tipo: apresentadorTipo,
+      apresentador_nome: apresentadorTipo === 'TERCEIRO' ? apresentadorNome.trim() : null,
+      apresentador_cpf: apresentadorTipo === 'TERCEIRO' ? apresentadorCpf.replace(/\D/g, '') : null,
+      profissional_tipo: profissionalTipo,
+      profissional_nome: profissionalNome.trim(),
+      profissional_conselho: profissionalConselho.trim(),
+      profissional_uf: profissionalUf,
+      data_emissao: dataEmissao,
+      dias_afastamento: Number(diasAfastamento),
+      cid: cid.trim() || null,
+      foto_caminho: caminhoFoto,
+      criado_por_id: usuario.id,
+      hotel_id: usuario.hotel_id,
+    }).select().single();
     setSalvando(false);
 
-    if (!salvo) { setErroForm('Não foi possível salvar. Detalhe técnico: ' + erroFinal); return; }
+    if (!salvo) { setErroForm('Não foi possível salvar. Detalhe técnico: ' + erroInsert?.message); return; }
 
     const nomeColaborador = funcionarios.find((f) => f.id === Number(funcionarioId))?.nome || '';
 
