@@ -843,21 +843,16 @@ function EstilosAtestados() {
       }
 
       @media print {
-        @page { size: A4 portrait; margin: 10mm; }
+        @page { size: A4 portrait; margin: 12mm; }
         body * { visibility: hidden; }
         .recibo-atestado, .recibo-atestado * { visibility: visible; }
-        .recibo-atestado {
-          position: fixed; top: 0; left: 0; width: 100%; height: 277mm;
-          display: flex; flex-direction: column; overflow: hidden;
-        }
-        .at-via {
-          flex: 1; overflow: hidden; page-break-inside: avoid; page-break-after: avoid;
-          display: flex; flex-direction: column;
-        }
-        .at-corte { flex: none; margin: 6px 0; }
-        .at-recibo-foto { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-        .at-recibo-foto img { max-height: 55mm; max-width: 100%; object-fit: contain; }
-        .at-assinaturas { margin-top: auto; padding-top: 10px; }
+        .recibo-atestado { position: absolute; top: 0; left: 0; width: 100%; }
+        .at-via { page-break-inside: avoid; break-inside: avoid; padding: 8px 0; }
+        .at-via-titulo { font-size: 11px; }
+        .at-corte { margin: 4px 0; font-size: 10px; }
+        .at-recibo-foto { text-align: center; margin: 6px 0; }
+        .at-recibo-foto img { max-height: 40mm; max-width: 90%; object-fit: contain; }
+        .at-assinaturas { margin-top: 14px; }
         .at-nao-imprimir { display: none !important; }
       }
     `}</style>
