@@ -98,6 +98,10 @@ function FichaHospede() {
   const [enviando, setEnviando] = useState(false);
   const [erroForm, setErroForm] = useState('');
   const [enviado, setEnviado] = useState(false);
+  const [buscandoCpf, setBuscandoCpf] = useState(false);
+  const [cpfEncontrado, setCpfEncontrado] = useState(false);
+  const [buscandoCep, setBuscandoCep] = useState(false);
+  const [cepEncontrado, setCepEncontrado] = useState(false);
 
   useEffect(() => {
     if (!hotelId) { setErroHotel('Link inválido — faltou identificar o hotel.'); setCarregandoHotel(false); return; }
@@ -108,6 +112,53 @@ function FichaHospede() {
         setCarregandoHotel(false);
       });
   }, [hotelId]);
+
+  // Busca automática dos dados pessoais assim que o CPF é digitado por completo
+  async function buscarPorCpf(valorCpf) {
+    const digitos = String(valorCpf || '').replace(/\D/g, '');
+    if (digitos.length !== 11 || !validarCPF(digitos)) return;
+    setBuscandoCpf(true);
+    setCpfEncontrado(false);
+    try {
+      const resposta = await fetch(`/api/directd-cpf?cpf=${digitos}`);
+      const dados = await resposta.json();
+      if (resposta.ok && dados?.nomeCompleto) {
+        setNomeCompleto(dados.nomeCompleto);
+        if (dados.genero) setGenero(dados.genero);
+        if (dados.dataNascimento) setDataNascimento(dados.dataNascimento);
+        // Endereço: só preenche se a pessoa ainda não tiver digitado nada
+        // ali (não queremos sobrescrever o que ela já preencheu na mão)
+        if (dados.cep && !cep.trim()) setCep(formatarCEP(dados.cep));
+        if (dados.endereco && !endereco.trim()) setEndereco(dados.endereco);
+        if (dados.numeroEndereco && !numeroEndereco.trim()) setNumeroEndereco(dados.numeroEndereco);
+        if (dados.bairro && !bairro.trim()) setBairro(dados.bairro);
+        if (dados.cidade && !cidade.trim()) setCidade(dados.cidade);
+        if (dados.estado && !estado.trim()) setEstado(dados.estado);
+        setCpfEncontrado(true);
+      }
+    } catch (e) { /* silencioso — a pessoa ainda pode preencher manualmente */ }
+    setBuscandoCpf(false);
+  }
+
+  // Busca automática do endereço assim que o CEP é digitado por completo (ViaCEP)
+  async function buscarPorCep(valorCep) {
+    const digitos = String(valorCep || '').replace(/\D/g, '');
+    if (digitos.length !== 8) return;
+    setBuscandoCep(true);
+    setCepEncontrado(false);
+    try {
+      const resposta = await fetch(`https://viacep.com.br/ws/${digitos}/json/`);
+      const dados = await resposta.json();
+      if (!dados?.erro) {
+        setEndereco(dados.logradouro || '');
+        setBairro(dados.bairro || '');
+        setCidade(dados.localidade || '');
+        setEstado(dados.uf || '');
+        setCepEncontrado(true);
+      }
+    } catch (e) { /* silencioso — a pessoa ainda pode preencher manualmente */ }
+    setBuscandoCep(false);
+  }
 
   async function enviar(evento) {
     evento.preventDefault();
@@ -172,6 +223,41 @@ function FichaHospede() {
         <p className="texto-suave">Preencha seus dados abaixo — leva menos de 3 minutos.</p>
 
         <form className="cartao" onSubmit={enviar} style={{ marginTop: 16 }}>
+          <div className="fnrh-secao">Documentação</div>
+          <p className="texto-suave" style={{ fontSize: 13, marginTop: -4 }}>
+            Comece digitando seu CPF — se encontrarmos seus dados, preenchemos o resto para você.
+          </p>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Tipo de documento</label>
+              <select className="campo" value={tipoDocumento} onChange={(e) => { setTipoDocumento(e.target.value); setNumeroDocumento(''); setCpfEncontrado(false); }}>
+                <option value="CPF">CPF</option>
+                <option value="RG">RG</option>
+                <option value="PASSAPORTE">Passaporte</option>
+              </select>
+            </div>
+            <div>
+              <label className="rotulo">Número do documento *</label>
+              <input className="campo" type="text" inputMode={tipoDocumento === 'CPF' ? 'numeric' : 'text'} value={numeroDocumento}
+                onChange={(e) => {
+                  const novoValor = tipoDocumento === 'CPF' ? formatarCPF(e.target.value) : e.target.value;
+                  setNumeroDocumento(novoValor);
+                  setCpfEncontrado(false);
+                  if (tipoDocumento === 'CPF') buscarPorCpf(novoValor);
+                }}
+                placeholder={tipoDocumento === 'CPF' ? '000.000.000-00' : ''} />
+              {tipoDocumento === 'CPF' && buscandoCpf && <p className="fnrh-buscando">🔎 Buscando seus dados…</p>}
+              {tipoDocumento === 'CPF' && !buscandoCpf && cpfEncontrado && <p className="fnrh-doc-ok">✓ Dados encontrados e preenchidos abaixo!</p>}
+              {tipoDocumento === 'CPF' && !buscandoCpf && !cpfEncontrado && numeroDocumento.trim() && (
+                validarCPF(numeroDocumento)
+                  ? <p className="fnrh-doc-ok">✓ CPF válido</p>
+                  : <p className="fnrh-doc-erro">✗ CPF inválido</p>
+              )}
+            </div>
+          </div>
+          <label className="rotulo">Órgão expedidor (se RG)</label>
+          <input className="campo" type="text" value={orgaoExpedidor} onChange={(e) => setOrgaoExpedidor(e.target.value)} placeholder="Ex.: SSP/PB" />
+
           <div className="fnrh-secao">Dados pessoais</div>
           <label className="rotulo">Nome completo *</label>
           <input className="campo" type="text" value={nomeCompleto} onChange={(e) => setNomeCompleto(e.target.value)} />
@@ -209,36 +295,14 @@ function FichaHospede() {
             </div>
           </div>
 
-          <div className="fnrh-secao">Documentação</div>
-          <div className="fnrh-duas">
-            <div>
-              <label className="rotulo">Tipo de documento</label>
-              <select className="campo" value={tipoDocumento} onChange={(e) => { setTipoDocumento(e.target.value); setNumeroDocumento(''); }}>
-                <option value="CPF">CPF</option>
-                <option value="RG">RG</option>
-                <option value="PASSAPORTE">Passaporte</option>
-              </select>
-            </div>
-            <div>
-              <label className="rotulo">Número do documento *</label>
-              <input className="campo" type="text" inputMode={tipoDocumento === 'CPF' ? 'numeric' : 'text'} value={numeroDocumento}
-                onChange={(e) => setNumeroDocumento(tipoDocumento === 'CPF' ? formatarCPF(e.target.value) : e.target.value)}
-                placeholder={tipoDocumento === 'CPF' ? '000.000.000-00' : ''} />
-              {tipoDocumento === 'CPF' && numeroDocumento.trim() && (
-                validarCPF(numeroDocumento)
-                  ? <p className="fnrh-doc-ok">✓ CPF válido</p>
-                  : <p className="fnrh-doc-erro">✗ CPF inválido</p>
-              )}
-            </div>
-          </div>
-          <label className="rotulo">Órgão expedidor (se RG)</label>
-          <input className="campo" type="text" value={orgaoExpedidor} onChange={(e) => setOrgaoExpedidor(e.target.value)} placeholder="Ex.: SSP/PB" />
-
           <div className="fnrh-secao">Residência permanente</div>
           <div className="fnrh-duas">
             <div>
               <label className="rotulo">CEP</label>
-              <input className="campo" type="text" inputMode="numeric" value={cep} onChange={(e) => setCep(formatarCEP(e.target.value))} />
+              <input className="campo" type="text" inputMode="numeric" value={cep}
+                onChange={(e) => { const novoValor = formatarCEP(e.target.value); setCep(novoValor); buscarPorCep(novoValor); }} />
+              {buscandoCep && <p className="fnrh-buscando">🔎 Buscando endereço…</p>}
+              {!buscandoCep && cepEncontrado && <p className="fnrh-doc-ok">✓ Endereço encontrado!</p>}
             </div>
             <div>
               <label className="rotulo">Endereço</label>
@@ -322,6 +386,7 @@ function EstilosFicha() {
       .fnrh-duas { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
       .fnrh-tres { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 10px; }
       .fnrh-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 12px; margin: 4px 0 0; }
+      .fnrh-buscando { color: var(--texto-suave); font-weight: 600; font-size: 12px; margin: 4px 0 0; }
       .fnrh-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 12px; margin: 4px 0 0; }
       @media (min-width: 640px) {
         .fnrh-duas { grid-template-columns: 1fr 1fr; }
