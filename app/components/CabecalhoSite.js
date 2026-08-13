@@ -47,6 +47,7 @@ const CATEGORIAS_MENU = [
       { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
       { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
       { href: '/atestados', rotulo: 'Atestados', soAdminOuContador: true, contadorVe: true },
+      { href: '/fichas-hospedes', rotulo: 'Fichas de Hóspedes', soAdmin: true },
     ],
   },
 ];

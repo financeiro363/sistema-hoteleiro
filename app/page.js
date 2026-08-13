@@ -120,6 +120,11 @@ const CATEGORIAS_MODULOS = [
         titulo: 'Atestados',
         descricao: 'Registro de atestados médicos/odontológicos com recibo em 2 vias. (Admin, Contador ou permissão especial)',
       },
+      {
+        href: '/fichas-hospedes',
+        titulo: 'Fichas de Hóspedes',
+        descricao: 'Ficha FNRH pública para o hóspede preencher e exportação dos dados para a reserva na Cloudbeds. (Só admin)',
+      },
     ],
   },
 ];
