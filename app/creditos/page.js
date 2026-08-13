@@ -183,7 +183,7 @@ export default function CreditosDevolucoes() {
     setErro('');
 
     // Nomes de todos os usuários do hotel (para mostrar "quem fez")
-    const { data: pessoas } = await supabase.from('usuarios').select('id, nome, email, papel');
+    const { data: pessoas } = await supabase.from('usuarios').select('id, nome, email, papel').eq('hotel_id', u.hotel_id);
     if (pessoas) {
       const mapa = {};
       pessoas.forEach((p) => { mapa[p.id] = p.nome; });

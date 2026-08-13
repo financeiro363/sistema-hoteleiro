@@ -138,7 +138,7 @@ export default function Estoque() {
     setCarregando(true);
     setErro('');
 
-    const { data: pessoas } = await supabase.from('usuarios').select('id, nome');
+    const { data: pessoas } = await supabase.from('usuarios').select('id, nome').eq('hotel_id', u.hotel_id);
     if (pessoas) {
       const mapa = {};
       pessoas.forEach((p) => { mapa[p.id] = p.nome; });

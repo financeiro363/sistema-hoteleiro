@@ -146,7 +146,7 @@ export default function Ocorrencias() {
     setErro('');
 
     const { data: pessoas } = await supabase
-      .from('usuarios').select('id, nome, papel').order('nome', { ascending: true });
+      .from('usuarios').select('id, nome, papel').eq('hotel_id', usuario.hotel_id).order('nome', { ascending: true });
     if (pessoas) {
       setColegas(pessoas);
       const mapa = {};
@@ -160,7 +160,7 @@ export default function Ocorrencias() {
     else setOcorrencias(lista || []);
 
     setCarregando(false);
-  }, []);
+  }, [usuario]);
 
   useEffect(() => {
     if (usuario) carregarTudo();

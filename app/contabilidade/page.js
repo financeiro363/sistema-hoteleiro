@@ -119,7 +119,7 @@ export default function Contabilidade() {
     const [l, e, pessoas] = await Promise.all([
       supabase.from('contabilidade_lancamentos').select('*'),
       supabase.from('contabilidade_extratos').select('*'),
-      supabase.from('usuarios').select('id, nome'),
+      supabase.from('usuarios').select('id, nome').eq('hotel_id', u.hotel_id),
     ]);
     if (l.error) setErro('Não foi possível carregar. Detalhe técnico: ' + l.error.message);
     setLancamentos(l.data || []);

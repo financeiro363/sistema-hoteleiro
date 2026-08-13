@@ -126,7 +126,7 @@ export default function Manutencao() {
     setErro('');
 
     const { data: pessoas } = await supabase
-      .from('usuarios').select('id, nome, papel').order('nome', { ascending: true });
+      .from('usuarios').select('id, nome, papel').eq('hotel_id', u.hotel_id).order('nome', { ascending: true });
     if (pessoas) {
       setColegas(pessoas);
       const mapa = {};

@@ -176,9 +176,14 @@ export default function PaginaSolicitacoes() {
       setUsuario(perfil);
 
       // 3) Busca os colegas do mesmo hotel (para escolher destinatários)
+      //    Filtra hotel_id explicitamente aqui — o banco pode permitir ver
+      //    mais gente (ex.: quem tem o "chapéu" de administrador geral),
+      //    mas essa lista específica é só para escolher gente do PRÓPRIO
+      //    hotel, mesmo que a pessoa logada também administre outros.
       const { data: listaColegas } = await supabase
         .from('usuarios')
         .select('id, nome, email, papel')
+        .eq('hotel_id', perfil.hotel_id)
         .order('nome', { ascending: true });
       if (ativo) setColegas(listaColegas || []);
 

@@ -328,7 +328,7 @@ export default function Ponto() {
       supabase.from('funcionarios').select('*').order('nome', { ascending: true }),
       supabase.from('ponto_lancamentos').select('*').order('data', { ascending: false }),
       supabase.from('ponto_config').select('*').eq('hotel_id', u.hotel_id).maybeSingle(),
-      supabase.from('usuarios').select('id, nome').order('nome', { ascending: true }),
+      supabase.from('usuarios').select('id, nome').eq('hotel_id', u.hotel_id).order('nome', { ascending: true }),
     ]);
     if (f.error) setErro('Não foi possível carregar. Detalhe técnico: ' + f.error.message);
     setFuncionarios(f.data || []);

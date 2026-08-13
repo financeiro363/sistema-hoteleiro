@@ -183,7 +183,7 @@ function VisaoAdmin({ usuario, nomeHotel }) {
     const [a, f, u, l] = await Promise.all([
       supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
-      supabase.from('usuarios').select('id, nome'),
+      supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id),
       supabase.from('atestados_log').select('*').order('data_hora', { ascending: false }).limit(300),
     ]);
     if (a.error) setErro('Não foi possível carregar. Detalhe técnico: ' + a.error.message);
@@ -192,7 +192,7 @@ function VisaoAdmin({ usuario, nomeHotel }) {
     setUsuarios(u.data || []);
     setLogs(l.data || []);
     if (mostrarCarregando) setCarregando(false);
-  }, []);
+  }, [usuario]);
 
   useEffect(() => { carregarTudo(true); }, [carregarTudo]);
 
@@ -251,14 +251,14 @@ function VisaoContador({ usuario }) {
     const [a, f, u] = await Promise.all([
       supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
-      supabase.from('usuarios').select('id, nome'),
+      supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id),
     ]);
     if (a.error) setErro('Não foi possível carregar. Detalhe técnico: ' + a.error.message);
     setAtestados(a.data || []);
     setFuncionarios(f.data || []);
     setUsuarios(u.data || []);
     if (mostrarCarregando) setCarregando(false);
-  }, []);
+  }, [usuario]);
 
   useEffect(() => { carregarTudo(true); }, [carregarTudo]);
   const recarregarEmSilencio = useCallback(() => carregarTudo(false), [carregarTudo]);
