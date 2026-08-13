@@ -843,9 +843,21 @@ function EstilosAtestados() {
       }
 
       @media print {
+        @page { size: A4 portrait; margin: 10mm; }
         body * { visibility: hidden; }
         .recibo-atestado, .recibo-atestado * { visibility: visible; }
-        .recibo-atestado { position: fixed; top: 0; left: 0; width: 100%; padding: 16px; }
+        .recibo-atestado {
+          position: fixed; top: 0; left: 0; width: 100%; height: 277mm;
+          display: flex; flex-direction: column; overflow: hidden;
+        }
+        .at-via {
+          flex: 1; overflow: hidden; page-break-inside: avoid; page-break-after: avoid;
+          display: flex; flex-direction: column;
+        }
+        .at-corte { flex: none; margin: 6px 0; }
+        .at-recibo-foto { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        .at-recibo-foto img { max-height: 55mm; max-width: 100%; object-fit: contain; }
+        .at-assinaturas { margin-top: auto; padding-top: 10px; }
         .at-nao-imprimir { display: none !important; }
       }
     `}</style>
