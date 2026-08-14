@@ -122,11 +122,24 @@ export async function POST(request) {
     }
 
     // A resposta da Cloudbeds confirma: "guestName" e "guestEmail" existem
-    // DIRETO na reserva (não numa lista separada de hóspedes) — por isso a
-    // estratégia principal agora é atualizar a RESERVA em si (putReservation),
-    // não criar/atualizar um "hóspede" à parte. Isso evita de vez o erro de
-    // "limite de hóspedes excedido".
+    // DIRETO na reserva — mas descobrimos que atualizar por putReservation
+    // não reflete no cadastro real do hóspede (ele "aceita" mas não muda
+    // nada). Por isso, agora buscamos o cadastro de hóspede de verdade
+    // através de uma consulta separada (getGuestList, filtrando pela
+    // reserva), para atualizar ele diretamente.
     const reservaMiolo = dadosReserva?.data || dadosReserva || {};
+
+    let guestIdReal = null;
+    try {
+      const respostaListaHospedes = await fetch(
+        `${CLOUDBEDS_BASE_URL}/getGuestList?reservationID=${encodeURIComponent(reservationId)}`,
+        { method: 'GET', headers: cabecalhosCloudbeds }
+      );
+      const dadosListaHospedes = await respostaListaHospedes.json().catch(() => null);
+      const listaHospedes = dadosListaHospedes?.data || [];
+      const primeiroHospede = Array.isArray(listaHospedes) ? listaHospedes[0] : null;
+      guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
+    } catch (e) { /* segue sem o ID — usa o plano B (putReservation) */ }
 
     // ============================================================
     // MAPEAMENTO DE CAMPOS — ficha FNRH → campos esperados pela Cloudbeds
@@ -136,37 +149,59 @@ export async function POST(request) {
     const primeiroNome = partesNome[0] || '';
     const sobrenome = partesNome.slice(1).join(' ') || primeiroNome;
 
-    // ---- Passo 2: atualiza os dados na PRÓPRIA reserva ----
-    const corpoReserva = new URLSearchParams({
-      reservationID: reservationId,
-      // A Cloudbeds exige pelo menos 1 desses campos em toda chamada de
-      // putReservation, mesmo que você só queira mexer noutra coisa.
-      // Reenviamos o status ATUAL da reserva, sem mudar nada — só para
-      // "destravar" a chamada, sem risco de bagunçar datas ou quartos.
-      status: reservaMiolo.status || 'confirmed',
-      guestFirstName: primeiroNome,
-      guestLastName: sobrenome,
-      guestEmail: ficha.email || '',
-      guestPhone: ficha.telefone || '',
-      guestAddress: [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', '),
-      guestCity: ficha.cidade || '',
-      guestState: ficha.estado || '',
-      guestCountry: paraSiglaPais(ficha.pais),
-      guestZip: ficha.cep || '',
-    });
-
-    const respostaReservaAtualizada = await fetch(`${CLOUDBEDS_BASE_URL}/putReservation`, {
-      method: 'PUT',
-      headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: corpoReserva.toString(),
-    });
-    const dadosReservaAtualizada = await respostaReservaAtualizada.json().catch(() => null);
-
-    if (!respostaReservaAtualizada.ok || dadosReservaAtualizada?.success === false) {
-      const mensagemCloudbeds = dadosReservaAtualizada?.message || 'não foi possível atualizar a reserva';
-      return Response.json({
-        erro: `A Cloudbeds recusou o envio dos dados (putReservation): ${mensagemCloudbeds} (chaves disponíveis na resposta original: ${Object.keys(reservaMiolo).join(', ')})`,
-      }, { status: 400 });
+    // ---- Passo 2: atualiza o cadastro do hóspede de verdade ----
+    if (guestIdReal) {
+      const corpoGuest = new URLSearchParams({
+        guestID: guestIdReal,
+        guestFirstName: primeiroNome,
+        guestLastName: sobrenome,
+        guestEmail: ficha.email || '',
+        guestPhone: ficha.telefone || '',
+        guestAddress: [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', '),
+        guestCity: ficha.cidade || '',
+        guestState: ficha.estado || '',
+        guestCountry: paraSiglaPais(ficha.pais),
+        guestZip: ficha.cep || '',
+      });
+      const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
+        method: 'PUT',
+        headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: corpoGuest.toString(),
+      });
+      const dadosGuest = await respostaGuest.json().catch(() => null);
+      if (!respostaGuest.ok || dadosGuest?.success === false) {
+        const mensagemCloudbeds = dadosGuest?.message || 'não foi possível atualizar o cadastro do hóspede';
+        return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (putGuest, guestID ${guestIdReal}): ${mensagemCloudbeds}` }, { status: 400 });
+      }
+    } else {
+      // Plano B: não achamos um guestID através da busca — tenta pela
+      // própria reserva mesmo (pode não refletir no cadastro do hóspede,
+      // mas ao menos não deixa a exportação travada).
+      const corpoReserva = new URLSearchParams({
+        reservationID: reservationId,
+        status: reservaMiolo.status || 'confirmed',
+        guestFirstName: primeiroNome,
+        guestLastName: sobrenome,
+        guestEmail: ficha.email || '',
+        guestPhone: ficha.telefone || '',
+        guestAddress: [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', '),
+        guestCity: ficha.cidade || '',
+        guestState: ficha.estado || '',
+        guestCountry: paraSiglaPais(ficha.pais),
+        guestZip: ficha.cep || '',
+      });
+      const respostaReservaAtualizada = await fetch(`${CLOUDBEDS_BASE_URL}/putReservation`, {
+        method: 'PUT',
+        headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: corpoReserva.toString(),
+      });
+      const dadosReservaAtualizada = await respostaReservaAtualizada.json().catch(() => null);
+      if (!respostaReservaAtualizada.ok || dadosReservaAtualizada?.success === false) {
+        const mensagemCloudbeds = dadosReservaAtualizada?.message || 'não foi possível atualizar a reserva';
+        return Response.json({
+          erro: `A Cloudbeds recusou o envio dos dados (putReservation, sem guestID encontrado): ${mensagemCloudbeds} (chaves disponíveis na resposta original: ${Object.keys(reservaMiolo).join(', ')})`,
+        }, { status: 400 });
+      }
     }
 
     // ---- Passo 3 (complementar, opcional) ----
