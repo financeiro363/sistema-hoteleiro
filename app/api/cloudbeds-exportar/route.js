@@ -139,6 +139,11 @@ export async function POST(request) {
     // ---- Passo 2: atualiza os dados na PRÓPRIA reserva ----
     const corpoReserva = new URLSearchParams({
       reservationID: reservationId,
+      // A Cloudbeds exige pelo menos 1 desses campos em toda chamada de
+      // putReservation, mesmo que você só queira mexer noutra coisa.
+      // Reenviamos o status ATUAL da reserva, sem mudar nada — só para
+      // "destravar" a chamada, sem risco de bagunçar datas ou quartos.
+      status: reservaMiolo.status || 'confirmed',
       guestFirstName: primeiroNome,
       guestLastName: sobrenome,
       guestEmail: ficha.email || '',
