@@ -125,21 +125,39 @@ export async function POST(request) {
     // DIRETO na reserva — mas descobrimos que atualizar por putReservation
     // não reflete no cadastro real do hóspede (ele "aceita" mas não muda
     // nada). Por isso, agora buscamos o cadastro de hóspede de verdade
-    // através de uma consulta separada (getGuestList, filtrando pela
-    // reserva), para atualizar ele diretamente.
+    // A documentação oficial da Cloudbeds confirma o caminho certo:
+    // "getReservations com includeGuestsDetails: true" traz os detalhes
+    // completos dos hóspedes junto da reserva — é daí que pegamos o
+    // guestID de verdade para atualizar com putGuest.
     const reservaMiolo = dadosReserva?.data || dadosReserva || {};
 
     let guestIdReal = null;
     try {
-      const respostaListaHospedes = await fetch(
-        `${CLOUDBEDS_BASE_URL}/getGuestList?reservationID=${encodeURIComponent(reservationId)}`,
+      const respostaComGuestDetails = await fetch(
+        `${CLOUDBEDS_BASE_URL}/getReservations?reservationID=${encodeURIComponent(reservationId)}&includeGuestsDetails=true`,
         { method: 'GET', headers: cabecalhosCloudbeds }
       );
-      const dadosListaHospedes = await respostaListaHospedes.json().catch(() => null);
-      const listaHospedes = dadosListaHospedes?.data || [];
+      const dadosComGuestDetails = await respostaComGuestDetails.json().catch(() => null);
+      const listaReservas = dadosComGuestDetails?.data || [];
+      const reservaComDetalhes = Array.isArray(listaReservas) ? listaReservas[0] : null;
+      const listaHospedes = reservaComDetalhes?.guestList || reservaComDetalhes?.guests || [];
       const primeiroHospede = Array.isArray(listaHospedes) ? listaHospedes[0] : null;
       guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
-    } catch (e) { /* segue sem o ID — usa o plano B (putReservation) */ }
+    } catch (e) { /* segue tentando o caminho de reforço abaixo */ }
+
+    // Reforço: se ainda não achou, tenta pelo getGuestList também
+    if (!guestIdReal) {
+      try {
+        const respostaListaHospedes = await fetch(
+          `${CLOUDBEDS_BASE_URL}/getGuestList?reservationID=${encodeURIComponent(reservationId)}`,
+          { method: 'GET', headers: cabecalhosCloudbeds }
+        );
+        const dadosListaHospedes = await respostaListaHospedes.json().catch(() => null);
+        const listaHospedes = dadosListaHospedes?.data || [];
+        const primeiroHospede = Array.isArray(listaHospedes) ? listaHospedes[0] : null;
+        guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
+      } catch (e) { /* segue sem o ID — usa o plano B (putReservation) */ }
+    }
 
     // ============================================================
     // MAPEAMENTO DE CAMPOS — ficha FNRH → campos esperados pela Cloudbeds
