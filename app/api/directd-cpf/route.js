@@ -46,21 +46,27 @@ export async function GET(request) {
     // que o campo de data do formulário espera)
     function paraDataISO(dataBr) {
       if (!dataBr) return null;
-      const texto = String(dataBr).trim();
-      // Já vem no formato "AAAA-MM-DD" (ou com hora junto, tipo
-      // "1986-03-23T00:00:00") — só corta a parte da hora, se tiver.
-      if (/^\d{4}-\d{2}-\d{2}/.test(texto)) return texto.slice(0, 10);
+      // Tira qualquer parte de hora junto (ex.: "11/11/1966 00:00:00" -> "11/11/1966")
+      const texto = String(dataBr).trim().split(/[\sT]/)[0];
+      // Já vem no formato "AAAA-MM-DD"
+      if (/^\d{4}-\d{2}-\d{2}$/.test(texto)) return texto;
       // Formato "DD/MM/AAAA"
       const partes = texto.split('/');
       if (partes.length !== 3) return null;
       const [dia, mes, ano] = partes;
+      if (!/^\d{4}$/.test(ano)) return null;
       return `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
     }
 
     return Response.json({
       encontrado: true,
       nomeCompleto: cadastro.nome || receita.nomePessoaFisica || null,
-      genero: cadastro.sexo === 'M' ? 'Masculino' : cadastro.sexo === 'F' ? 'Feminino' : null,
+      genero: (() => {
+        const bruto = String(cadastro.sexo || receita.sexo || '').trim().toUpperCase();
+        if (bruto === 'M' || bruto === 'MASCULINO') return 'Masculino';
+        if (bruto === 'F' || bruto === 'FEMININO') return 'Feminino';
+        return null;
+      })(),
       dataNascimento: paraDataISO(cadastro.dataNascimento || receita.dataNascimento),
       endereco: enderecoPrincipal.logradouro || null,
       numeroEndereco: enderecoPrincipal.numero || null,
