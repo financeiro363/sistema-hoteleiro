@@ -46,6 +46,11 @@ const CATEGORIAS_MODULOS = [
         titulo: 'Recibos',
         descricao: 'Recibos de pagamento com valor por extenso, numeração automática e reimpressão rastreada.',
       },
+      {
+        href: '/fichas-hospedes',
+        titulo: 'Fichas de Hóspedes',
+        descricao: 'Ficha FNRH pública para o hóspede preencher e exportação dos dados para a reserva na Cloudbeds.',
+      },
     ],
   },
   {
@@ -119,11 +124,6 @@ const CATEGORIAS_MODULOS = [
         href: '/atestados',
         titulo: 'Atestados',
         descricao: 'Registro de atestados médicos/odontológicos com recibo em 2 vias. (Admin, Contador ou permissão especial)',
-      },
-      {
-        href: '/fichas-hospedes',
-        titulo: 'Fichas de Hóspedes',
-        descricao: 'Ficha FNRH pública para o hóspede preencher e exportação dos dados para a reserva na Cloudbeds. (Só admin)',
       },
     ],
   },

@@ -54,8 +54,8 @@ export async function POST(request) {
 
     const { data: chamador, error: erroChamador } = await supabaseComoChamador
       .from('usuarios').select('papel, hotel_id, id').eq('auth_id', dadosAuth.user.id).single();
-    if (erroChamador || !chamador || chamador.papel !== 'ADMIN') {
-      return Response.json({ erro: 'Só administradores podem exportar para a Cloudbeds.' }, { status: 403 });
+    if (erroChamador || !chamador) {
+      return Response.json({ erro: 'Não foi possível confirmar seu usuário.' }, { status: 403 });
     }
 
     const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
@@ -155,6 +155,15 @@ export async function POST(request) {
     if (erroUpdate) {
       return Response.json({ erro: 'Os dados foram enviados à Cloudbeds, mas houve um problema ao atualizar o status aqui: ' + erroUpdate.message }, { status: 500 });
     }
+
+    // Log de auditoria — melhor esforço, não trava a resposta se falhar
+    try {
+      await supabaseAdmin.from('fichas_fnrh_log').insert({
+        usuario_id: chamador.id, ficha_id: fichaId, acao: 'EXPORTACAO',
+        detalhe: `Ficha de ${ficha.nome_completo} exportada para a reserva ${reservationId} na Cloudbeds.`,
+        hotel_id: chamador.hotel_id,
+      });
+    } catch (e) { /* silencioso */ }
 
     return Response.json({ sucesso: true });
   } catch (erro) {

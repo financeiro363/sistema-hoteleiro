@@ -2,11 +2,10 @@
 
 // ============================================================================
 // FICHAS DE HÓSPEDES (FNRH) + INTEGRAÇÃO CLOUDBEDS — painel do hotel
-// Só ADMIN acessa. Duas abas:
-//  - "Fichas Recebidas": lista quem preencheu, vincula ao número da
-//    reserva na Cloudbeds e dispara a exportação.
-//  - "Configurar Cloudbeds": guarda a chave da API (nunca aparece de
-//    volta na tela depois de salva).
+// Qualquer pessoa da equipe (ADMIN, COLABORADOR ou CONTADOR) acessa a aba
+// "Fichas Recebidas", para poder alimentar a Cloudbeds no dia a dia. Já a
+// aba "Configurar Cloudbeds" (a chave da API) e o "Log de Auditoria"
+// continuam só para ADMIN — são ações mais sensíveis.
 // ============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
@@ -41,7 +40,9 @@ export default function FichasHospedes() {
       const { data: dadosUsuario, error } = await supabase
         .from('usuarios').select('*').eq('auth_id', sessao.session.user.id).single();
       if (error || !dadosUsuario) { router.push('/login'); return; }
-      if (dadosUsuario.papel !== 'ADMIN') { router.push('/'); return; }
+      // Qualquer papel pode entrar aqui — só as ações mais sensíveis
+      // dentro da tela (configurar Cloudbeds, ver o log) ficam travadas
+      // para ADMIN, mais abaixo.
       if (!ativo) return;
       setUsuario(dadosUsuario);
       setVerificandoLogin(false);
@@ -54,12 +55,14 @@ export default function FichasHospedes() {
     return <main className="conteudo"><p className="texto-suave">Verificando seu acesso…</p></main>;
   }
 
+  const souAdmin = usuario.papel === 'ADMIN';
+
   return (
     <main className="conteudo">
       <EstilosFichasAdmin />
       <span className="olho">Hóspedes</span>
       <h1 style={{ marginBottom: 6 }}>Fichas de Hóspedes (FNRH)</h1>
-      <p className="texto-suave" style={{ fontSize: 13, marginTop: -4 }}>Módulo visível só para administradores.</p>
+      <p className="texto-suave" style={{ fontSize: 13, marginTop: -4 }}>Visualize, vincule e exporte para a Cloudbeds.</p>
 
       <div className="cartao" style={{ background: 'var(--marca-clara)', marginTop: 14, marginBottom: 4 }}>
         <p style={{ fontSize: 13, margin: 0 }}>
@@ -72,11 +75,17 @@ export default function FichasHospedes() {
 
       <nav className="fh-abas" aria-label="Seções">
         <button type="button" className={subAba === 'fichas' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('fichas')}>Fichas Recebidas</button>
-        <button type="button" className={subAba === 'config' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('config')}>Configurar Cloudbeds</button>
+        {souAdmin && (
+          <button type="button" className={subAba === 'config' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('config')}>Configurar Cloudbeds</button>
+        )}
+        {souAdmin && (
+          <button type="button" className={subAba === 'log' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('log')}>Log de Auditoria</button>
+        )}
       </nav>
 
       {subAba === 'fichas' && <PainelFichas usuario={usuario} />}
-      {subAba === 'config' && <PainelConfigCloudbeds />}
+      {subAba === 'config' && souAdmin && <PainelConfigCloudbeds />}
+      {subAba === 'log' && souAdmin && <PainelLogFichas usuario={usuario} />}
     </main>
   );
 }
@@ -107,6 +116,18 @@ function PainelFichas({ usuario }) {
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  async function registrarLog(fichaId, acao, detalhe) {
+    await supabase.from('fichas_fnrh_log').insert({
+      usuario_id: usuario.id, ficha_id: fichaId, acao, detalhe, hotel_id: usuario.hotel_id,
+    });
+  }
+
+  function verDetalhes(ficha) {
+    const abrindo = fichaAberta !== ficha.id;
+    setFichaAberta(abrindo ? ficha.id : null);
+    if (abrindo) registrarLog(ficha.id, 'VISUALIZACAO', `Dados de ${ficha.nome_completo} visualizados.`);
+  }
 
   async function exportar(ficha) {
     const reservationId = (reservaPorFicha[ficha.id] || '').trim();
@@ -172,7 +193,7 @@ function PainelFichas({ usuario }) {
                   Enviada em {formatarDataHora(f.criado_em)}
                   {f.status === 'EXPORTADO' && ` · Exportada para a reserva ${f.cloudbeds_reservation_id} em ${formatarDataHora(f.exportado_em)}`}
                 </div>
-                <button type="button" className="fh-ver-mais" onClick={() => setFichaAberta(fichaAberta === f.id ? null : f.id)}>
+                <button type="button" className="fh-ver-mais" onClick={() => verDetalhes(f)}>
                   {fichaAberta === f.id ? 'Ver menos ▲' : 'Ver todos os dados ▼'}
                 </button>
                 {fichaAberta === f.id && <DetalhesFicha ficha={f} />}
@@ -308,6 +329,57 @@ function PainelConfigCloudbeds() {
         🔒 Por segurança, a chave nunca aparece de volta na tela depois de salva — nem para o administrador.
         Se precisar trocar, é só colar uma nova aqui, ela substitui a anterior.
       </p>
+    </section>
+  );
+}
+
+// ============================================================================
+// ABA: LOG DE AUDITORIA (só admin)
+// ============================================================================
+
+function PainelLogFichas({ usuario }) {
+  const [logs, setLogs] = useState([]);
+  const [nomes, setNomes] = useState({});
+  const [carregando, setCarregando] = useState(true);
+
+  useEffect(() => {
+    async function carregar() {
+      const [l, u] = await Promise.all([
+        supabase.from('fichas_fnrh_log').select('*').order('data_hora', { ascending: false }).limit(300),
+        supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id),
+      ]);
+      const mapa = {};
+      (u.data || []).forEach((p) => { mapa[p.id] = p.nome; });
+      setNomes(mapa);
+      setLogs(l.data || []);
+      setCarregando(false);
+    }
+    carregar();
+  }, [usuario.hotel_id]);
+
+  const ACAO_LABEL = { VISUALIZACAO: 'Visualização', EXPORTACAO: 'Exportação para Cloudbeds' };
+  const ACAO_COR = { VISUALIZACAO: '#1D4E89', EXPORTACAO: '#1E6B3C' };
+
+  if (carregando) return <p className="texto-suave">Carregando…</p>;
+
+  return (
+    <section className="fh-lista">
+      {logs.length === 0 ? (
+        <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>Nenhum registro no log ainda.</div>
+      ) : (
+        logs.map((l) => (
+          <div key={l.id} className="cartao" style={{ padding: '12px 16px' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+              <strong>{nomes[l.usuario_id] || `Usuário #${l.usuario_id}`}</strong>
+              <span className="fh-badge" style={{ background: '#F0F0F0', color: ACAO_COR[l.acao] || 'var(--tinta)' }}>
+                {ACAO_LABEL[l.acao] || l.acao}
+              </span>
+            </div>
+            {l.detalhe && <div style={{ fontSize: 14, marginTop: 3 }}>{l.detalhe}</div>}
+            <div className="texto-suave" style={{ fontSize: 12 }}>{formatarDataHora(l.data_hora)}</div>
+          </div>
+        ))
+      )}
     </section>
   );
 }

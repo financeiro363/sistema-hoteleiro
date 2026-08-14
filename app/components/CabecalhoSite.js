@@ -23,6 +23,7 @@ const CATEGORIAS_MENU = [
       { href: '/creditos', rotulo: 'Créditos e Devoluções' },
       { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
       { href: '/recibos', rotulo: 'Recibos' },
+      { href: '/fichas-hospedes', rotulo: 'Fichas de Hóspedes' },
     ],
   },
   {
@@ -47,7 +48,6 @@ const CATEGORIAS_MENU = [
       { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
       { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
       { href: '/atestados', rotulo: 'Atestados', soAdminOuContador: true, contadorVe: true },
-      { href: '/fichas-hospedes', rotulo: 'Fichas de Hóspedes', soAdmin: true },
     ],
   },
 ];
@@ -156,6 +156,9 @@ export default function CabecalhoSite() {
               </Link>
               <Link href="/atestados" className={caminhoAtual === '/atestados' ? 'ativa' : ''}>
                 Atestados
+              </Link>
+              <Link href="/fichas-hospedes" className={caminhoAtual === '/fichas-hospedes' ? 'ativa' : ''}>
+                Fichas de Hóspedes
               </Link>
             </>
           ) : (

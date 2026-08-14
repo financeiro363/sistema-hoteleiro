@@ -126,14 +126,6 @@ function FichaHospede() {
         setNomeCompleto(dados.nomeCompleto);
         if (dados.genero) setGenero(dados.genero);
         if (dados.dataNascimento) setDataNascimento(dados.dataNascimento);
-        // Endereço: só preenche se a pessoa ainda não tiver digitado nada
-        // ali (não queremos sobrescrever o que ela já preencheu na mão)
-        if (dados.cep && !cep.trim()) setCep(formatarCEP(dados.cep));
-        if (dados.endereco && !endereco.trim()) setEndereco(dados.endereco);
-        if (dados.numeroEndereco && !numeroEndereco.trim()) setNumeroEndereco(dados.numeroEndereco);
-        if (dados.bairro && !bairro.trim()) setBairro(dados.bairro);
-        if (dados.cidade && !cidade.trim()) setCidade(dados.cidade);
-        if (dados.estado && !estado.trim()) setEstado(dados.estado);
         setCpfEncontrado(true);
       }
     } catch (e) { /* silencioso — a pessoa ainda pode preencher manualmente */ }
@@ -259,8 +251,8 @@ function FichaHospede() {
           <input className="campo" type="text" value={orgaoExpedidor} onChange={(e) => setOrgaoExpedidor(e.target.value)} placeholder="Ex.: SSP/PB" />
 
           <div className="fnrh-secao">Dados pessoais</div>
-          <label className="rotulo">Nome completo *</label>
-          <input className="campo" type="text" value={nomeCompleto} onChange={(e) => setNomeCompleto(e.target.value)} />
+          <label className="rotulo">Nome completo *{cpfEncontrado && <span className="fnrh-travado"> 🔒 preenchido automaticamente</span>}</label>
+          <input className="campo" type="text" value={nomeCompleto} onChange={(e) => setNomeCompleto(e.target.value)} readOnly={cpfEncontrado} />
           <div className="fnrh-duas">
             <div>
               <label className="rotulo">E-mail *</label>
@@ -273,12 +265,12 @@ function FichaHospede() {
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Data de nascimento</label>
-              <input className="campo" type="date" value={dataNascimento} onChange={(e) => setDataNascimento(e.target.value)} />
+              <label className="rotulo">Data de nascimento{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="date" value={dataNascimento} onChange={(e) => setDataNascimento(e.target.value)} readOnly={cpfEncontrado} />
             </div>
             <div>
-              <label className="rotulo">Gênero</label>
-              <select className="campo" value={genero} onChange={(e) => setGenero(e.target.value)}>
+              <label className="rotulo">Gênero{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <select className="campo" value={genero} onChange={(e) => setGenero(e.target.value)} disabled={cpfEncontrado}>
                 <option value="">Selecione…</option>
                 {GENEROS.map((g) => <option key={g} value={g}>{g}</option>)}
               </select>
@@ -305,8 +297,8 @@ function FichaHospede() {
               {!buscandoCep && cepEncontrado && <p className="fnrh-doc-ok">✓ Endereço encontrado!</p>}
             </div>
             <div>
-              <label className="rotulo">Endereço</label>
-              <input className="campo" type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} />
+              <label className="rotulo">Endereço{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} readOnly={cepEncontrado} />
             </div>
           </div>
           <div className="fnrh-duas">
@@ -321,22 +313,22 @@ function FichaHospede() {
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Bairro</label>
-              <input className="campo" type="text" value={bairro} onChange={(e) => setBairro(e.target.value)} />
+              <label className="rotulo">Bairro{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={bairro} onChange={(e) => setBairro(e.target.value)} readOnly={cepEncontrado} />
             </div>
             <div>
-              <label className="rotulo">Cidade</label>
-              <input className="campo" type="text" value={cidade} onChange={(e) => setCidade(e.target.value)} />
+              <label className="rotulo">Cidade{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={cidade} onChange={(e) => setCidade(e.target.value)} readOnly={cepEncontrado} />
             </div>
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Estado</label>
-              <input className="campo" type="text" value={estado} onChange={(e) => setEstado(e.target.value)} />
+              <label className="rotulo">Estado{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={estado} onChange={(e) => setEstado(e.target.value)} readOnly={cepEncontrado} />
             </div>
             <div>
-              <label className="rotulo">País</label>
-              <input className="campo" type="text" value={pais} onChange={(e) => setPais(e.target.value)} />
+              <label className="rotulo">País{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={pais} onChange={(e) => setPais(e.target.value)} readOnly={cepEncontrado} />
             </div>
           </div>
 
@@ -387,6 +379,8 @@ function EstilosFicha() {
       .fnrh-tres { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 10px; }
       .fnrh-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 12px; margin: 4px 0 0; }
       .fnrh-buscando { color: var(--texto-suave); font-weight: 600; font-size: 12px; margin: 4px 0 0; }
+      .fnrh-travado { color: var(--texto-suave); font-weight: 400; font-size: 12px; }
+      input[readonly].campo, select:disabled.campo { background: var(--fundo); color: var(--tinta); cursor: not-allowed; }
       .fnrh-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 12px; margin: 4px 0 0; }
       @media (min-width: 640px) {
         .fnrh-duas { grid-template-columns: 1fr 1fr; }

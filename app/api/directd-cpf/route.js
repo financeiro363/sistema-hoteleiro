@@ -46,7 +46,12 @@ export async function GET(request) {
     // que o campo de data do formulário espera)
     function paraDataISO(dataBr) {
       if (!dataBr) return null;
-      const partes = String(dataBr).split('/');
+      const texto = String(dataBr).trim();
+      // Já vem no formato "AAAA-MM-DD" (ou com hora junto, tipo
+      // "1986-03-23T00:00:00") — só corta a parte da hora, se tiver.
+      if (/^\d{4}-\d{2}-\d{2}/.test(texto)) return texto.slice(0, 10);
+      // Formato "DD/MM/AAAA"
+      const partes = texto.split('/');
       if (partes.length !== 3) return null;
       const [dia, mes, ano] = partes;
       return `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
