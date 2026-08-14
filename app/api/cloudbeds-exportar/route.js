@@ -122,6 +122,22 @@ export async function POST(request) {
       return Response.json({ erro: `A Cloudbeds recusou a consulta da reserva: ${mensagemCloudbeds}` }, { status: 400 });
     }
 
+    // A reserva já nasce com pelo menos 1 hóspede (o nome usado para criar
+    // a reserva) — precisamos ATUALIZAR esse hóspede em vez de tentar criar
+    // um novo, senão estoura o limite de pessoas do quarto. Procuramos o
+    // ID desse hóspede em alguns caminhos possíveis da resposta (a
+    // Cloudbeds não documenta publicamente o formato exato sem login).
+    const reservaMiolo = dadosReserva?.data || dadosReserva || {};
+    function encontrarListaDeHospedes(objeto) {
+      if (Array.isArray(objeto?.guestList)) return objeto.guestList;
+      if (Array.isArray(objeto?.guests)) return objeto.guests;
+      if (Array.isArray(objeto?.rooms?.[0]?.guestList)) return objeto.rooms[0].guestList;
+      return [];
+    }
+    const listaHospedes = encontrarListaDeHospedes(reservaMiolo);
+    const hospedeExistente = listaHospedes[0] || null;
+    const guestIdExistente = hospedeExistente?.guestID || hospedeExistente?.guestId || reservaMiolo?.guestID || null;
+
     // ============================================================
     // MAPEAMENTO DE CAMPOS — ficha FNRH → campos esperados pela Cloudbeds
     // (ajuste aqui se algum nome de campo precisar mudar)
@@ -156,8 +172,13 @@ export async function POST(request) {
     });
 
     // ---- Passo 2: envia os dados do hóspede ----
-    const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/postGuest`, {
-      method: 'POST',
+    // Se já existe um hóspede na reserva, ATUALIZA ele (putGuest). Só cria
+    // um hóspede novo (postGuest) se a reserva realmente não tiver nenhum
+    // ainda — isso evita estourar o limite de pessoas do quarto.
+    if (guestIdExistente) corpoGuest.set('guestID', guestIdExistente);
+    const metodoUsado = guestIdExistente ? 'putGuest' : 'postGuest';
+    const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/${metodoUsado}`, {
+      method: guestIdExistente ? 'PUT' : 'POST',
       headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: corpoGuest.toString(),
     });
@@ -165,7 +186,14 @@ export async function POST(request) {
 
     if (!respostaGuest.ok || dadosGuest?.success === false) {
       const mensagemCloudbeds = dadosGuest?.message || 'não foi possível salvar os dados do hóspede';
-      return Response.json({ erro: `A Cloudbeds recusou o envio dos dados: ${mensagemCloudbeds}` }, { status: 400 });
+      // Ajuda a diagnosticar: mostra um pedacinho da estrutura da reserva
+      // que recebemos, para sabermos exatamente onde achar o guestID da
+      // próxima vez, caso o caminho que tentamos não tenha funcionado.
+      const pistaDiagnostico = !guestIdExistente
+        ? ' (Não encontramos um hóspede já existente nessa reserva para atualizar — chaves disponíveis na resposta da Cloudbeds: ' +
+          Object.keys(reservaMiolo).join(', ') + ')'
+        : '';
+      return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (${metodoUsado}): ${mensagemCloudbeds}${pistaDiagnostico}` }, { status: 400 });
     }
 
     // ---- Marca a ficha como exportada ----
