@@ -6,13 +6,12 @@
 // Cloudbeds. Só ADMIN pode chamar.
 //
 // ⚠️ SOBRE OS NOMES DOS CAMPOS DA CLOUDBEDS: usei os nomes de campo mais
-// comuns e documentados publicamente pela Cloudbeds para o endpoint
-// postGuest (ex.: guestFirstName, guestLastName, guestEmail...). Como a
-// documentação completa e detalhada de cada campo só é visível depois de
-// login na conta Cloudbeds do hotel, é possível que algum nome precise de
-// pequeno ajuste depois do primeiro teste real. Esses nomes estão todos
-// juntos, comentados, na seção "MAPEAMENTO DE CAMPOS" abaixo — fácil de
-// ajustar se algum campo não for reconhecido pela Cloudbeds na prática.
+// comuns e confirmados a partir de uma resposta real da API (putReservation,
+// com guestFirstName/guestLastName/guestEmail/etc.). Como a documentação
+// completa e detalhada de cada campo só é visível depois de login na
+// conta Cloudbeds do hotel, é possível que algum nome ainda precise de
+// pequeno ajuste. Esses nomes estão reunidos, comentados, na seção
+// "MAPEAMENTO DE CAMPOS" abaixo — fácil de ajustar se precisar.
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
@@ -122,21 +121,12 @@ export async function POST(request) {
       return Response.json({ erro: `A Cloudbeds recusou a consulta da reserva: ${mensagemCloudbeds}` }, { status: 400 });
     }
 
-    // A reserva já nasce com pelo menos 1 hóspede (o nome usado para criar
-    // a reserva) — precisamos ATUALIZAR esse hóspede em vez de tentar criar
-    // um novo, senão estoura o limite de pessoas do quarto. Procuramos o
-    // ID desse hóspede em alguns caminhos possíveis da resposta (a
-    // Cloudbeds não documenta publicamente o formato exato sem login).
+    // A resposta da Cloudbeds confirma: "guestName" e "guestEmail" existem
+    // DIRETO na reserva (não numa lista separada de hóspedes) — por isso a
+    // estratégia principal agora é atualizar a RESERVA em si (putReservation),
+    // não criar/atualizar um "hóspede" à parte. Isso evita de vez o erro de
+    // "limite de hóspedes excedido".
     const reservaMiolo = dadosReserva?.data || dadosReserva || {};
-    function encontrarListaDeHospedes(objeto) {
-      if (Array.isArray(objeto?.guestList)) return objeto.guestList;
-      if (Array.isArray(objeto?.guests)) return objeto.guests;
-      if (Array.isArray(objeto?.rooms?.[0]?.guestList)) return objeto.rooms[0].guestList;
-      return [];
-    }
-    const listaHospedes = encontrarListaDeHospedes(reservaMiolo);
-    const hospedeExistente = listaHospedes[0] || null;
-    const guestIdExistente = hospedeExistente?.guestID || hospedeExistente?.guestId || reservaMiolo?.guestID || null;
 
     // ============================================================
     // MAPEAMENTO DE CAMPOS — ficha FNRH → campos esperados pela Cloudbeds
@@ -146,7 +136,8 @@ export async function POST(request) {
     const primeiroNome = partesNome[0] || '';
     const sobrenome = partesNome.slice(1).join(' ') || primeiroNome;
 
-    const corpoGuest = new URLSearchParams({
+    // ---- Passo 2: atualiza os dados na PRÓPRIA reserva ----
+    const corpoReserva = new URLSearchParams({
       reservationID: reservationId,
       guestFirstName: primeiroNome,
       guestLastName: sobrenome,
@@ -157,44 +148,44 @@ export async function POST(request) {
       guestState: ficha.estado || '',
       guestCountry: paraSiglaPais(ficha.pais),
       guestZip: ficha.cep || '',
-      // Campos sem equivalente padrão direto na Cloudbeds (documento,
-      // nacionalidade, profissão, motivo da viagem etc.) vão como
-      // observação, para não se perder — ajuste para um campo
-      // personalizado da Cloudbeds se o hotel tiver um configurado.
-      guestNotes: [
+    });
+
+    const respostaReservaAtualizada = await fetch(`${CLOUDBEDS_BASE_URL}/putReservation`, {
+      method: 'PUT',
+      headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: corpoReserva.toString(),
+    });
+    const dadosReservaAtualizada = await respostaReservaAtualizada.json().catch(() => null);
+
+    if (!respostaReservaAtualizada.ok || dadosReservaAtualizada?.success === false) {
+      const mensagemCloudbeds = dadosReservaAtualizada?.message || 'não foi possível atualizar a reserva';
+      return Response.json({
+        erro: `A Cloudbeds recusou o envio dos dados (putReservation): ${mensagemCloudbeds} (chaves disponíveis na resposta original: ${Object.keys(reservaMiolo).join(', ')})`,
+      }, { status: 400 });
+    }
+
+    // ---- Passo 3 (complementar, opcional) ----
+    // Tenta também guardar os dados extras (documento, nacionalidade,
+    // profissão, motivo da viagem etc. — que não têm campo padrão na
+    // reserva) como uma anotação/observação. Se isso falhar por
+    // qualquer razão, NÃO trava a exportação — o essencial (passo 2)
+    // já foi salvo com sucesso.
+    try {
+      const observacoes = [
         `Documento: ${ficha.tipo_documento || '—'} ${ficha.numero_documento || ''}`,
         ficha.orgao_expedidor ? `Órgão expedidor: ${ficha.orgao_expedidor}` : null,
         ficha.nacionalidade ? `Nacionalidade: ${ficha.nacionalidade}` : null,
         ficha.profissao ? `Profissão: ${ficha.profissao}` : null,
         ficha.motivo_viagem ? `Motivo da viagem: ${ficha.motivo_viagem}` : null,
         ficha.meio_transporte ? `Meio de transporte: ${ficha.meio_transporte}` : null,
-      ].filter(Boolean).join(' | '),
-    });
+      ].filter(Boolean).join(' | ');
 
-    // ---- Passo 2: envia os dados do hóspede ----
-    // Se já existe um hóspede na reserva, ATUALIZA ele (putGuest). Só cria
-    // um hóspede novo (postGuest) se a reserva realmente não tiver nenhum
-    // ainda — isso evita estourar o limite de pessoas do quarto.
-    if (guestIdExistente) corpoGuest.set('guestID', guestIdExistente);
-    const metodoUsado = guestIdExistente ? 'putGuest' : 'postGuest';
-    const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/${metodoUsado}`, {
-      method: guestIdExistente ? 'PUT' : 'POST',
-      headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: corpoGuest.toString(),
-    });
-    const dadosGuest = await respostaGuest.json().catch(() => null);
-
-    if (!respostaGuest.ok || dadosGuest?.success === false) {
-      const mensagemCloudbeds = dadosGuest?.message || 'não foi possível salvar os dados do hóspede';
-      // Ajuda a diagnosticar: mostra um pedacinho da estrutura da reserva
-      // que recebemos, para sabermos exatamente onde achar o guestID da
-      // próxima vez, caso o caminho que tentamos não tenha funcionado.
-      const pistaDiagnostico = !guestIdExistente
-        ? ' (Não encontramos um hóspede já existente nessa reserva para atualizar — chaves disponíveis na resposta da Cloudbeds: ' +
-          Object.keys(reservaMiolo).join(', ') + ')'
-        : '';
-      return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (${metodoUsado}): ${mensagemCloudbeds}${pistaDiagnostico}` }, { status: 400 });
-    }
+      await fetch(`${CLOUDBEDS_BASE_URL}/postReservationNote`, {
+        method: 'POST',
+        headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ reservationID: reservationId, note: `Ficha FNRH: ${observacoes}` }).toString(),
+      });
+    } catch (e) { /* melhor esforço — não trava a exportação */ }
 
     // ---- Marca a ficha como exportada ----
     const { error: erroUpdate } = await supabaseAdmin.from('fichas_fnrh').update({
