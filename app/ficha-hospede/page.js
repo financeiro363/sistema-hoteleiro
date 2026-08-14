@@ -48,6 +48,13 @@ function formatarCEP(texto) {
   if (d.length <= 5) return d;
   return `${d.slice(0, 5)}-${d.slice(5)}`;
 }
+function formatarTelefoneBR(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
 
 export default function FichaHospedePagina() {
   return (
@@ -160,9 +167,27 @@ function FichaHospede() {
     if (!nomeCompleto.trim()) { setErroForm('Informe seu nome completo.'); return; }
     if (!email.trim()) { setErroForm('Informe seu e-mail.'); return; }
     if (!telefone.trim()) { setErroForm('Informe seu telefone/WhatsApp.'); return; }
+    if (!dataNascimento) { setErroForm('Informe sua data de nascimento.'); return; }
+    if (!genero) { setErroForm('Selecione seu gênero.'); return; }
+    if (!nacionalidade.trim()) { setErroForm('Informe sua nacionalidade.'); return; }
+    if (!profissao.trim()) { setErroForm('Informe sua profissão.'); return; }
     if (!numeroDocumento.trim()) { setErroForm('Informe o número do documento.'); return; }
     if (tipoDocumento === 'CPF' && !validarCPF(numeroDocumento)) {
       setErroForm('O CPF informado não é válido — confira os números.'); return;
+    }
+    if (tipoDocumento === 'RG' && !orgaoExpedidor.trim()) { setErroForm('Informe o órgão expedidor do RG.'); return; }
+    if (!cep.trim()) { setErroForm('Informe o CEP da sua residência.'); return; }
+    if (!endereco.trim()) { setErroForm('Informe o endereço.'); return; }
+    if (!numeroEndereco.trim()) { setErroForm('Informe o número da residência.'); return; }
+    if (!bairro.trim()) { setErroForm('Informe o bairro.'); return; }
+    if (!cidade.trim()) { setErroForm('Informe a cidade.'); return; }
+    if (!estado.trim()) { setErroForm('Informe o estado.'); return; }
+    if (!pais.trim()) { setErroForm('Informe o país.'); return; }
+    if (!procedenciaPais.trim() || !procedenciaEstado.trim() || !procedenciaCidade.trim()) {
+      setErroForm('Preencha de onde você está vindo (país, estado e cidade).'); return;
+    }
+    if (!destinoPais.trim() || !destinoEstado.trim() || !destinoCidade.trim()) {
+      setErroForm('Preencha para onde você vai depois (país, estado e cidade).'); return;
     }
 
     setEnviando(true);
@@ -247,7 +272,7 @@ function FichaHospede() {
               )}
             </div>
           </div>
-          <label className="rotulo">Órgão expedidor (se RG)</label>
+          <label className="rotulo">Órgão expedidor {tipoDocumento === 'RG' ? '*' : '(se RG)'}</label>
           <input className="campo" type="text" value={orgaoExpedidor} onChange={(e) => setOrgaoExpedidor(e.target.value)} placeholder="Ex.: SSP/PB" />
 
           <div className="fnrh-secao">Dados pessoais</div>
@@ -260,16 +285,17 @@ function FichaHospede() {
             </div>
             <div>
               <label className="rotulo">Telefone / WhatsApp *</label>
-              <input className="campo" type="tel" value={telefone} onChange={(e) => setTelefone(e.target.value)} placeholder="(00) 90000-0000" />
+              <input className="campo" type="tel" inputMode="numeric" value={telefone}
+                onChange={(e) => setTelefone(formatarTelefoneBR(e.target.value))} placeholder="(00) 90000-0000" />
             </div>
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Data de nascimento{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <label className="rotulo">Data de nascimento *{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
               <input className="campo" type="date" value={dataNascimento} onChange={(e) => setDataNascimento(e.target.value)} readOnly={cpfEncontrado} />
             </div>
             <div>
-              <label className="rotulo">Gênero{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <label className="rotulo">Gênero *{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
               <select className="campo" value={genero} onChange={(e) => setGenero(e.target.value)} disabled={cpfEncontrado}>
                 <option value="">Selecione…</option>
                 {GENEROS.map((g) => <option key={g} value={g}>{g}</option>)}
@@ -278,11 +304,11 @@ function FichaHospede() {
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Nacionalidade</label>
+              <label className="rotulo">Nacionalidade *</label>
               <input className="campo" type="text" value={nacionalidade} onChange={(e) => setNacionalidade(e.target.value)} />
             </div>
             <div>
-              <label className="rotulo">Profissão</label>
+              <label className="rotulo">Profissão *</label>
               <input className="campo" type="text" value={profissao} onChange={(e) => setProfissao(e.target.value)} />
             </div>
           </div>
@@ -290,20 +316,20 @@ function FichaHospede() {
           <div className="fnrh-secao">Residência permanente</div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">CEP</label>
+              <label className="rotulo">CEP *</label>
               <input className="campo" type="text" inputMode="numeric" value={cep}
                 onChange={(e) => { const novoValor = formatarCEP(e.target.value); setCep(novoValor); buscarPorCep(novoValor); }} />
               {buscandoCep && <p className="fnrh-buscando">🔎 Buscando endereço…</p>}
               {!buscandoCep && cepEncontrado && <p className="fnrh-doc-ok">✓ Endereço encontrado!</p>}
             </div>
             <div>
-              <label className="rotulo">Endereço{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <label className="rotulo">Endereço *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
               <input className="campo" type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} readOnly={cepEncontrado} />
             </div>
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Número</label>
+              <label className="rotulo">Número *</label>
               <input className="campo" type="text" value={numeroEndereco} onChange={(e) => setNumeroEndereco(e.target.value)} />
             </div>
             <div>
@@ -313,21 +339,21 @@ function FichaHospede() {
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Bairro{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <label className="rotulo">Bairro *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
               <input className="campo" type="text" value={bairro} onChange={(e) => setBairro(e.target.value)} readOnly={cepEncontrado} />
             </div>
             <div>
-              <label className="rotulo">Cidade{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <label className="rotulo">Cidade *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
               <input className="campo" type="text" value={cidade} onChange={(e) => setCidade(e.target.value)} readOnly={cepEncontrado} />
             </div>
           </div>
           <div className="fnrh-duas">
             <div>
-              <label className="rotulo">Estado{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <label className="rotulo">Estado *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
               <input className="campo" type="text" value={estado} onChange={(e) => setEstado(e.target.value)} readOnly={cepEncontrado} />
             </div>
             <div>
-              <label className="rotulo">País{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <label className="rotulo">País *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
               <input className="campo" type="text" value={pais} onChange={(e) => setPais(e.target.value)} readOnly={cepEncontrado} />
             </div>
           </div>
@@ -347,13 +373,13 @@ function FichaHospede() {
               </select>
             </div>
           </div>
-          <p className="rotulo" style={{ marginTop: 10 }}>De onde você está vindo</p>
+          <p className="rotulo" style={{ marginTop: 10 }}>De onde você está vindo *</p>
           <div className="fnrh-tres">
             <input className="campo" type="text" value={procedenciaPais} onChange={(e) => setProcedenciaPais(e.target.value)} placeholder="País" />
             <input className="campo" type="text" value={procedenciaEstado} onChange={(e) => setProcedenciaEstado(e.target.value)} placeholder="Estado" />
             <input className="campo" type="text" value={procedenciaCidade} onChange={(e) => setProcedenciaCidade(e.target.value)} placeholder="Cidade" />
           </div>
-          <p className="rotulo" style={{ marginTop: 10 }}>Para onde você vai depois</p>
+          <p className="rotulo" style={{ marginTop: 10 }}>Para onde você vai depois *</p>
           <div className="fnrh-tres">
             <input className="campo" type="text" value={destinoPais} onChange={(e) => setDestinoPais(e.target.value)} placeholder="País" />
             <input className="campo" type="text" value={destinoEstado} onChange={(e) => setDestinoEstado(e.target.value)} placeholder="Estado" />
