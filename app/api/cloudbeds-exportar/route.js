@@ -20,6 +20,30 @@ import { descriptografar } from '../../../lib/cloudbedsCrypto';
 
 const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 
+// A Cloudbeds exige o país como sigla de 2 letras (ISO 3166-1 alpha-2),
+// não o nome por extenso — por isso convertemos aqui. Cobre os nomes
+// mais comuns que aparecem na ficha; se não reconhecer, cai em "BR"
+// (a grande maioria dos hóspedes é do Brasil).
+const PAIS_PARA_SIGLA = {
+  'brasil': 'BR', 'brazil': 'BR',
+  'estados unidos': 'US', 'eua': 'US', 'usa': 'US', 'united states': 'US',
+  'portugal': 'PT', 'argentina': 'AR', 'chile': 'CL', 'uruguai': 'UY', 'uruguay': 'UY',
+  'paraguai': 'PY', 'paraguay': 'PY', 'bolivia': 'BO', 'bolívia': 'BO',
+  'colombia': 'CO', 'colômbia': 'CO', 'peru': 'PE', 'equador': 'EC', 'ecuador': 'EC',
+  'venezuela': 'VE', 'mexico': 'MX', 'méxico': 'MX', 'canada': 'CA', 'canadá': 'CA',
+  'espanha': 'ES', 'spain': 'ES', 'franca': 'FR', 'frança': 'FR', 'france': 'FR',
+  'italia': 'IT', 'itália': 'IT', 'italy': 'IT', 'alemanha': 'DE', 'germany': 'DE',
+  'reino unido': 'GB', 'inglaterra': 'GB', 'united kingdom': 'GB',
+  'japao': 'JP', 'japão': 'JP', 'japan': 'JP', 'china': 'CN',
+};
+function paraSiglaPais(nomePais) {
+  const chave = String(nomePais || '').trim().toLowerCase();
+  if (!chave) return 'BR';
+  // Já é uma sigla de 2 letras? usa direto (deixa maiúscula)
+  if (/^[a-z]{2}$/i.test(chave)) return chave.toUpperCase();
+  return PAIS_PARA_SIGLA[chave] || 'BR';
+}
+
 export async function POST(request) {
   try {
     const corpo = await request.json();
@@ -115,7 +139,7 @@ export async function POST(request) {
       guestAddress: [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', '),
       guestCity: ficha.cidade || '',
       guestState: ficha.estado || '',
-      guestCountry: ficha.pais || '',
+      guestCountry: paraSiglaPais(ficha.pais),
       guestZip: ficha.cep || '',
       // Campos sem equivalente padrão direto na Cloudbeds (documento,
       // nacionalidade, profissão, motivo da viagem etc.) vão como
