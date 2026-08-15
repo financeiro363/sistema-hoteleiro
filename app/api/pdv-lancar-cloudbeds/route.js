@@ -85,31 +85,46 @@ export async function POST(request) {
     };
 
     // ============================================================
-    // MAPEAMENTO — um postCustomItem por produto vendido
+    // MAPEAMENTO — um único postCustomItem, com todos os produtos dentro
+    // do parâmetro "items" (a Cloudbeds recusa se não vier assim —
+    // confirmado no primeiro teste real: "Parameter items is required").
     // ============================================================
-    for (const item of itens) {
-      const corpoItem = new URLSearchParams({
-        reservationID: venda.cloudbeds_reservation_id,
-        appItemID: String(item.produto_id || item.nome_produto).slice(0, 40),
-        name: item.nome_produto,
-        description: item.nome_produto,
-        quantity: String(item.quantidade),
-        unitCost: String(item.preco_unitario),
-        price: String(item.preco_unitario),
-        // Sem "payments" — deixa a cobrança pendente na conta do quarto,
-        // para ser paga na saída (conforme pedido).
-      });
-      const respostaItem = await fetch(`${CLOUDBEDS_BASE_URL}/postCustomItem`, {
-        method: 'POST',
-        headers: { ...cabecalhos, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: corpoItem.toString(),
-      });
-      const dadosItem = await respostaItem.json().catch(() => null);
-      if (!respostaItem.ok || dadosItem?.success === false) {
-        const mensagem = dadosItem?.message || 'não foi possível lançar o item';
-        await supabaseAdmin.from('pdv_vendas').update({ cloudbeds_status: 'FALHOU', cloudbeds_erro: mensagem }).eq('id', vendaId);
-        return Response.json({ erro: `A Cloudbeds recusou o lançamento de "${item.nome_produto}": ${mensagem}` }, { status: 400 });
-      }
+    const corpoItem = new URLSearchParams({
+      reservationID: venda.cloudbeds_reservation_id,
+      // Sem "payments" — deixa a cobrança pendente na conta do quarto,
+      // para ser paga na saída (conforme pedido).
+    });
+    // Mandando em dois formatos possíveis (texto JSON + colchetes
+    // numerados), mesma estratégia que funcionou nos campos
+    // personalizados das Fichas de Hóspedes.
+    const listaItensCloudbeds = itens.map((item) => ({
+      appItemID: String(item.produto_id || item.nome_produto).slice(0, 40),
+      name: item.nome_produto,
+      description: item.nome_produto,
+      quantity: Number(item.quantidade),
+      unitCost: Number(item.preco_unitario),
+      price: Number(item.preco_unitario),
+    }));
+    corpoItem.set('items', JSON.stringify(listaItensCloudbeds));
+    listaItensCloudbeds.forEach((it, indice) => {
+      corpoItem.set(`items[${indice}][appItemID]`, it.appItemID);
+      corpoItem.set(`items[${indice}][name]`, it.name);
+      corpoItem.set(`items[${indice}][description]`, it.description);
+      corpoItem.set(`items[${indice}][quantity]`, String(it.quantity));
+      corpoItem.set(`items[${indice}][unitCost]`, String(it.unitCost));
+      corpoItem.set(`items[${indice}][price]`, String(it.price));
+    });
+
+    const respostaItem = await fetch(`${CLOUDBEDS_BASE_URL}/postCustomItem`, {
+      method: 'POST',
+      headers: { ...cabecalhos, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: corpoItem.toString(),
+    });
+    const dadosItem = await respostaItem.json().catch(() => null);
+    if (!respostaItem.ok || dadosItem?.success === false) {
+      const mensagem = dadosItem?.message || 'não foi possível lançar os itens';
+      await supabaseAdmin.from('pdv_vendas').update({ cloudbeds_status: 'FALHOU', cloudbeds_erro: mensagem }).eq('id', vendaId);
+      return Response.json({ erro: `A Cloudbeds recusou o lançamento: ${mensagem}` }, { status: 400 });
     }
 
     // Anotação na reserva com a descrição completa da compra

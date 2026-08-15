@@ -84,6 +84,8 @@ function PainelVender({ usuario }) {
   const [erro, setErro] = useState('');
   const [aviso, setAviso] = useState('');
   const [mostrarCheckout, setMostrarCheckout] = useState(false);
+  const [vendasPendentes, setVendasPendentes] = useState([]);
+  const [reenviando, setReenviando] = useState(null);
   const inputBuscaRef = useRef(null);
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 5000); }
@@ -102,7 +104,33 @@ function PainelVender({ usuario }) {
     setProdutos(data || []);
   }, []);
 
-  useEffect(() => { carregarTurno(); carregarProdutos(); }, [carregarTurno, carregarProdutos]);
+  const carregarVendasPendentes = useCallback(async () => {
+    const { data } = await supabase.from('pdv_vendas').select('*')
+      .in('cloudbeds_status', ['FALHOU', 'PENDENTE']).order('criado_em', { ascending: false }).limit(20);
+    setVendasPendentes(data || []);
+  }, []);
+
+  async function reenviarParaCloudbeds(venda) {
+    setReenviando(venda.id);
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/pdv-lancar-cloudbeds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ vendaId: venda.id }),
+      });
+      const resultado = await resposta.json();
+      setReenviando(null);
+      if (!resposta.ok || resultado.erro) { mostrarAviso(`Ainda não foi dessa vez: ${resultado.erro || 'erro desconhecido'}`); }
+      else { mostrarAviso(`Venda #${venda.numero_venda} lançada na Cloudbeds com sucesso!`); }
+      carregarVendasPendentes();
+    } catch (e) {
+      setReenviando(null);
+      mostrarAviso('Falha de conexão. Tente de novo em instantes.');
+    }
+  }
+
+  useEffect(() => { carregarTurno(); carregarProdutos(); carregarVendasPendentes(); }, [carregarTurno, carregarProdutos, carregarVendasPendentes]);
   useEffect(() => { if (turno && inputBuscaRef.current) inputBuscaRef.current.focus(); }, [turno]);
 
   async function abrirTurno() {
@@ -224,6 +252,7 @@ function PainelVender({ usuario }) {
 
     setCarrinho([]); setMostrarCheckout(false);
     carregarProdutos(); // atualiza os estoques na tela
+    carregarVendasPendentes();
   }
 
   if (carregandoTurno) return <p className="texto-suave">Carregando…</p>;
@@ -286,6 +315,23 @@ function PainelVender({ usuario }) {
           ))
         )}
       </div>
+
+      {vendasPendentes.length > 0 && (
+        <div className="pdv-pendentes">
+          <strong style={{ fontSize: 13 }}>⚠️ Vendas aguardando envio para a Cloudbeds</strong>
+          {vendasPendentes.map((v) => (
+            <div key={v.id} className="pdv-pendente-item">
+              <div>
+                <span>Venda #{v.numero_venda} · {v.nome_hospede || 'Hóspede'} · reserva {v.cloudbeds_reservation_id}</span>
+                {v.cloudbeds_erro && <div className="texto-suave" style={{ fontSize: 11 }}>Erro: {v.cloudbeds_erro}</div>}
+              </div>
+              <button type="button" className="botao botao-suave" onClick={() => reenviarParaCloudbeds(v)} disabled={reenviando === v.id}>
+                {reenviando === v.id ? 'Enviando…' : '🔄 Tentar de novo'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="pdv-rodape">
         <div className="pdv-total">Total: <strong>{formatarMoeda(total)}</strong></div>
@@ -538,6 +584,8 @@ function EstilosPDV() {
       .pdv-item-subtotal { font-weight: 700; min-width: 80px; text-align: right; }
       .pdv-remover { border: none; background: none; color: var(--erro-texto); font-size: 16px; cursor: pointer; padding: 4px; }
 
+      .pdv-pendentes { background: #FDF3D7; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+      .pdv-pendente-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--branco); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
       .pdv-rodape { position: sticky; bottom: 0; background: var(--fundo); padding: 12px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--borda); }
       .pdv-total { font-size: 18px; }
       .pdv-botao-finalizar { font-size: 16px; padding: 14px 24px; }
