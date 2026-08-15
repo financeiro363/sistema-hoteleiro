@@ -127,6 +127,13 @@ export default function CabecalhoSite() {
     router.push('/');
   }
 
+  // A ficha do hóspede é uma página PÚBLICA (sem login) — não faz
+  // sentido mostrar o menu do sistema nem o botão "Entrar" ali, já que
+  // quem preenche é o hóspede, não a equipe do hotel. Isso vem DEPOIS de
+  // todos os hooks acima, porque o React exige que os hooks sempre sejam
+  // chamados na mesma ordem, mesmo quando vamos retornar nada.
+  if (caminhoAtual?.startsWith('/ficha-hospede')) return null;
+
   return (
     <header className="cabecalho">
       <div className="cabecalho-interno">
