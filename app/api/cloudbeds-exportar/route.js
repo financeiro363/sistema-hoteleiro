@@ -127,6 +127,18 @@ export async function POST(request) {
       return Response.json({ erro: 'Ficha não encontrada.' }, { status: 404 });
     }
 
+    // Reservas podem ter mais de um hóspede (2 a 6 pessoas no mesmo
+    // quarto). Se já existe OUTRA ficha nossa exportada para essa mesma
+    // reserva, esta aqui é um hóspede ADICIONAL — precisa ser CRIADA
+    // (postGuest), não atualizar por cima de quem já foi exportado.
+    const { data: fichasJaExportadas } = await supabaseAdmin
+      .from('fichas_fnrh')
+      .select('id, nome_completo')
+      .eq('cloudbeds_reservation_id', reservationId)
+      .eq('status', 'EXPORTADO')
+      .neq('id', fichaId);
+    const ehHospedeAdicional = (fichasJaExportadas || []).length > 0;
+
     // Busca e descriptografa a credencial da Cloudbeds
     const { data: credencial, error: erroCred } = await supabaseAdmin
       .from('cloudbeds_credenciais').select('*').eq('hotel_id', chamador.hotel_id).maybeSingle();
@@ -158,10 +170,6 @@ export async function POST(request) {
       return Response.json({ erro: `A Cloudbeds recusou a consulta da reserva: ${mensagemCloudbeds}` }, { status: 400 });
     }
 
-    // A resposta da Cloudbeds confirma: "guestName" e "guestEmail" existem
-    // DIRETO na reserva — mas descobrimos que atualizar por putReservation
-    // não reflete no cadastro real do hóspede (ele "aceita" mas não muda
-    // nada). Por isso, agora buscamos o cadastro de hóspede de verdade
     // A documentação oficial da Cloudbeds confirma o caminho certo:
     // "getReservations com includeGuestsDetails: true" traz os detalhes
     // completos dos hóspedes junto da reserva — é daí que pegamos o
@@ -169,6 +177,7 @@ export async function POST(request) {
     const reservaMiolo = dadosReserva?.data || dadosReserva || {};
 
     let guestIdReal = null;
+    let roomIdReal = null;
     let origemDoAchado = ''; // para diagnóstico: de onde veio o guestID e a que reserva pertence
     try {
       const respostaComGuestDetails = await fetch(
@@ -184,6 +193,10 @@ export async function POST(request) {
       const listaHospedes = Array.isArray(listaHospedesObjeto) ? listaHospedesObjeto : Object.values(listaHospedesObjeto);
       const primeiroHospede = listaHospedes[0] || null;
       guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
+      // O quarto (roomID) fica dentro do próprio hóspede OU numa lista
+      // "rooms" da reserva — usado para criar hóspedes adicionais no
+      // quarto certo, quando a reserva tem mais de uma pessoa.
+      roomIdReal = primeiroHospede?.roomID || reservaComDetalhes?.rooms?.[0]?.roomID || null;
       origemDoAchado = `getReservations — reservationID da reserva encontrada: "${reservaComDetalhes?.reservationID}" (deveríamos ter pedido "${reservationId}") — nome do hóspede encontrado: "${primeiroHospede?.guestFirstName || primeiroHospede?.guestName || primeiroHospede?.firstName || '?'}" — total de reservas que essa busca devolveu: ${listaReservas.length}`;
     } catch (e) { origemDoAchado = 'getReservations falhou: ' + e.message; }
 
@@ -200,92 +213,95 @@ export async function POST(request) {
     const primeiroNome = partesNome[0] || '';
     const sobrenome = partesNome.slice(1).join(' ') || primeiroNome;
 
-    // ---- Passo 2: atualiza o cadastro do hóspede de verdade ----
-    if (guestIdReal) {
-      const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
-      const siglaPais = paraSiglaPais(ficha.pais);
-
-      // Gênero: convertendo do nosso formato para o que a Cloudbeds usa (M/F)
-      const GENERO_CLOUDBEDS = { Masculino: 'M', Feminino: 'F' };
-
-      const corpoGuest = new URLSearchParams({
-        guestID: guestIdReal,
-        // Nome/e-mail/telefone (já confirmados funcionando com prefixo "guest")
-        guestFirstName: primeiroNome,
-        guestLastName: sobrenome,
-        guestEmail: ficha.email || '',
-        guestPhone: ficha.telefone || '',
-        // Endereço — a resposta trouxe "address2" (complemento) separado,
-        // então a rua provavelmente é "address1", não só "address".
-        // Mandando todas as variações possíveis.
-        guestAddress: enderecoCompleto, address: enderecoCompleto, address1: enderecoCompleto, guestAddress1: enderecoCompleto,
-        guestCity: ficha.cidade || '', city: ficha.cidade || '',
-        guestState: paraNomeEstado(ficha.estado), state: paraNomeEstado(ficha.estado),
-        guestCountry: siglaPais, country: siglaPais,
-        guestZip: ficha.cep || '', zip: ficha.cep || '',
-        // Data de nascimento — variações de nome de campo
-        guestBirthdate: ficha.data_nascimento || '', guestBirthDate: ficha.data_nascimento || '',
-        birthDate: ficha.data_nascimento || '', birthdate: ficha.data_nascimento || '',
-        // Documento — mandando o tipo em português puro (sem tentar
-        // "adivinhar" um valor em inglês, que pode estar inválido e
-        // travando o campo inteiro)
-        // Documento — nomes de campo CONFIRMADOS na documentação oficial
-        // (todos com prefixo "guest"), e o tipo usa um código específico,
-        // não o nome por extenso: "cpf" = CPF brasileiro, "dni" = RG
-        // (carteira de identidade), "passport" = passaporte.
-        guestDocumentType: DOC_TIPO_CLOUDBEDS[ficha.tipo_documento] || '',
-        guestDocumentNumber: ficha.numero_documento || '',
-        guestDocumentIssuingCountry: siglaPais,
-        // Mantém as variações antigas também, por garantia
-        documentType: ficha.tipo_documento || '',
-        documentNumber: ficha.numero_documento || '',
-        documentIssuingCountry: siglaPais,
-        // Gênero e nacionalidade — campos padrão que faltavam no envio
-        gender: GENERO_CLOUDBEDS[ficha.genero] || '',
-        guestGender: GENERO_CLOUDBEDS[ficha.genero] || '',
-        guestNationality: paraSiglaPais(ficha.nacionalidade), nationality: paraSiglaPais(ficha.nacionalidade),
-      });
-
-      // Campos personalizados deste hotel — nomes/IDs exatos confirmados
-      // via getCustomFields. Mandando em DOIS formatos possíveis: como
-      // texto JSON (formato mais comum nesse tipo de API) e também com
-      // colchetes numerados (reforço, caso o primeiro não funcione).
-      const listaCamposPersonalizados = [
-        { customFieldID: '33748', customFieldName: 'CPF', customFieldValue: (ficha.numero_documento || '').replace(/\D/g, '') },
-        { customFieldID: '33749', customFieldName: 'Profissao', customFieldValue: ficha.profissao || '' },
-        { customFieldID: '48195', customFieldName: 'motivo_da_viagem', customFieldValue: MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
-        { customFieldID: '48196', customFieldName: 'meio_de_transporte', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
-      ];
-      // Nome do campo CONFIRMADO na documentação oficial: "guestCustomFields"
-      // (não "customFields" — esse era o erro este tempo todo!)
-      corpoGuest.set('guestCustomFields', JSON.stringify(listaCamposPersonalizados));
-      listaCamposPersonalizados.forEach((campo, indice) => {
-        corpoGuest.set(`guestCustomFields[${indice}][customFieldID]`, campo.customFieldID);
-        corpoGuest.set(`guestCustomFields[${indice}][customFieldName]`, campo.customFieldName);
-        corpoGuest.set(`guestCustomFields[${indice}][customFieldValue]`, campo.customFieldValue);
-      });
-
-      const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
-        method: 'PUT',
-        headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: corpoGuest.toString(),
-      });
-      const dadosGuest = await respostaGuest.json().catch(() => null);
-      if (!respostaGuest.ok || dadosGuest?.success === false) {
-        const mensagemCloudbeds = dadosGuest?.message || 'não foi possível atualizar o cadastro do hóspede';
-        return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (putGuest, guestID ${guestIdReal}): ${mensagemCloudbeds}` }, { status: 400 });
-      }
-      // Sucesso de verdade — segue em frente para marcar a ficha como
-      // exportada (mais abaixo). O modo de diagnóstico (que mostrava a
-      // resposta técnica completa em vez de seguir) foi desligado agora
-      // que já confirmamos que o envio funciona corretamente.
-    } else {
-      // Não achamos um hóspede para atualizar — isso é um erro de
-      // verdade, nada foi exportado.
+    // ---- Passo 2: cria (hóspede adicional) ou atualiza (primeiro hóspede) ----
+    // Se não achamos um hóspede existente (guestIdReal) E esta também não é
+    // uma reserva com hóspede adicional a criar, não tem o que fazer.
+    if (!guestIdReal && !ehHospedeAdicional) {
       return Response.json({
         erro: 'Não foi possível encontrar o cadastro do hóspede nessa reserva na Cloudbeds. Confira se o número da reserva está certo.',
       }, { status: 400 });
     }
+
+    const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
+    const siglaPais = paraSiglaPais(ficha.pais);
+    // Gênero: convertendo do nosso formato para o que a Cloudbeds usa (M/F)
+    const GENERO_CLOUDBEDS = { Masculino: 'M', Feminino: 'F' };
+
+    // Campos comuns a criar e atualizar (nome, endereço, documento etc.)
+    const camposComuns = {
+      guestFirstName: primeiroNome,
+      guestLastName: sobrenome,
+      guestEmail: ficha.email || '',
+      guestPhone: ficha.telefone || '',
+      guestAddress: enderecoCompleto, address: enderecoCompleto, address1: enderecoCompleto, guestAddress1: enderecoCompleto,
+      guestCity: ficha.cidade || '', city: ficha.cidade || '',
+      guestState: paraNomeEstado(ficha.estado), state: paraNomeEstado(ficha.estado),
+      guestCountry: siglaPais, country: siglaPais,
+      guestZip: ficha.cep || '', zip: ficha.cep || '',
+      guestBirthdate: ficha.data_nascimento || '', guestBirthDate: ficha.data_nascimento || '',
+      birthDate: ficha.data_nascimento || '', birthdate: ficha.data_nascimento || '',
+      // Documento — nomes de campo CONFIRMADOS na documentação oficial
+      // (todos com prefixo "guest"), e o tipo usa um código específico,
+      // não o nome por extenso: "cpf" = CPF brasileiro, "dni" = RG
+      // (carteira de identidade), "passport" = passaporte.
+      guestDocumentType: DOC_TIPO_CLOUDBEDS[ficha.tipo_documento] || '',
+      guestDocumentNumber: ficha.numero_documento || '',
+      guestDocumentIssuingCountry: siglaPais,
+      documentType: ficha.tipo_documento || '',
+      documentNumber: ficha.numero_documento || '',
+      documentIssuingCountry: siglaPais,
+      gender: GENERO_CLOUDBEDS[ficha.genero] || '',
+      guestGender: GENERO_CLOUDBEDS[ficha.genero] || '',
+      guestNationality: paraSiglaPais(ficha.nacionalidade), nationality: paraSiglaPais(ficha.nacionalidade),
+    };
+
+    const corpoGuest = new URLSearchParams(camposComuns);
+
+    if (ehHospedeAdicional) {
+      // CRIAR um hóspede novo, ADICIONAL, na mesma reserva — sem guestID
+      // (isso indica "criar"), mas com reservationID e o quarto certo.
+      corpoGuest.set('reservationID', reservationId);
+      if (roomIdReal) corpoGuest.set('roomID', roomIdReal);
+    } else {
+      // ATUALIZAR o primeiro hóspede (o "placeholder" que já existe
+      // desde que a reserva foi criada)
+      corpoGuest.set('guestID', guestIdReal);
+    }
+
+    // Campos personalizados deste hotel — nomes/IDs exatos confirmados
+    // via getCustomFields. Mandando em DOIS formatos possíveis: como
+    // texto JSON (formato mais comum nesse tipo de API) e também com
+    // colchetes numerados (reforço, caso o primeiro não funcione).
+    const listaCamposPersonalizados = [
+      { customFieldID: '33748', customFieldName: 'CPF', customFieldValue: (ficha.numero_documento || '').replace(/\D/g, '') },
+      { customFieldID: '33749', customFieldName: 'Profissao', customFieldValue: ficha.profissao || '' },
+      { customFieldID: '48195', customFieldName: 'motivo_da_viagem', customFieldValue: MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
+      { customFieldID: '48196', customFieldName: 'meio_de_transporte', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
+    ];
+    // Nome do campo CONFIRMADO na documentação oficial: "guestCustomFields"
+    corpoGuest.set('guestCustomFields', JSON.stringify(listaCamposPersonalizados));
+    listaCamposPersonalizados.forEach((campo, indice) => {
+      corpoGuest.set(`guestCustomFields[${indice}][customFieldID]`, campo.customFieldID);
+      corpoGuest.set(`guestCustomFields[${indice}][customFieldName]`, campo.customFieldName);
+      corpoGuest.set(`guestCustomFields[${indice}][customFieldValue]`, campo.customFieldValue);
+    });
+
+    const metodoUsado = ehHospedeAdicional ? 'postGuest' : 'putGuest';
+    const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/${metodoUsado}`, {
+      method: ehHospedeAdicional ? 'POST' : 'PUT',
+      headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: corpoGuest.toString(),
+    });
+    const dadosGuest = await respostaGuest.json().catch(() => null);
+    if (!respostaGuest.ok || dadosGuest?.success === false) {
+      const mensagemCloudbeds = dadosGuest?.message || 'não foi possível salvar os dados do hóspede';
+      const contexto = ehHospedeAdicional
+        ? `${metodoUsado}, criando hóspede adicional na reserva ${reservationId}`
+        : `${metodoUsado}, guestID ${guestIdReal}`;
+      return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (${contexto}): ${mensagemCloudbeds}` }, { status: 400 });
+    }
+    // Sucesso de verdade — segue em frente para marcar a ficha como
+    // exportada (mais abaixo).
 
     // ---- Passo 3 (complementar, opcional) ----
     // Tenta também guardar os dados extras (documento, nacionalidade,
