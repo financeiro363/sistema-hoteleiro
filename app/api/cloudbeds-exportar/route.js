@@ -200,31 +200,6 @@ export async function POST(request) {
     const primeiroNome = partesNome[0] || '';
     const sobrenome = partesNome.slice(1).join(' ') || primeiroNome;
 
-    // DIAGNÓSTICO EXTRA: busca o cadastro ATUAL do hóspede antes de tentar
-    // mudar algo, para vermos com nossos próprios olhos os nomes de campo
-    // que a Cloudbeds realmente usa nesse endpoint (evita mais chute).
-    let cadastroAtualHospede = null;
-    if (guestIdReal) {
-      try {
-        const respostaGetGuest = await fetch(`${CLOUDBEDS_BASE_URL}/getGuest?guestID=${encodeURIComponent(guestIdReal)}`, {
-          method: 'GET', headers: cabecalhosCloudbeds,
-        });
-        cadastroAtualHospede = await respostaGetGuest.json().catch(() => null);
-      } catch (e) { /* segue mesmo sem isso */ }
-    }
-
-    // DIAGNÓSTICO EXTRA 2: lista TODOS os campos personalizados que esse
-    // hotel já configurou na Cloudbeds — é aqui que Gênero, Nacionalidade,
-    // Bairro, Motivo da Viagem etc. provavelmente vivem (o Brasil usa um
-    // "template" de FNRH da Cloudbeds baseado em campos personalizados).
-    let listaCustomFields = null;
-    try {
-      const respostaCustomFields = await fetch(`${CLOUDBEDS_BASE_URL}/getCustomFields`, {
-        method: 'GET', headers: cabecalhosCloudbeds,
-      });
-      listaCustomFields = await respostaCustomFields.json().catch(() => null);
-    } catch (e) { /* segue mesmo sem isso */ }
-
     // ---- Passo 2: atualiza o cadastro do hóspede de verdade ----
     if (guestIdReal) {
       const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
@@ -300,21 +275,15 @@ export async function POST(request) {
         const mensagemCloudbeds = dadosGuest?.message || 'não foi possível atualizar o cadastro do hóspede';
         return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (putGuest, guestID ${guestIdReal}): ${mensagemCloudbeds}` }, { status: 400 });
       }
-      // DIAGNÓSTICO: mesmo com "sucesso", mostra o que a Cloudbeds
-      // devolveu de verdade, para conferirmos se os dados realmente
-      // foram aceitos (e não só "engolidos" sem efeito).
-      return Response.json({
-        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. ORIGEM DA BUSCA (isso é o que importa agora): ${origemDoAchado}. Resposta completa da Cloudbeds do putGuest: ${JSON.stringify(dadosGuest)}. Cadastro ATUAL do hóspede (getGuest, para vermos os nomes de campo certos): ${JSON.stringify(cadastroAtualHospede)}. CAMPOS PERSONALIZADOS deste hotel (getCustomFields — é aqui que Gênero/Nacionalidade/Bairro/etc. provavelmente estão): ${JSON.stringify(listaCustomFields)}`,
-      }, { status: 400 });
+      // Sucesso de verdade — segue em frente para marcar a ficha como
+      // exportada (mais abaixo). O modo de diagnóstico (que mostrava a
+      // resposta técnica completa em vez de seguir) foi desligado agora
+      // que já confirmamos que o envio funciona corretamente.
     } else {
-      // Antes caíamos silenciosamente no putReservation (que já provamos
-      // não funcionar). Agora, em vez de mascarar isso com uma falsa
-      // mensagem de sucesso, mostramos exatamente o que encontramos (ou
-      // não) nas duas buscas, para investigar de verdade.
+      // Não achamos um hóspede para atualizar — isso é um erro de
+      // verdade, nada foi exportado.
       return Response.json({
-        erro: `[DIAGNÓSTICO] Não encontramos um guestID para essa reserva. Detalhe da busca: ${origemDoAchado}. ` +
-          `Chaves da resposta de getReservation: ${Object.keys(reservaMiolo).join(', ')}. ` +
-          `guestList dentro dela: ${JSON.stringify(reservaMiolo.guestList || 'não existe')}.`,
+        erro: 'Não foi possível encontrar o cadastro do hóspede nessa reserva na Cloudbeds. Confira se o número da reserva está certo.',
       }, { status: 400 });
     }
 
