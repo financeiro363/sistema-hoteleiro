@@ -405,9 +405,114 @@ function PainelLogFichas({ usuario }) {
 // FICHA PARA IMPRESSÃO — modelo oficial do hotel, 1 página A4
 // ============================================================================
 
+function montarHtmlFicha(f, nomeHotel) {
+  const numeroDocumentoRG = f.tipo_documento === 'RG' ? f.numero_documento : '';
+  const cpfSomenteNumeros = f.tipo_documento === 'CPF' ? String(f.numero_documento || '').replace(/\D/g, '') : '';
+  const escapar = (texto) => String(texto || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Ficha — ${escapar(f.nome_completo)}</title>
+<style>
+  @page { size: A4 portrait; margin: 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; font-size: 12px; line-height: 1.4; margin: 0; padding: 0; }
+  h1.hotel { font-size: 18px; text-align: center; margin: 0 0 18px; }
+  .assinatura { margin-bottom: 18px; }
+  .linha-assinatura { display: flex; align-items: flex-end; gap: 10px; }
+  .linha { flex: 1; border-bottom: 1px solid #333; height: 1px; }
+  .data-linha { white-space: nowrap; font-size: 12px; }
+  .legenda-assinatura { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 2px; }
+  .campos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-bottom: 18px; }
+  .campo label { display: block; font-size: 10px; font-weight: 700; color: #555; margin-bottom: 2px; }
+  .valor { border-bottom: 1px solid #999; min-height: 16px; font-size: 13px; padding-bottom: 2px; }
+  .secao { margin-bottom: 10px; }
+  .secao h3 { font-size: 11px; margin: 0 0 4px; }
+  .secao p { margin: 0 0 3px; font-size: 9.5px; text-align: justify; }
+</style>
+</head>
+<body>
+  <h1 class="hotel">${escapar(nomeHotel)}</h1>
+
+  <div class="assinatura">
+    <div class="linha-assinatura">
+      <span class="linha"></span>
+      <span class="data-linha">____/____/_____</span>
+    </div>
+    <div class="legenda-assinatura">
+      <span>Assinatura (De acordo com o documento)</span>
+      <span>Data</span>
+    </div>
+  </div>
+
+  <div class="campos">
+    <div class="campo"><label>Nome</label><div class="valor">${escapar(f.nome_completo)}</div></div>
+    <div class="campo"><label>Data de Entrada</label><div class="valor">${escapar(formatarData(f.data_checkin))}</div></div>
+    <div class="campo"><label>Número do Documento</label><div class="valor">${escapar(numeroDocumentoRG)}</div></div>
+    <div class="campo"><label>Data de partida</label><div class="valor">${escapar(formatarData(f.data_checkout))}</div></div>
+    <div class="campo"><label>Número da Acomodação</label><div class="valor"></div></div>
+    <div class="campo"><label>CPF (somente números)</label><div class="valor">${escapar(cpfSomenteNumeros)}</div></div>
+  </div>
+
+  <div class="secao">
+    <h3>1. POLÍTICAS FINANCEIRAS E DE RESERVA</h3>
+    <p><strong>Horários:</strong> Check-in a partir das 12h; check-out até as 12h. Early check-in ou late check-out mediante disponibilidade e cobrança de taxa.</p>
+    <p><strong>Hóspedes Adicionais:</strong> Acomodação válida para o número de hóspedes da reserva. Pessoas extras devem ser informadas à recepção e estarão sujeitas à cobrança adicional.</p>
+    <p><strong>Danos:</strong> Responsabilizo-me por danos causados na acomodação e nas demais dependências do hotel, que deverão ser quitados no check-out (Pix, débito, crédito). Para garantia, autorizo o débito dos custos de reparo/reposição no cartão de crédito informado.</p>
+    <p><strong>Abandono de Unidade e Inadimplência:</strong> A inadimplência ou ausência de contato por mais de 12h autoriza o hotel a desocupar a unidade administrativamente, inventariar e guardar pertences por 30 dias, liberando o quarto para novas reservas.</p>
+  </div>
+
+  <div class="secao">
+    <h3>2. NORMAS DE CONDUTA E SEGURANÇA</h3>
+    <p><strong>Silêncio:</strong> Pedimos a colaboração para manter o silêncio, especialmente das 22h às 8h.</p>
+    <p><strong>Ambiente Livre de Tabaco:</strong> É proibido fumar (cigarros, vapes, etc.) em qualquer área interna, incluindo apartamentos e varandas (Lei 12.546/11). A infração resultará em multa de uma diária (tarifa balcão) para higienização.</p>
+    <p><strong>Visitantes:</strong> O acesso aos apartamentos é restrito aos hóspedes. Visitas são bem-vindas no lobby.</p>
+    <p><strong>Convivência:</strong> Para o conforto geral, solicitamos não circular com trajes de banho no lobby e restaurantes. Comportamentos que perturbem o sossego e a segurança de outros hóspedes ou de nossa equipe poderão levar ao encerramento imediato da estada.</p>
+    <p><strong>Animais:</strong> Não permitimos animais de estimação, com exceção de cães-guia (conforme legislação).</p>
+  </div>
+
+  <div class="secao">
+    <h3>3. DEVER DE GUARDA E USO DO COFRE</h3>
+    <p>O hotel é responsável pela guarda de seus pertences. Para maior segurança com itens de valor (dinheiro, joias, etc.), recomendamos fortemente o uso do cofre gratuito disponível no apartamento. Pedimos que, por favor, indique abaixo se deseja ou não utilizar o cofre durante a sua estadia:</p>
+    <p>[ ] Desejo utilizar o cofre durante a minha estadia.</p>
+    <p>[ ] Não desejo utilizar o cofre durante a minha estadia.</p>
+  </div>
+
+  <div class="secao">
+    <h3>4. PROTEÇÃO DE DADOS (LGPD)</h3>
+    <p>Autorizo o tratamento e digitalização de meus dados para fins legais (Lei 11.771/08), segurança e gestão da estada, sob garantia de sigilo.</p>
+  </div>
+
+  <div class="secao">
+    <h3>5. HOSPEDAGEM DE MENORES DE IDADE</h3>
+    <p>Exige-se documento original e, se desacompanhado, autorização dos pais com firma reconhecida (Art. 82 do ECA).</p>
+  </div>
+</body>
+</html>`;
+}
+
 function FichaImpressao({ ficha: f, nomeHotel, onFechar }) {
   const numeroDocumentoRG = f.tipo_documento === 'RG' ? f.numero_documento : '';
   const cpfSomenteNumeros = f.tipo_documento === 'CPF' ? String(f.numero_documento || '').replace(/\D/g, '') : '';
+
+  function imprimir() {
+    // Abre uma janela nova, LIMPA (só com o conteúdo da ficha, nada mais
+    // da tela por perto) — evita de vez qualquer duplicação ou bagunça
+    // que a impressão "por cima da tela normal" estava causando.
+    const janela = window.open('', '_blank', 'width=900,height=1000');
+    if (!janela) {
+      alert('Não foi possível abrir a janela de impressão. Confira se o navegador não bloqueou pop-ups para este site.');
+      return;
+    }
+    janela.document.open();
+    janela.document.write(montarHtmlFicha(f, nomeHotel));
+    janela.document.close();
+    janela.onload = () => { janela.focus(); janela.print(); };
+    // Reforço, caso onload não dispare a tempo em algum navegador
+    setTimeout(() => { try { janela.focus(); janela.print(); } catch (e) {} }, 400);
+  }
 
   return (
     <div className="at-overlay" role="dialog" aria-modal="true">
@@ -417,66 +522,20 @@ function FichaImpressao({ ficha: f, nomeHotel, onFechar }) {
           <button type="button" className="at-fechar" onClick={onFechar} aria-label="Fechar">✕</button>
         </div>
 
-        <div className="ficha-imp">
-          <h1 className="ficha-imp-hotel">{nomeHotel}</h1>
-
-          <div className="ficha-imp-assinatura">
-            <div className="ficha-imp-linha-assinatura">
-              <span className="ficha-imp-linha" />
-              <span className="ficha-imp-data-linha">____/____/_____</span>
-            </div>
-            <div className="ficha-imp-legenda-assinatura">
-              <span>Assinatura (De acordo com o documento)</span>
-              <span>Data</span>
-            </div>
-          </div>
-
-          <div className="ficha-imp-campos">
-            <div className="ficha-imp-campo"><label>Nome</label><div className="ficha-imp-valor">{f.nome_completo}</div></div>
-            <div className="ficha-imp-campo"><label>Data de Entrada</label><div className="ficha-imp-valor">{formatarData(f.data_checkin)}</div></div>
-            <div className="ficha-imp-campo"><label>Número do Documento</label><div className="ficha-imp-valor">{numeroDocumentoRG}</div></div>
-            <div className="ficha-imp-campo"><label>Data de partida</label><div className="ficha-imp-valor">{formatarData(f.data_checkout)}</div></div>
-            <div className="ficha-imp-campo"><label>Número da Acomodação</label><div className="ficha-imp-valor"></div></div>
-            <div className="ficha-imp-campo"><label>CPF (somente números)</label><div className="ficha-imp-valor">{cpfSomenteNumeros}</div></div>
-          </div>
-
-          <div className="ficha-imp-secao">
-            <h3>1. POLÍTICAS FINANCEIRAS E DE RESERVA</h3>
-            <p><strong>Horários:</strong> Check-in a partir das 12h; check-out até as 12h. Early check-in ou late check-out mediante disponibilidade e cobrança de taxa.</p>
-            <p><strong>Hóspedes Adicionais:</strong> Acomodação válida para o número de hóspedes da reserva. Pessoas extras devem ser informadas à recepção e estarão sujeitas à cobrança adicional.</p>
-            <p><strong>Danos:</strong> Responsabilizo-me por danos causados na acomodação e nas demais dependências do hotel, que deverão ser quitados no check-out (Pix, débito, crédito). Para garantia, autorizo o débito dos custos de reparo/reposição no cartão de crédito informado.</p>
-            <p><strong>Abandono de Unidade e Inadimplência:</strong> A inadimplência ou ausência de contato por mais de 12h autoriza o hotel a desocupar a unidade administrativamente, inventariar e guardar pertences por 30 dias, liberando o quarto para novas reservas.</p>
-          </div>
-
-          <div className="ficha-imp-secao">
-            <h3>2. NORMAS DE CONDUTA E SEGURANÇA</h3>
-            <p><strong>Silêncio:</strong> Pedimos a colaboração para manter o silêncio, especialmente das 22h às 8h.</p>
-            <p><strong>Ambiente Livre de Tabaco:</strong> É proibido fumar (cigarros, vapes, etc.) em qualquer área interna, incluindo apartamentos e varandas (Lei 12.546/11). A infração resultará em multa de uma diária (tarifa balcão) para higienização.</p>
-            <p><strong>Visitantes:</strong> O acesso aos apartamentos é restrito aos hóspedes. Visitas são bem-vindas no lobby.</p>
-            <p><strong>Convivência:</strong> Para o conforto geral, solicitamos não circular com trajes de banho no lobby e restaurantes. Comportamentos que perturbem o sossego e a segurança de outros hóspedes ou de nossa equipe poderão levar ao encerramento imediato da estada.</p>
-            <p><strong>Animais:</strong> Não permitimos animais de estimação, com exceção de cães-guia (conforme legislação).</p>
-          </div>
-
-          <div className="ficha-imp-secao">
-            <h3>3. DEVER DE GUARDA E USO DO COFRE</h3>
-            <p>O hotel é responsável pela guarda de seus pertences. Para maior segurança com itens de valor (dinheiro, joias, etc.), recomendamos fortemente o uso do cofre gratuito disponível no apartamento. Pedimos que, por favor, indique abaixo se deseja ou não utilizar o cofre durante a sua estadia:</p>
-            <p>[ ] Desejo utilizar o cofre durante a minha estadia.</p>
-            <p>[ ] Não desejo utilizar o cofre durante a minha estadia.</p>
-          </div>
-
-          <div className="ficha-imp-secao">
-            <h3>4. PROTEÇÃO DE DADOS (LGPD)</h3>
-            <p>Autorizo o tratamento e digitalização de meus dados para fins legais (Lei 11.771/08), segurança e gestão da estada, sob garantia de sigilo.</p>
-          </div>
-
-          <div className="ficha-imp-secao">
-            <h3>5. HOSPEDAGEM DE MENORES DE IDADE</h3>
-            <p>Exige-se documento original e, se desacompanhado, autorização dos pais com firma reconhecida (Art. 82 do ECA).</p>
-          </div>
+        <p className="texto-suave" style={{ fontSize: 13 }}>
+          Prévia dos dados que vão para o modelo impresso (o texto completo das políticas aparece só na hora de imprimir):
+        </p>
+        <div className="ficha-imp-campos">
+          <div className="ficha-imp-campo"><label>Nome</label><div className="ficha-imp-valor">{f.nome_completo}</div></div>
+          <div className="ficha-imp-campo"><label>Data de Entrada</label><div className="ficha-imp-valor">{formatarData(f.data_checkin)}</div></div>
+          <div className="ficha-imp-campo"><label>Número do Documento</label><div className="ficha-imp-valor">{numeroDocumentoRG}</div></div>
+          <div className="ficha-imp-campo"><label>Data de partida</label><div className="ficha-imp-valor">{formatarData(f.data_checkout)}</div></div>
+          <div className="ficha-imp-campo"><label>Número da Acomodação</label><div className="ficha-imp-valor"></div></div>
+          <div className="ficha-imp-campo"><label>CPF (somente números)</label><div className="ficha-imp-valor">{cpfSomenteNumeros}</div></div>
         </div>
 
         <div className="at-modal-botoes at-nao-imprimir">
-          <button type="button" className="botao botao-principal" onClick={() => window.print()}>🖨️ Imprimir</button>
+          <button type="button" className="botao botao-principal" onClick={imprimir}>🖨️ Abrir e Imprimir</button>
           <button type="button" className="botao botao-suave" onClick={onFechar}>Fechar</button>
         </div>
       </div>
@@ -521,28 +580,11 @@ function EstilosFichasAdmin() {
         .at-modal { max-width: 700px; border-radius: 18px; padding: 24px; }
       }
 
-      /* ---- Modelo impresso da ficha (1 página A4) ---- */
-      .ficha-imp { background: #fff; color: #1a1a1a; font-size: 12px; line-height: 1.4; }
-      .ficha-imp-hotel { font-size: 18px; text-align: center; margin: 0 0 18px; }
-      .ficha-imp-linha-assinatura { display: flex; align-items: flex-end; gap: 10px; }
-      .ficha-imp-linha { flex: 1; border-bottom: 1px solid #333; height: 1px; }
-      .ficha-imp-data-linha { white-space: nowrap; font-size: 12px; }
-      .ficha-imp-legenda-assinatura { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 2px; }
-      .ficha-imp-assinatura { margin-bottom: 18px; }
-      .ficha-imp-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-bottom: 18px; }
-      .ficha-imp-campo label { display: block; font-size: 10px; font-weight: 700; color: #555; margin-bottom: 2px; }
-      .ficha-imp-valor { border-bottom: 1px solid #999; min-height: 16px; font-size: 13px; padding-bottom: 2px; }
-      .ficha-imp-secao { margin-bottom: 10px; }
-      .ficha-imp-secao h3 { font-size: 11px; margin: 0 0 4px; }
-      .ficha-imp-secao p { margin: 0 0 3px; font-size: 9.5px; text-align: justify; }
-
-      @media print {
-        @page { size: A4 portrait; margin: 12mm; }
-        body * { visibility: hidden; }
-        .ficha-imp, .ficha-imp * { visibility: visible; }
-        .ficha-imp { position: absolute; top: 0; left: 0; width: 100%; }
-        .at-nao-imprimir { display: none !important; }
-      }
+      /* ---- Prévia dos campos (a impressão de verdade usa uma janela
+         separada, com seu próprio CSS embutido — veja montarHtmlFicha) ---- */
+      .ficha-imp-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; margin: 12px 0; }
+      .ficha-imp-campo label { display: block; font-size: 11px; font-weight: 700; color: var(--texto-suave); margin-bottom: 2px; }
+      .ficha-imp-valor { border-bottom: 1px solid var(--borda); min-height: 18px; font-size: 14px; padding-bottom: 3px; }
     `}</style>
   );
 }
