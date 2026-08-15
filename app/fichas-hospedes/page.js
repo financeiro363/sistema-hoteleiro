@@ -30,6 +30,7 @@ export default function FichasHospedes() {
   const router = useRouter();
   const [verificandoLogin, setVerificandoLogin] = useState(true);
   const [usuario, setUsuario] = useState(null);
+  const [nomeHotel, setNomeHotel] = useState('');
   const [subAba, setSubAba] = useState('fichas');
 
   useEffect(() => {
@@ -46,6 +47,9 @@ export default function FichasHospedes() {
       if (!ativo) return;
       setUsuario(dadosUsuario);
       setVerificandoLogin(false);
+
+      const { data: hotel } = await supabase.from('hoteis').select('nome_fantasia').eq('id', dadosUsuario.hotel_id).single();
+      if (ativo && hotel?.nome_fantasia) setNomeHotel(hotel.nome_fantasia);
     }
     verificar();
     return () => { ativo = false; };
@@ -83,7 +87,7 @@ export default function FichasHospedes() {
         )}
       </nav>
 
-      {subAba === 'fichas' && <PainelFichas usuario={usuario} />}
+      {subAba === 'fichas' && <PainelFichas usuario={usuario} nomeHotel={nomeHotel} />}
       {subAba === 'config' && souAdmin && <PainelConfigCloudbeds />}
       {subAba === 'log' && souAdmin && <PainelLogFichas usuario={usuario} />}
     </main>
@@ -94,7 +98,7 @@ export default function FichasHospedes() {
 // ABA: FICHAS RECEBIDAS
 // ============================================================================
 
-function PainelFichas({ usuario }) {
+function PainelFichas({ usuario, nomeHotel }) {
   const [fichas, setFichas] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
@@ -104,6 +108,7 @@ function PainelFichas({ usuario }) {
   const [reservaPorFicha, setReservaPorFicha] = useState({});
   const [exportando, setExportando] = useState(null);
   const [fichaAberta, setFichaAberta] = useState(null);
+  const [fichaImprimindo, setFichaImprimindo] = useState(null);
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 6000); }
 
@@ -189,6 +194,11 @@ function PainelFichas({ usuario }) {
                 <div className="texto-suave" style={{ fontSize: 13 }}>
                   {f.tipo_documento} {f.numero_documento} · {f.email} · {f.telefone}
                 </div>
+                {(f.data_checkin || f.data_checkout) && (
+                  <div className="fh-badge-estadia">
+                    🗓️ Estadia: {formatarData(f.data_checkin)} até {formatarData(f.data_checkout)}
+                  </div>
+                )}
                 <div className="texto-suave" style={{ fontSize: 12 }}>
                   Enviada em {formatarDataHora(f.criado_em)}
                   {f.status === 'EXPORTADO' && ` · Exportada para a reserva ${f.cloudbeds_reservation_id} em ${formatarDataHora(f.exportado_em)}`}
@@ -199,6 +209,9 @@ function PainelFichas({ usuario }) {
                 {fichaAberta === f.id && <DetalhesFicha ficha={f} />}
               </div>
               <div className="fh-item-dir">
+                <button type="button" className="botao botao-contorno" onClick={() => setFichaImprimindo(f)}>
+                  🖨️ Imprimir ficha
+                </button>
                 {f.status === 'PENDENTE' ? (
                   <>
                     <input className="campo fh-input-reserva" type="text" placeholder="Nº da reserva Cloudbeds"
@@ -214,6 +227,10 @@ function PainelFichas({ usuario }) {
             </div>
           ))}
         </div>
+      )}
+
+      {fichaImprimindo && (
+        <FichaImpressao ficha={fichaImprimindo} nomeHotel={nomeHotel} onFechar={() => setFichaImprimindo(null)} />
       )}
     </section>
   );
@@ -384,6 +401,89 @@ function PainelLogFichas({ usuario }) {
   );
 }
 
+// ============================================================================
+// FICHA PARA IMPRESSÃO — modelo oficial do hotel, 1 página A4
+// ============================================================================
+
+function FichaImpressao({ ficha: f, nomeHotel, onFechar }) {
+  const numeroDocumentoRG = f.tipo_documento === 'RG' ? f.numero_documento : '';
+  const cpfSomenteNumeros = f.tipo_documento === 'CPF' ? String(f.numero_documento || '').replace(/\D/g, '') : '';
+
+  return (
+    <div className="at-overlay" role="dialog" aria-modal="true">
+      <div className="at-modal" style={{ maxWidth: 720 }}>
+        <div className="at-modal-topo at-nao-imprimir">
+          <h2 style={{ fontSize: '1.15rem', margin: 0 }}>Ficha para impressão — {f.nome_completo}</h2>
+          <button type="button" className="at-fechar" onClick={onFechar} aria-label="Fechar">✕</button>
+        </div>
+
+        <div className="ficha-imp">
+          <h1 className="ficha-imp-hotel">{nomeHotel}</h1>
+
+          <div className="ficha-imp-assinatura">
+            <div className="ficha-imp-linha-assinatura">
+              <span className="ficha-imp-linha" />
+              <span className="ficha-imp-data-linha">____/____/_____</span>
+            </div>
+            <div className="ficha-imp-legenda-assinatura">
+              <span>Assinatura (De acordo com o documento)</span>
+              <span>Data</span>
+            </div>
+          </div>
+
+          <div className="ficha-imp-campos">
+            <div className="ficha-imp-campo"><label>Nome</label><div className="ficha-imp-valor">{f.nome_completo}</div></div>
+            <div className="ficha-imp-campo"><label>Data de Entrada</label><div className="ficha-imp-valor">{formatarData(f.data_checkin)}</div></div>
+            <div className="ficha-imp-campo"><label>Número do Documento</label><div className="ficha-imp-valor">{numeroDocumentoRG}</div></div>
+            <div className="ficha-imp-campo"><label>Data de partida</label><div className="ficha-imp-valor">{formatarData(f.data_checkout)}</div></div>
+            <div className="ficha-imp-campo"><label>Número da Acomodação</label><div className="ficha-imp-valor"></div></div>
+            <div className="ficha-imp-campo"><label>CPF (somente números)</label><div className="ficha-imp-valor">{cpfSomenteNumeros}</div></div>
+          </div>
+
+          <div className="ficha-imp-secao">
+            <h3>1. POLÍTICAS FINANCEIRAS E DE RESERVA</h3>
+            <p><strong>Horários:</strong> Check-in a partir das 12h; check-out até as 12h. Early check-in ou late check-out mediante disponibilidade e cobrança de taxa.</p>
+            <p><strong>Hóspedes Adicionais:</strong> Acomodação válida para o número de hóspedes da reserva. Pessoas extras devem ser informadas à recepção e estarão sujeitas à cobrança adicional.</p>
+            <p><strong>Danos:</strong> Responsabilizo-me por danos causados na acomodação e nas demais dependências do hotel, que deverão ser quitados no check-out (Pix, débito, crédito). Para garantia, autorizo o débito dos custos de reparo/reposição no cartão de crédito informado.</p>
+            <p><strong>Abandono de Unidade e Inadimplência:</strong> A inadimplência ou ausência de contato por mais de 12h autoriza o hotel a desocupar a unidade administrativamente, inventariar e guardar pertences por 30 dias, liberando o quarto para novas reservas.</p>
+          </div>
+
+          <div className="ficha-imp-secao">
+            <h3>2. NORMAS DE CONDUTA E SEGURANÇA</h3>
+            <p><strong>Silêncio:</strong> Pedimos a colaboração para manter o silêncio, especialmente das 22h às 8h.</p>
+            <p><strong>Ambiente Livre de Tabaco:</strong> É proibido fumar (cigarros, vapes, etc.) em qualquer área interna, incluindo apartamentos e varandas (Lei 12.546/11). A infração resultará em multa de uma diária (tarifa balcão) para higienização.</p>
+            <p><strong>Visitantes:</strong> O acesso aos apartamentos é restrito aos hóspedes. Visitas são bem-vindas no lobby.</p>
+            <p><strong>Convivência:</strong> Para o conforto geral, solicitamos não circular com trajes de banho no lobby e restaurantes. Comportamentos que perturbem o sossego e a segurança de outros hóspedes ou de nossa equipe poderão levar ao encerramento imediato da estada.</p>
+            <p><strong>Animais:</strong> Não permitimos animais de estimação, com exceção de cães-guia (conforme legislação).</p>
+          </div>
+
+          <div className="ficha-imp-secao">
+            <h3>3. DEVER DE GUARDA E USO DO COFRE</h3>
+            <p>O hotel é responsável pela guarda de seus pertences. Para maior segurança com itens de valor (dinheiro, joias, etc.), recomendamos fortemente o uso do cofre gratuito disponível no apartamento. Pedimos que, por favor, indique abaixo se deseja ou não utilizar o cofre durante a sua estadia:</p>
+            <p>[ ] Desejo utilizar o cofre durante a minha estadia.</p>
+            <p>[ ] Não desejo utilizar o cofre durante a minha estadia.</p>
+          </div>
+
+          <div className="ficha-imp-secao">
+            <h3>4. PROTEÇÃO DE DADOS (LGPD)</h3>
+            <p>Autorizo o tratamento e digitalização de meus dados para fins legais (Lei 11.771/08), segurança e gestão da estada, sob garantia de sigilo.</p>
+          </div>
+
+          <div className="ficha-imp-secao">
+            <h3>5. HOSPEDAGEM DE MENORES DE IDADE</h3>
+            <p>Exige-se documento original e, se desacompanhado, autorização dos pais com firma reconhecida (Art. 82 do ECA).</p>
+          </div>
+        </div>
+
+        <div className="at-modal-botoes at-nao-imprimir">
+          <button type="button" className="botao botao-principal" onClick={() => window.print()}>🖨️ Imprimir</button>
+          <button type="button" className="botao botao-suave" onClick={onFechar}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EstilosFichasAdmin() {
   return (
     <style>{`
@@ -397,6 +497,7 @@ function EstilosFichasAdmin() {
       .fh-item-topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       .fh-item-topo strong { font-size: 16px; }
       .fh-badge { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
+      .fh-badge-estadia { display: inline-block; font-size: 12px; font-weight: 700; color: var(--marca); background: var(--marca-clara); border-radius: 999px; padding: 3px 10px; width: fit-content; }
       .fh-item-dir { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
       .fh-input-reserva { width: auto; min-width: 200px; }
       .fh-ver-mais { border: none; background: none; color: var(--marca); font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 0; text-align: left; }
@@ -407,6 +508,40 @@ function EstilosFichasAdmin() {
         .fh-barra .campo { flex: 1; }
         .fh-item { flex-direction: row; justify-content: space-between; align-items: flex-start; }
         .fh-item-dir { align-items: flex-end; }
+      }
+
+      /* ---- Modal genérico (usado pela impressão da ficha) ---- */
+      .at-overlay { position: fixed; inset: 0; background: rgba(15, 25, 22, 0.55); display: flex; align-items: flex-end; justify-content: center; z-index: 80; }
+      .at-modal { background: var(--branco); width: 100%; max-height: 92vh; overflow-y: auto; border-radius: 18px 18px 0 0; padding: 18px; }
+      .at-modal-topo { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+      .at-fechar { border: none; background: #E9ECE8; border-radius: 999px; width: 40px; height: 40px; font-size: 16px; cursor: pointer; flex-shrink: 0; }
+      .at-modal-botoes { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+      @media (min-width: 640px) {
+        .at-overlay { align-items: center; padding: 24px; }
+        .at-modal { max-width: 700px; border-radius: 18px; padding: 24px; }
+      }
+
+      /* ---- Modelo impresso da ficha (1 página A4) ---- */
+      .ficha-imp { background: #fff; color: #1a1a1a; font-size: 12px; line-height: 1.4; }
+      .ficha-imp-hotel { font-size: 18px; text-align: center; margin: 0 0 18px; }
+      .ficha-imp-linha-assinatura { display: flex; align-items: flex-end; gap: 10px; }
+      .ficha-imp-linha { flex: 1; border-bottom: 1px solid #333; height: 1px; }
+      .ficha-imp-data-linha { white-space: nowrap; font-size: 12px; }
+      .ficha-imp-legenda-assinatura { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 2px; }
+      .ficha-imp-assinatura { margin-bottom: 18px; }
+      .ficha-imp-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-bottom: 18px; }
+      .ficha-imp-campo label { display: block; font-size: 10px; font-weight: 700; color: #555; margin-bottom: 2px; }
+      .ficha-imp-valor { border-bottom: 1px solid #999; min-height: 16px; font-size: 13px; padding-bottom: 2px; }
+      .ficha-imp-secao { margin-bottom: 10px; }
+      .ficha-imp-secao h3 { font-size: 11px; margin: 0 0 4px; }
+      .ficha-imp-secao p { margin: 0 0 3px; font-size: 9.5px; text-align: justify; }
+
+      @media print {
+        @page { size: A4 portrait; margin: 12mm; }
+        body * { visibility: hidden; }
+        .ficha-imp, .ficha-imp * { visibility: visible; }
+        .ficha-imp { position: absolute; top: 0; left: 0; width: 100%; }
+        .at-nao-imprimir { display: none !important; }
       }
     `}</style>
   );
