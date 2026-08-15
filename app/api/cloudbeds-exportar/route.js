@@ -19,6 +19,23 @@ import { descriptografar } from '../../../lib/cloudbedsCrypto';
 
 const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 
+// Sigla de estado brasileiro → nome completo (a tela da Cloudbeds parece
+// esperar o nome por extenso para exibir corretamente num campo de
+// seleção, mesmo aceitando a sigla na hora de salvar)
+const UF_PARA_NOME = {
+  AC: 'Acre', AL: 'Alagoas', AP: 'Amapá', AM: 'Amazonas', BA: 'Bahia', CE: 'Ceará',
+  DF: 'Distrito Federal', ES: 'Espírito Santo', GO: 'Goiás', MA: 'Maranhão',
+  MT: 'Mato Grosso', MS: 'Mato Grosso do Sul', MG: 'Minas Gerais', PA: 'Pará',
+  PB: 'Paraíba', PR: 'Paraná', PE: 'Pernambuco', PI: 'Piauí', RJ: 'Rio de Janeiro',
+  RN: 'Rio Grande do Norte', RS: 'Rio Grande do Sul', RO: 'Rondônia', RR: 'Roraima',
+  SC: 'Santa Catarina', SP: 'São Paulo', SE: 'Sergipe', TO: 'Tocantins',
+};
+function paraNomeEstado(siglaOuNome) {
+  const valor = String(siglaOuNome || '').trim();
+  if (!valor) return '';
+  return UF_PARA_NOME[valor.toUpperCase()] || valor;
+}
+
 // Nossos códigos internos → texto em português (os campos da Cloudbeds
 // são de texto livre, não códigos)
 const MOTIVO_VIAGEM_TEXTO = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
@@ -228,7 +245,7 @@ export async function POST(request) {
         // Mandando todas as variações possíveis.
         guestAddress: enderecoCompleto, address: enderecoCompleto, address1: enderecoCompleto, guestAddress1: enderecoCompleto,
         guestCity: ficha.cidade || '', city: ficha.cidade || '',
-        guestState: ficha.estado || '', state: ficha.estado || '',
+        guestState: paraNomeEstado(ficha.estado), state: paraNomeEstado(ficha.estado),
         guestCountry: siglaPais, country: siglaPais,
         guestZip: ficha.cep || '', zip: ficha.cep || '',
         // Data de nascimento — variações de nome de campo
