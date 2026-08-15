@@ -132,6 +132,7 @@ export async function POST(request) {
     const reservaMiolo = dadosReserva?.data || dadosReserva || {};
 
     let guestIdReal = null;
+    let origemDoAchado = ''; // para diagnóstico: de onde veio o guestID e a que reserva pertence
     try {
       const respostaComGuestDetails = await fetch(
         `${CLOUDBEDS_BASE_URL}/getReservations?reservationID=${encodeURIComponent(reservationId)}&includeGuestsDetails=true`,
@@ -143,7 +144,8 @@ export async function POST(request) {
       const listaHospedes = reservaComDetalhes?.guestList || reservaComDetalhes?.guests || [];
       const primeiroHospede = Array.isArray(listaHospedes) ? listaHospedes[0] : null;
       guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
-    } catch (e) { /* segue tentando o caminho de reforço abaixo */ }
+      origemDoAchado = `getReservations — reservationID da reserva encontrada: "${reservaComDetalhes?.reservationID}" (deveríamos ter pedido "${reservationId}") — nome do hóspede encontrado: "${primeiroHospede?.guestName || primeiroHospede?.firstName || '?'}" — total de reservas que essa busca devolveu: ${listaReservas.length}`;
+    } catch (e) { origemDoAchado = 'getReservations falhou: ' + e.message; }
 
     // Reforço: se ainda não achou, tenta pelo getGuestList também
     if (!guestIdReal) {
@@ -156,7 +158,8 @@ export async function POST(request) {
         const listaHospedes = dadosListaHospedes?.data || [];
         const primeiroHospede = Array.isArray(listaHospedes) ? listaHospedes[0] : null;
         guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
-      } catch (e) { /* segue sem o ID — usa o plano B (putReservation) */ }
+        origemDoAchado += ` | getGuestList — reservationID do hóspede encontrado: "${primeiroHospede?.reservationID}" (deveríamos ter pedido "${reservationId}") — nome: "${primeiroHospede?.guestName || primeiroHospede?.firstName || '?'}" — total devolvido: ${listaHospedes.length}`;
+      } catch (e) { origemDoAchado += ' | getGuestList falhou: ' + e.message; }
     }
 
     // ============================================================
@@ -208,7 +211,7 @@ export async function POST(request) {
       // devolveu de verdade, para conferirmos se os dados realmente
       // foram aceitos (e não só "engolidos" sem efeito).
       return Response.json({
-        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. Resposta completa da Cloudbeds do putGuest: ${JSON.stringify(dadosGuest)}. Cadastro ATUAL do hóspede (getGuest, para vermos os nomes de campo certos): ${JSON.stringify(cadastroAtualHospede)}`,
+        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. ORIGEM DA BUSCA (isso é o que importa agora): ${origemDoAchado}. Resposta completa da Cloudbeds do putGuest: ${JSON.stringify(dadosGuest)}. Cadastro ATUAL do hóspede (getGuest, para vermos os nomes de campo certos): ${JSON.stringify(cadastroAtualHospede)}`,
       }, { status: 400 });
     } else {
       // Antes caíamos silenciosamente no putReservation (que já provamos
@@ -216,7 +219,7 @@ export async function POST(request) {
       // mensagem de sucesso, mostramos exatamente o que encontramos (ou
       // não) nas duas buscas, para investigar de verdade.
       return Response.json({
-        erro: `[DIAGNÓSTICO] Não encontramos um guestID para essa reserva. ` +
+        erro: `[DIAGNÓSTICO] Não encontramos um guestID para essa reserva. Detalhe da busca: ${origemDoAchado}. ` +
           `Chaves da resposta de getReservation: ${Object.keys(reservaMiolo).join(', ')}. ` +
           `guestList dentro dela: ${JSON.stringify(reservaMiolo.guestList || 'não existe')}.`,
       }, { status: 400 });
