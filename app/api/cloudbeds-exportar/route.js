@@ -180,11 +180,6 @@ export async function POST(request) {
     if (guestIdReal) {
       const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
       const siglaPais = paraSiglaPais(ficha.pais);
-      // Mapeamento aproximado do tipo de documento brasileiro para os
-      // valores que a Cloudbeds parece esperar (confirmado que eles usam
-      // um texto específico, tipo "Driver's License" — ajustar aqui se
-      // precisar).
-      const DOC_CLOUDBEDS = { CPF: 'National ID', RG: 'National ID', PASSAPORTE: 'Passport' };
 
       const corpoGuest = new URLSearchParams({
         guestID: guestIdReal,
@@ -193,17 +188,21 @@ export async function POST(request) {
         guestLastName: sobrenome,
         guestEmail: ficha.email || '',
         guestPhone: ficha.telefone || '',
-        // Endereço — mandando os dois formatos possíveis de nome, com e
-        // sem o prefixo "guest", já que não temos certeza qual funciona
-        // para esses campos específicos.
-        guestAddress: enderecoCompleto, address: enderecoCompleto,
+        // Endereço — a resposta trouxe "address2" (complemento) separado,
+        // então a rua provavelmente é "address1", não só "address".
+        // Mandando todas as variações possíveis.
+        guestAddress: enderecoCompleto, address: enderecoCompleto, address1: enderecoCompleto,
         guestCity: ficha.cidade || '', city: ficha.cidade || '',
         guestState: ficha.estado || '', state: ficha.estado || '',
         guestCountry: siglaPais, country: siglaPais,
         guestZip: ficha.cep || '', zip: ficha.cep || '',
-        // Data de nascimento e documento (campos que faltavam)
-        guestBirthdate: ficha.data_nascimento || '', birthDate: ficha.data_nascimento || '',
-        documentType: DOC_CLOUDBEDS[ficha.tipo_documento] || ficha.tipo_documento || '',
+        // Data de nascimento — variações de nome de campo
+        guestBirthdate: ficha.data_nascimento || '', guestBirthDate: ficha.data_nascimento || '',
+        birthDate: ficha.data_nascimento || '', birthdate: ficha.data_nascimento || '',
+        // Documento — mandando o tipo em português puro (sem tentar
+        // "adivinhar" um valor em inglês, que pode estar inválido e
+        // travando o campo inteiro)
+        documentType: ficha.tipo_documento || '',
         documentNumber: ficha.numero_documento || '',
         documentIssuingCountry: siglaPais,
       });
