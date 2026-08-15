@@ -176,6 +176,18 @@ export async function POST(request) {
       } catch (e) { /* segue mesmo sem isso */ }
     }
 
+    // DIAGNÓSTICO EXTRA 2: lista TODOS os campos personalizados que esse
+    // hotel já configurou na Cloudbeds — é aqui que Gênero, Nacionalidade,
+    // Bairro, Motivo da Viagem etc. provavelmente vivem (o Brasil usa um
+    // "template" de FNRH da Cloudbeds baseado em campos personalizados).
+    let listaCustomFields = null;
+    try {
+      const respostaCustomFields = await fetch(`${CLOUDBEDS_BASE_URL}/getCustomFields`, {
+        method: 'GET', headers: cabecalhosCloudbeds,
+      });
+      listaCustomFields = await respostaCustomFields.json().catch(() => null);
+    } catch (e) { /* segue mesmo sem isso */ }
+
     // ---- Passo 2: atualiza o cadastro do hóspede de verdade ----
     if (guestIdReal) {
       const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
@@ -220,7 +232,7 @@ export async function POST(request) {
       // devolveu de verdade, para conferirmos se os dados realmente
       // foram aceitos (e não só "engolidos" sem efeito).
       return Response.json({
-        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. ORIGEM DA BUSCA (isso é o que importa agora): ${origemDoAchado}. Resposta completa da Cloudbeds do putGuest: ${JSON.stringify(dadosGuest)}. Cadastro ATUAL do hóspede (getGuest, para vermos os nomes de campo certos): ${JSON.stringify(cadastroAtualHospede)}`,
+        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. ORIGEM DA BUSCA (isso é o que importa agora): ${origemDoAchado}. Resposta completa da Cloudbeds do putGuest: ${JSON.stringify(dadosGuest)}. Cadastro ATUAL do hóspede (getGuest, para vermos os nomes de campo certos): ${JSON.stringify(cadastroAtualHospede)}. CAMPOS PERSONALIZADOS deste hotel (getCustomFields — é aqui que Gênero/Nacionalidade/Bairro/etc. provavelmente estão): ${JSON.stringify(listaCustomFields)}`,
       }, { status: 400 });
     } else {
       // Antes caíamos silenciosamente no putReservation (que já provamos
