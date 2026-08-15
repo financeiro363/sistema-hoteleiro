@@ -259,16 +259,17 @@ export async function POST(request) {
       // texto JSON (formato mais comum nesse tipo de API) e também com
       // colchetes numerados (reforço, caso o primeiro não funcione).
       const listaCamposPersonalizados = [
-        { customFieldID: '33748', customFieldValue: (ficha.numero_documento || '').replace(/\D/g, '') },
-        { customFieldID: '33749', customFieldValue: ficha.profissao || '' },
-        { customFieldID: '48195', customFieldValue: MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
-        { customFieldID: '48196', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
+        { customFieldID: '33748', customFieldName: 'CPF', customFieldValue: (ficha.numero_documento || '').replace(/\D/g, '') },
+        { customFieldID: '33749', customFieldName: 'Profissao', customFieldValue: ficha.profissao || '' },
+        { customFieldID: '48195', customFieldName: 'motivo_da_viagem', customFieldValue: MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
+        { customFieldID: '48196', customFieldName: 'meio_de_transporte', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
       ];
       // Nome do campo CONFIRMADO na documentação oficial: "guestCustomFields"
       // (não "customFields" — esse era o erro este tempo todo!)
       corpoGuest.set('guestCustomFields', JSON.stringify(listaCamposPersonalizados));
       listaCamposPersonalizados.forEach((campo, indice) => {
         corpoGuest.set(`guestCustomFields[${indice}][customFieldID]`, campo.customFieldID);
+        corpoGuest.set(`guestCustomFields[${indice}][customFieldName]`, campo.customFieldName);
         corpoGuest.set(`guestCustomFields[${indice}][customFieldValue]`, campo.customFieldValue);
       });
 
