@@ -19,6 +19,11 @@ import { descriptografar } from '../../../lib/cloudbedsCrypto';
 
 const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 
+// Nossos códigos internos → texto em português (os campos da Cloudbeds
+// são de texto livre, não códigos)
+const MOTIVO_VIAGEM_TEXTO = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
+const MEIO_TRANSPORTE_TEXTO = { AVIAO: 'Avião', AUTOMOVEL: 'Automóvel', ONIBUS: 'Ônibus', TREM: 'Trem', OUTRO: 'Outro' };
+
 // A Cloudbeds exige o país como sigla de 2 letras (ISO 3166-1 alpha-2),
 // não o nome por extenso — por isso convertemos aqui. Cobre os nomes
 // mais comuns que aparecem na ficha; se não reconhecer, cai em "BR"
@@ -243,6 +248,12 @@ export async function POST(request) {
         'customFields[1][customFieldID]': '33749',
         'customFields[1][customFieldName]': 'Profissão',
         'customFields[1][customFieldValue]': ficha.profissao || '',
+        'customFields[2][customFieldID]': '48195',
+        'customFields[2][customFieldName]': 'Motivo da viagem',
+        'customFields[2][customFieldValue]': MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '',
+        'customFields[3][customFieldID]': '48196',
+        'customFields[3][customFieldName]': 'Meio de transporte',
+        'customFields[3][customFieldValue]': MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '',
       });
       const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
         method: 'PUT',
