@@ -24,16 +24,27 @@ const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 // mais comuns que aparecem na ficha; se não reconhecer, cai em "BR"
 // (a grande maioria dos hóspedes é do Brasil).
 const PAIS_PARA_SIGLA = {
-  'brasil': 'BR', 'brazil': 'BR',
-  'estados unidos': 'US', 'eua': 'US', 'usa': 'US', 'united states': 'US',
-  'portugal': 'PT', 'argentina': 'AR', 'chile': 'CL', 'uruguai': 'UY', 'uruguay': 'UY',
-  'paraguai': 'PY', 'paraguay': 'PY', 'bolivia': 'BO', 'bolívia': 'BO',
-  'colombia': 'CO', 'colômbia': 'CO', 'peru': 'PE', 'equador': 'EC', 'ecuador': 'EC',
-  'venezuela': 'VE', 'mexico': 'MX', 'méxico': 'MX', 'canada': 'CA', 'canadá': 'CA',
-  'espanha': 'ES', 'spain': 'ES', 'franca': 'FR', 'frança': 'FR', 'france': 'FR',
-  'italia': 'IT', 'itália': 'IT', 'italy': 'IT', 'alemanha': 'DE', 'germany': 'DE',
-  'reino unido': 'GB', 'inglaterra': 'GB', 'united kingdom': 'GB',
-  'japao': 'JP', 'japão': 'JP', 'japan': 'JP', 'china': 'CN',
+  'brasil': 'BR', 'brazil': 'BR', 'brasileiro': 'BR', 'brasileira': 'BR',
+  'estados unidos': 'US', 'eua': 'US', 'usa': 'US', 'united states': 'US', 'americano': 'US', 'americana': 'US',
+  'portugal': 'PT', 'português': 'PT', 'portuguesa': 'PT',
+  'argentina': 'AR', 'argentino': 'AR', 'argentina (nacionalidade)': 'AR',
+  'chile': 'CL', 'chileno': 'CL', 'chilena': 'CL',
+  'uruguai': 'UY', 'uruguay': 'UY', 'uruguaio': 'UY', 'uruguaia': 'UY',
+  'paraguai': 'PY', 'paraguay': 'PY', 'paraguaio': 'PY', 'paraguaia': 'PY',
+  'bolivia': 'BO', 'bolívia': 'BO', 'boliviano': 'BO', 'boliviana': 'BO',
+  'colombia': 'CO', 'colômbia': 'CO', 'colombiano': 'CO', 'colombiana': 'CO',
+  'peru': 'PE', 'peruano': 'PE', 'peruana': 'PE',
+  'equador': 'EC', 'ecuador': 'EC', 'equatoriano': 'EC', 'equatoriana': 'EC',
+  'venezuela': 'VE', 'venezuelano': 'VE', 'venezuelana': 'VE',
+  'mexico': 'MX', 'méxico': 'MX', 'mexicano': 'MX', 'mexicana': 'MX',
+  'canada': 'CA', 'canadá': 'CA', 'canadense': 'CA',
+  'espanha': 'ES', 'spain': 'ES', 'espanhol': 'ES', 'espanhola': 'ES',
+  'franca': 'FR', 'frança': 'FR', 'france': 'FR', 'francês': 'FR', 'francesa': 'FR',
+  'italia': 'IT', 'itália': 'IT', 'italy': 'IT', 'italiano': 'IT', 'italiana': 'IT',
+  'alemanha': 'DE', 'germany': 'DE', 'alemão': 'DE', 'alemã': 'DE',
+  'reino unido': 'GB', 'inglaterra': 'GB', 'united kingdom': 'GB', 'inglês': 'GB', 'inglesa': 'GB', 'britânico': 'GB', 'britânica': 'GB',
+  'japao': 'JP', 'japão': 'JP', 'japan': 'JP', 'japonês': 'JP', 'japonesa': 'JP',
+  'china': 'CN', 'chinês': 'CN', 'chinesa': 'CN',
 };
 function paraSiglaPais(nomePais) {
   const chave = String(nomePais || '').trim().toLowerCase();
@@ -223,8 +234,7 @@ export async function POST(request) {
         // Gênero e nacionalidade — campos padrão que faltavam no envio
         gender: GENERO_CLOUDBEDS[ficha.genero] || '',
         guestGender: GENERO_CLOUDBEDS[ficha.genero] || '',
-        guestNationality: ficha.nacionalidade || '',
-        nationality: ficha.nacionalidade || '',
+        guestNationality: paraSiglaPais(ficha.nacionalidade), nationality: paraSiglaPais(ficha.nacionalidade),
         // Campos personalizados deste hotel — nomes exatos confirmados
         // via getCustomFields (customFieldID 33748 = CPF, 33749 = Profissão)
         'customFields[0][customFieldID]': '33748',
