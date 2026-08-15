@@ -23,6 +23,10 @@ const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 // são de texto livre, não códigos)
 const MOTIVO_VIAGEM_TEXTO = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
 const MEIO_TRANSPORTE_TEXTO = { AVIAO: 'Avião', AUTOMOVEL: 'Automóvel', ONIBUS: 'Ônibus', TREM: 'Trem', OUTRO: 'Outro' };
+// Códigos confirmados na documentação oficial da Cloudbeds para o tipo de
+// documento (só vimos 4 dos 8 valores possíveis — "dni" e "passport" são
+// a melhor aposta para RG/Passaporte, podem precisar de ajuste)
+const DOC_TIPO_CLOUDBEDS = { CPF: 'cpf', RG: 'dni', PASSAPORTE: 'passport' };
 
 // A Cloudbeds exige o país como sigla de 2 letras (ISO 3166-1 alpha-2),
 // não o nome por extenso — por isso convertemos aqui. Cobre os nomes
@@ -233,6 +237,14 @@ export async function POST(request) {
         // Documento — mandando o tipo em português puro (sem tentar
         // "adivinhar" um valor em inglês, que pode estar inválido e
         // travando o campo inteiro)
+        // Documento — nomes de campo CONFIRMADOS na documentação oficial
+        // (todos com prefixo "guest"), e o tipo usa um código específico,
+        // não o nome por extenso: "cpf" = CPF brasileiro, "dni" = RG
+        // (carteira de identidade), "passport" = passaporte.
+        guestDocumentType: DOC_TIPO_CLOUDBEDS[ficha.tipo_documento] || '',
+        guestDocumentNumber: ficha.numero_documento || '',
+        guestDocumentIssuingCountry: siglaPais,
+        // Mantém as variações antigas também, por garantia
         documentType: ficha.tipo_documento || '',
         documentNumber: ficha.numero_documento || '',
         documentIssuingCountry: siglaPais,
@@ -252,11 +264,13 @@ export async function POST(request) {
         { customFieldID: '48195', customFieldName: 'Motivo da viagem', customFieldValue: MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
         { customFieldID: '48196', customFieldName: 'Meio de transporte', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
       ];
-      corpoGuest.set('customFields', JSON.stringify(listaCamposPersonalizados));
+      // Nome do campo CONFIRMADO na documentação oficial: "guestCustomFields"
+      // (não "customFields" — esse era o erro este tempo todo!)
+      corpoGuest.set('guestCustomFields', JSON.stringify(listaCamposPersonalizados));
       listaCamposPersonalizados.forEach((campo, indice) => {
-        corpoGuest.set(`customFields[${indice}][customFieldID]`, campo.customFieldID);
-        corpoGuest.set(`customFields[${indice}][customFieldName]`, campo.customFieldName);
-        corpoGuest.set(`customFields[${indice}][customFieldValue]`, campo.customFieldValue);
+        corpoGuest.set(`guestCustomFields[${indice}][customFieldID]`, campo.customFieldID);
+        corpoGuest.set(`guestCustomFields[${indice}][customFieldName]`, campo.customFieldName);
+        corpoGuest.set(`guestCustomFields[${indice}][customFieldValue]`, campo.customFieldValue);
       });
 
       const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
