@@ -43,6 +43,8 @@ function validarCPF(cpf) {
   let dv2 = (soma * 10) % 11; if (dv2 === 10) dv2 = 0;
   return dv2 === Number(d[10]);
 }
+function hoje() { return new Date().toISOString().slice(0, 10); }
+
 function formatarCEP(texto) {
   const d = String(texto || '').replace(/\D/g, '').slice(0, 8);
   if (d.length <= 5) return d;
@@ -101,6 +103,8 @@ function FichaHospede() {
   const [destinoPais, setDestinoPais] = useState('Brasil');
   const [destinoEstado, setDestinoEstado] = useState('');
   const [destinoCidade, setDestinoCidade] = useState('');
+  const [dataCheckin, setDataCheckin] = useState('');
+  const [dataCheckout, setDataCheckout] = useState('');
 
   const [enviando, setEnviando] = useState(false);
   const [erroForm, setErroForm] = useState('');
@@ -189,6 +193,10 @@ function FichaHospede() {
     if (!destinoPais.trim() || !destinoEstado.trim() || !destinoCidade.trim()) {
       setErroForm('Preencha para onde você vai depois (país, estado e cidade).'); return;
     }
+    if (!dataCheckin) { setErroForm('Informe a data de check-in.'); return; }
+    if (dataCheckin < hoje()) { setErroForm('A data de check-in não pode ser antes de hoje.'); return; }
+    if (!dataCheckout) { setErroForm('Informe a data de check-out.'); return; }
+    if (dataCheckout <= dataCheckin) { setErroForm('A data de check-out precisa ser pelo menos 1 dia depois do check-in.'); return; }
 
     setEnviando(true);
     const { error } = await supabase.from('fichas_fnrh').insert({
@@ -205,6 +213,7 @@ function FichaHospede() {
       procedencia_cidade: procedenciaCidade.trim() || null,
       destino_pais: destinoPais.trim() || null, destino_estado: destinoEstado.trim() || null,
       destino_cidade: destinoCidade.trim() || null,
+      data_checkin: dataCheckin, data_checkout: dataCheckout,
     });
     setEnviando(false);
 
@@ -384,6 +393,20 @@ function FichaHospede() {
             <input className="campo" type="text" value={destinoPais} onChange={(e) => setDestinoPais(e.target.value)} placeholder="País" />
             <input className="campo" type="text" value={destinoEstado} onChange={(e) => setDestinoEstado(e.target.value)} placeholder="Estado" />
             <input className="campo" type="text" value={destinoCidade} onChange={(e) => setDestinoCidade(e.target.value)} placeholder="Cidade" />
+          </div>
+
+          <div className="fnrh-secao">Data da hospedagem</div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Data de check-in *</label>
+              <input className="campo" type="date" min={hoje()} value={dataCheckin}
+                onChange={(e) => setDataCheckin(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Data de check-out *</label>
+              <input className="campo" type="date" min={dataCheckin || hoje()} value={dataCheckout}
+                onChange={(e) => setDataCheckout(e.target.value)} />
+            </div>
           </div>
 
           {erroForm && <div className="aviso-erro">{erroForm}</div>}
