@@ -1,418 +1,439 @@
 'use client';
 
 // ============================================================================
-// FICHAS DE HÓSPEDES (FNRH) + INTEGRAÇÃO CLOUDBEDS — painel do hotel
-// Qualquer pessoa da equipe (ADMIN, COLABORADOR ou CONTADOR) acessa a aba
-// "Fichas Recebidas", para poder alimentar a Cloudbeds no dia a dia. Já a
-// aba "Configurar Cloudbeds" (a chave da API) e o "Log de Auditoria"
-// continuam só para ADMIN — são ações mais sensíveis.
+// FICHA FNRH (Ficha Nacional de Registro de Hóspedes) — PÁGINA PÚBLICA
+// ============================================================================
+// Acesso: /ficha-hospede?hotel_id=NÚMERO — sem necessidade de login. Pensada
+// para ser compartilhada com o hóspede antes da chegada (por WhatsApp,
+// e-mail, ou um QR code na recepção).
 // ============================================================================
 
-import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 
-function formatarData(valor) {
-  if (!valor) return '—';
-  const [ano, mes, dia] = String(valor).slice(0, 10).split('-');
-  return `${dia}/${mes}/${ano}`;
+const GENEROS = ['Masculino', 'Feminino', 'Outro', 'Prefiro não informar'];
+const MOTIVOS_VIAGEM = [
+  { valor: 'LAZER', rotulo: 'Lazer' }, { valor: 'NEGOCIOS', rotulo: 'Negócios' },
+  { valor: 'EVENTOS', rotulo: 'Eventos' }, { valor: 'PARENTES', rotulo: 'Visita a parentes' },
+  { valor: 'SAUDE', rotulo: 'Saúde' }, { valor: 'OUTRO', rotulo: 'Outro' },
+];
+const MEIOS_TRANSPORTE = [
+  { valor: 'AVIAO', rotulo: 'Avião' }, { valor: 'AUTOMOVEL', rotulo: 'Automóvel' },
+  { valor: 'ONIBUS', rotulo: 'Ônibus' }, { valor: 'TREM', rotulo: 'Trem' }, { valor: 'OUTRO', rotulo: 'Outro' },
+];
+
+function formatarCPF(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+  if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 }
-function formatarDataHora(valor) {
-  if (!valor) return '—';
-  try {
-    return new Date(valor).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-  } catch (e) { return String(valor); }
+function validarCPF(cpf) {
+  const d = String(cpf || '').replace(/\D/g, '');
+  if (d.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false;
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += Number(d[i]) * (10 - i);
+  let dv1 = (soma * 10) % 11; if (dv1 === 10) dv1 = 0;
+  if (dv1 !== Number(d[9])) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += Number(d[i]) * (11 - i);
+  let dv2 = (soma * 10) % 11; if (dv2 === 10) dv2 = 0;
+  return dv2 === Number(d[10]);
+}
+function hoje() { return new Date().toISOString().slice(0, 10); }
+
+function formatarCEP(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 8);
+  if (d.length <= 5) return d;
+  return `${d.slice(0, 5)}-${d.slice(5)}`;
+}
+function formatarTelefoneBR(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
 
-const MOTIVO_LABEL = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
+export default function FichaHospedePagina() {
+  return (
+    <Suspense fallback={<main className="conteudo"><p className="texto-suave">Carregando…</p></main>}>
+      <FichaHospede />
+    </Suspense>
+  );
+}
 
-export default function FichasHospedes() {
-  const router = useRouter();
-  const [verificandoLogin, setVerificandoLogin] = useState(true);
-  const [usuario, setUsuario] = useState(null);
-  const [subAba, setSubAba] = useState('fichas');
+function FichaHospede() {
+  const parametros = useSearchParams();
+  const hotelId = parametros.get('hotel_id');
+
+  const [carregandoHotel, setCarregandoHotel] = useState(true);
+  const [nomeHotel, setNomeHotel] = useState('');
+  const [erroHotel, setErroHotel] = useState('');
+
+  const [nomeCompleto, setNomeCompleto] = useState('');
+  const [email, setEmail] = useState('');
+  const [telefone, setTelefone] = useState('');
+  const [dataNascimento, setDataNascimento] = useState('');
+  const [genero, setGenero] = useState('');
+  const [nacionalidade, setNacionalidade] = useState('Brasileira');
+  const [profissao, setProfissao] = useState('');
+
+  const [tipoDocumento, setTipoDocumento] = useState('CPF');
+  const [numeroDocumento, setNumeroDocumento] = useState('');
+  const [orgaoExpedidor, setOrgaoExpedidor] = useState('');
+
+  const [cep, setCep] = useState('');
+  const [endereco, setEndereco] = useState('');
+  const [numeroEndereco, setNumeroEndereco] = useState('');
+  const [complemento, setComplemento] = useState('');
+  const [bairro, setBairro] = useState('');
+  const [cidade, setCidade] = useState('');
+  const [estado, setEstado] = useState('');
+  const [pais, setPais] = useState('Brasil');
+
+  const [motivoViagem, setMotivoViagem] = useState('LAZER');
+  const [meioTransporte, setMeioTransporte] = useState('AUTOMOVEL');
+  const [procedenciaPais, setProcedenciaPais] = useState('Brasil');
+  const [procedenciaEstado, setProcedenciaEstado] = useState('');
+  const [procedenciaCidade, setProcedenciaCidade] = useState('');
+  const [destinoPais, setDestinoPais] = useState('Brasil');
+  const [destinoEstado, setDestinoEstado] = useState('');
+  const [destinoCidade, setDestinoCidade] = useState('');
+  const [dataCheckin, setDataCheckin] = useState('');
+  const [dataCheckout, setDataCheckout] = useState('');
+
+  const [enviando, setEnviando] = useState(false);
+  const [erroForm, setErroForm] = useState('');
+  const [enviado, setEnviado] = useState(false);
+  const [buscandoCpf, setBuscandoCpf] = useState(false);
+  const [cpfEncontrado, setCpfEncontrado] = useState(false);
+  const [buscandoCep, setBuscandoCep] = useState(false);
+  const [cepEncontrado, setCepEncontrado] = useState(false);
 
   useEffect(() => {
-    let ativo = true;
-    async function verificar() {
-      const { data: sessao } = await supabase.auth.getSession();
-      if (!sessao?.session) { router.push('/login'); return; }
-      const { data: dadosUsuario, error } = await supabase
-        .from('usuarios').select('*').eq('auth_id', sessao.session.user.id).single();
-      if (error || !dadosUsuario) { router.push('/login'); return; }
-      // Qualquer papel pode entrar aqui — só as ações mais sensíveis
-      // dentro da tela (configurar Cloudbeds, ver o log) ficam travadas
-      // para ADMIN, mais abaixo.
-      if (!ativo) return;
-      setUsuario(dadosUsuario);
-      setVerificandoLogin(false);
-    }
-    verificar();
-    return () => { ativo = false; };
-  }, [router]);
+    if (!hotelId) { setErroHotel('Link inválido — faltou identificar o hotel.'); setCarregandoHotel(false); return; }
+    supabase.from('hoteis').select('nome_fantasia').eq('id', hotelId).single()
+      .then(({ data, error }) => {
+        if (error || !data) { setErroHotel('Não foi possível identificar o hotel deste link.'); }
+        else { setNomeHotel(data.nome_fantasia); }
+        setCarregandoHotel(false);
+      });
+  }, [hotelId]);
 
-  if (verificandoLogin) {
-    return <main className="conteudo"><p className="texto-suave">Verificando seu acesso…</p></main>;
+  // Busca automática dos dados pessoais assim que o CPF é digitado por completo
+  async function buscarPorCpf(valorCpf) {
+    const digitos = String(valorCpf || '').replace(/\D/g, '');
+    if (digitos.length !== 11 || !validarCPF(digitos)) return;
+    setBuscandoCpf(true);
+    setCpfEncontrado(false);
+    try {
+      const resposta = await fetch(`/api/directd-cpf?cpf=${digitos}`);
+      const dados = await resposta.json();
+      if (resposta.ok && dados?.nomeCompleto) {
+        setNomeCompleto(dados.nomeCompleto);
+        if (dados.genero) setGenero(dados.genero);
+        if (dados.dataNascimento) setDataNascimento(dados.dataNascimento);
+        setCpfEncontrado(true);
+      }
+    } catch (e) { /* silencioso — a pessoa ainda pode preencher manualmente */ }
+    setBuscandoCpf(false);
   }
 
-  const souAdmin = usuario.papel === 'ADMIN';
+  // Busca automática do endereço assim que o CEP é digitado por completo (ViaCEP)
+  async function buscarPorCep(valorCep) {
+    const digitos = String(valorCep || '').replace(/\D/g, '');
+    if (digitos.length !== 8) return;
+    setBuscandoCep(true);
+    setCepEncontrado(false);
+    try {
+      const resposta = await fetch(`https://viacep.com.br/ws/${digitos}/json/`);
+      const dados = await resposta.json();
+      if (!dados?.erro) {
+        setEndereco(dados.logradouro || '');
+        setBairro(dados.bairro || '');
+        setCidade(dados.localidade || '');
+        setEstado(dados.uf || '');
+        setCepEncontrado(true);
+      }
+    } catch (e) { /* silencioso — a pessoa ainda pode preencher manualmente */ }
+    setBuscandoCep(false);
+  }
+
+  async function enviar(evento) {
+    evento.preventDefault();
+    if (enviando) return;
+    setErroForm('');
+
+    if (!nomeCompleto.trim()) { setErroForm('Informe seu nome completo.'); return; }
+    if (!email.trim()) { setErroForm('Informe seu e-mail.'); return; }
+    if (!telefone.trim()) { setErroForm('Informe seu telefone/WhatsApp.'); return; }
+    if (!dataNascimento) { setErroForm('Informe sua data de nascimento.'); return; }
+    if (!genero) { setErroForm('Selecione seu gênero.'); return; }
+    if (!nacionalidade.trim()) { setErroForm('Informe sua nacionalidade.'); return; }
+    if (!profissao.trim()) { setErroForm('Informe sua profissão.'); return; }
+    if (!numeroDocumento.trim()) { setErroForm('Informe o número do documento.'); return; }
+    if (tipoDocumento === 'CPF' && !validarCPF(numeroDocumento)) {
+      setErroForm('O CPF informado não é válido — confira os números.'); return;
+    }
+    if (tipoDocumento === 'RG' && !orgaoExpedidor.trim()) { setErroForm('Informe o órgão expedidor do RG.'); return; }
+    if (!cep.trim()) { setErroForm('Informe o CEP da sua residência.'); return; }
+    if (!endereco.trim()) { setErroForm('Informe o endereço.'); return; }
+    if (!numeroEndereco.trim()) { setErroForm('Informe o número da residência.'); return; }
+    if (!bairro.trim()) { setErroForm('Informe o bairro.'); return; }
+    if (!cidade.trim()) { setErroForm('Informe a cidade.'); return; }
+    if (!estado.trim()) { setErroForm('Informe o estado.'); return; }
+    if (!pais.trim()) { setErroForm('Informe o país.'); return; }
+    if (!procedenciaPais.trim() || !procedenciaEstado.trim() || !procedenciaCidade.trim()) {
+      setErroForm('Preencha de onde você está vindo (país, estado e cidade).'); return;
+    }
+    if (!destinoPais.trim() || !destinoEstado.trim() || !destinoCidade.trim()) {
+      setErroForm('Preencha para onde você vai depois (país, estado e cidade).'); return;
+    }
+    if (!dataCheckin) { setErroForm('Informe a data de check-in.'); return; }
+    if (dataCheckin < hoje()) { setErroForm('A data de check-in não pode ser antes de hoje.'); return; }
+    if (!dataCheckout) { setErroForm('Informe a data de check-out.'); return; }
+    if (dataCheckout <= dataCheckin) { setErroForm('A data de check-out precisa ser pelo menos 1 dia depois do check-in.'); return; }
+
+    setEnviando(true);
+    const { error } = await supabase.from('fichas_fnrh').insert({
+      hotel_id: Number(hotelId),
+      nome_completo: nomeCompleto.trim(), email: email.trim(), telefone: telefone.trim(),
+      data_nascimento: dataNascimento || null, genero: genero || null,
+      nacionalidade: nacionalidade.trim() || null, profissao: profissao.trim() || null,
+      tipo_documento: tipoDocumento, numero_documento: numeroDocumento.trim(), orgao_expedidor: orgaoExpedidor.trim() || null,
+      cep: cep.trim() || null, endereco: endereco.trim() || null, numero_endereco: numeroEndereco.trim() || null,
+      complemento: complemento.trim() || null, bairro: bairro.trim() || null, cidade: cidade.trim() || null,
+      estado: estado.trim() || null, pais: pais.trim() || null,
+      motivo_viagem: motivoViagem, meio_transporte: meioTransporte,
+      procedencia_pais: procedenciaPais.trim() || null, procedencia_estado: procedenciaEstado.trim() || null,
+      procedencia_cidade: procedenciaCidade.trim() || null,
+      destino_pais: destinoPais.trim() || null, destino_estado: destinoEstado.trim() || null,
+      destino_cidade: destinoCidade.trim() || null,
+      data_checkin: dataCheckin, data_checkout: dataCheckout,
+    });
+    setEnviando(false);
+
+    if (error) { setErroForm('Não foi possível enviar. Detalhe técnico: ' + error.message); return; }
+    setEnviado(true);
+  }
+
+  if (carregandoHotel) {
+    return <main className="conteudo"><p className="texto-suave">Carregando…</p></main>;
+  }
+
+  if (erroHotel) {
+    return <main className="conteudo"><div className="aviso-erro">{erroHotel}</div></main>;
+  }
+
+  if (enviado) {
+    return (
+      <main className="conteudo">
+        <div className="cartao" style={{ textAlign: 'center', padding: '32px 20px', maxWidth: 520, margin: '40px auto' }}>
+          <h1 style={{ fontSize: '1.4rem' }}>✅ Ficha enviada com sucesso!</h1>
+          <p className="texto-suave">Obrigado por preencher seus dados para o <strong>{nomeHotel}</strong>. Nos vemos em breve!</p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="conteudo">
-      <EstilosFichasAdmin />
-      <span className="olho">Hóspedes</span>
-      <h1 style={{ marginBottom: 6 }}>Fichas de Hóspedes (FNRH)</h1>
-      <p className="texto-suave" style={{ fontSize: 13, marginTop: -4 }}>Visualize, vincule e exporte para a Cloudbeds.</p>
+      <EstilosFicha />
+      <div style={{ maxWidth: 640, margin: '0 auto' }}>
+        <span className="olho">Ficha Nacional de Registro de Hóspedes</span>
+        <h1 style={{ marginBottom: 6 }}>{nomeHotel}</h1>
+        <p className="texto-suave">Preencha seus dados abaixo — leva menos de 3 minutos.</p>
 
-      <div className="cartao" style={{ background: 'var(--marca-clara)', marginTop: 14, marginBottom: 4 }}>
-        <p style={{ fontSize: 13, margin: 0 }}>
-          📋 Link público para o hóspede preencher a ficha antes da chegada:<br />
-          <code style={{ fontSize: 12, wordBreak: 'break-all' }}>
-            {typeof window !== 'undefined' ? window.location.origin : ''}/ficha-hospede?hotel_id={usuario.hotel_id}
-          </code>
-        </p>
+        <form className="cartao" onSubmit={enviar} style={{ marginTop: 16 }}>
+          <div className="fnrh-secao">Documentação</div>
+          <p className="texto-suave" style={{ fontSize: 13, marginTop: -4 }}>
+            Comece digitando seu CPF — se encontrarmos seus dados, preenchemos o resto para você.
+          </p>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Tipo de documento</label>
+              <select className="campo" value={tipoDocumento} onChange={(e) => { setTipoDocumento(e.target.value); setNumeroDocumento(''); setCpfEncontrado(false); }}>
+                <option value="CPF">CPF</option>
+                <option value="RG">RG</option>
+                <option value="PASSAPORTE">Passaporte</option>
+              </select>
+            </div>
+            <div>
+              <label className="rotulo">Número do documento *</label>
+              <input className="campo" type="text" inputMode={tipoDocumento === 'CPF' ? 'numeric' : 'text'} value={numeroDocumento}
+                onChange={(e) => {
+                  const novoValor = tipoDocumento === 'CPF' ? formatarCPF(e.target.value) : e.target.value;
+                  setNumeroDocumento(novoValor);
+                  setCpfEncontrado(false);
+                  if (tipoDocumento === 'CPF') buscarPorCpf(novoValor);
+                }}
+                placeholder={tipoDocumento === 'CPF' ? '000.000.000-00' : ''} />
+              {tipoDocumento === 'CPF' && buscandoCpf && <p className="fnrh-buscando">🔎 Buscando seus dados…</p>}
+              {tipoDocumento === 'CPF' && !buscandoCpf && cpfEncontrado && <p className="fnrh-doc-ok">✓ Dados encontrados e preenchidos abaixo!</p>}
+              {tipoDocumento === 'CPF' && !buscandoCpf && !cpfEncontrado && numeroDocumento.trim() && (
+                validarCPF(numeroDocumento)
+                  ? <p className="fnrh-doc-ok">✓ CPF válido</p>
+                  : <p className="fnrh-doc-erro">✗ CPF inválido</p>
+              )}
+            </div>
+          </div>
+          <label className="rotulo">Órgão expedidor {tipoDocumento === 'RG' ? '*' : '(se RG)'}</label>
+          <input className="campo" type="text" value={orgaoExpedidor} onChange={(e) => setOrgaoExpedidor(e.target.value)} placeholder="Ex.: SSP/PB" />
+
+          <div className="fnrh-secao">Dados pessoais</div>
+          <label className="rotulo">Nome completo *{cpfEncontrado && <span className="fnrh-travado"> 🔒 preenchido automaticamente</span>}</label>
+          <input className="campo" type="text" value={nomeCompleto} onChange={(e) => setNomeCompleto(e.target.value)} readOnly={cpfEncontrado} />
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">E-mail *</label>
+              <input className="campo" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Telefone / WhatsApp *</label>
+              <input className="campo" type="tel" inputMode="numeric" value={telefone}
+                onChange={(e) => setTelefone(formatarTelefoneBR(e.target.value))} placeholder="(00) 90000-0000" />
+            </div>
+          </div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Data de nascimento *{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="date" value={dataNascimento} onChange={(e) => setDataNascimento(e.target.value)} readOnly={cpfEncontrado} />
+            </div>
+            <div>
+              <label className="rotulo">Gênero *{cpfEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <select className="campo" value={genero} onChange={(e) => setGenero(e.target.value)} disabled={cpfEncontrado}>
+                <option value="">Selecione…</option>
+                {GENEROS.map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Nacionalidade *</label>
+              <input className="campo" type="text" value={nacionalidade} onChange={(e) => setNacionalidade(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Profissão *</label>
+              <input className="campo" type="text" value={profissao} onChange={(e) => setProfissao(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="fnrh-secao">Residência permanente</div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">CEP *</label>
+              <input className="campo" type="text" inputMode="numeric" value={cep}
+                onChange={(e) => { const novoValor = formatarCEP(e.target.value); setCep(novoValor); buscarPorCep(novoValor); }} />
+              {buscandoCep && <p className="fnrh-buscando">🔎 Buscando endereço…</p>}
+              {!buscandoCep && cepEncontrado && <p className="fnrh-doc-ok">✓ Endereço encontrado!</p>}
+            </div>
+            <div>
+              <label className="rotulo">Endereço *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={endereco} onChange={(e) => setEndereco(e.target.value)} readOnly={cepEncontrado} />
+            </div>
+          </div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Número *</label>
+              <input className="campo" type="text" value={numeroEndereco} onChange={(e) => setNumeroEndereco(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Complemento</label>
+              <input className="campo" type="text" value={complemento} onChange={(e) => setComplemento(e.target.value)} />
+            </div>
+          </div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Bairro *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={bairro} onChange={(e) => setBairro(e.target.value)} readOnly={cepEncontrado} />
+            </div>
+            <div>
+              <label className="rotulo">Cidade *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={cidade} onChange={(e) => setCidade(e.target.value)} readOnly={cepEncontrado} />
+            </div>
+          </div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Estado *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={estado} onChange={(e) => setEstado(e.target.value)} readOnly={cepEncontrado} />
+            </div>
+            <div>
+              <label className="rotulo">País *{cepEncontrado && <span className="fnrh-travado"> 🔒</span>}</label>
+              <input className="campo" type="text" value={pais} onChange={(e) => setPais(e.target.value)} readOnly={cepEncontrado} />
+            </div>
+          </div>
+
+          <div className="fnrh-secao">Dados da viagem</div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Motivo da viagem</label>
+              <select className="campo" value={motivoViagem} onChange={(e) => setMotivoViagem(e.target.value)}>
+                {MOTIVOS_VIAGEM.map((m) => <option key={m.valor} value={m.valor}>{m.rotulo}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="rotulo">Meio de transporte</label>
+              <select className="campo" value={meioTransporte} onChange={(e) => setMeioTransporte(e.target.value)}>
+                {MEIOS_TRANSPORTE.map((m) => <option key={m.valor} value={m.valor}>{m.rotulo}</option>)}
+              </select>
+            </div>
+          </div>
+          <p className="rotulo" style={{ marginTop: 10 }}>De onde você está vindo *</p>
+          <div className="fnrh-tres">
+            <input className="campo" type="text" value={procedenciaPais} onChange={(e) => setProcedenciaPais(e.target.value)} placeholder="País" />
+            <input className="campo" type="text" value={procedenciaEstado} onChange={(e) => setProcedenciaEstado(e.target.value)} placeholder="Estado" />
+            <input className="campo" type="text" value={procedenciaCidade} onChange={(e) => setProcedenciaCidade(e.target.value)} placeholder="Cidade" />
+          </div>
+          <p className="rotulo" style={{ marginTop: 10 }}>Para onde você vai depois *</p>
+          <div className="fnrh-tres">
+            <input className="campo" type="text" value={destinoPais} onChange={(e) => setDestinoPais(e.target.value)} placeholder="País" />
+            <input className="campo" type="text" value={destinoEstado} onChange={(e) => setDestinoEstado(e.target.value)} placeholder="Estado" />
+            <input className="campo" type="text" value={destinoCidade} onChange={(e) => setDestinoCidade(e.target.value)} placeholder="Cidade" />
+          </div>
+
+          <div className="fnrh-secao">Data da hospedagem</div>
+          <div className="fnrh-duas">
+            <div>
+              <label className="rotulo">Data de check-in *</label>
+              <input className="campo" type="date" min={hoje()} value={dataCheckin}
+                onChange={(e) => setDataCheckin(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Data de check-out *</label>
+              <input className="campo" type="date" min={dataCheckin || hoje()} value={dataCheckout}
+                onChange={(e) => setDataCheckout(e.target.value)} />
+            </div>
+          </div>
+
+          {erroForm && <div className="aviso-erro">{erroForm}</div>}
+          <button type="submit" className="botao botao-principal" disabled={enviando} style={{ marginTop: 16, width: '100%' }}>
+            {enviando ? 'Enviando…' : 'Enviar Ficha'}
+          </button>
+        </form>
       </div>
-
-      <nav className="fh-abas" aria-label="Seções">
-        <button type="button" className={subAba === 'fichas' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('fichas')}>Fichas Recebidas</button>
-        {souAdmin && (
-          <button type="button" className={subAba === 'config' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('config')}>Configurar Cloudbeds</button>
-        )}
-        {souAdmin && (
-          <button type="button" className={subAba === 'log' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('log')}>Log de Auditoria</button>
-        )}
-      </nav>
-
-      {subAba === 'fichas' && <PainelFichas usuario={usuario} />}
-      {subAba === 'config' && souAdmin && <PainelConfigCloudbeds />}
-      {subAba === 'log' && souAdmin && <PainelLogFichas usuario={usuario} />}
     </main>
   );
 }
 
-// ============================================================================
-// ABA: FICHAS RECEBIDAS
-// ============================================================================
-
-function PainelFichas({ usuario }) {
-  const [fichas, setFichas] = useState([]);
-  const [carregando, setCarregando] = useState(true);
-  const [erro, setErro] = useState('');
-  const [aviso, setAviso] = useState('');
-  const [busca, setBusca] = useState('');
-  const [filtroStatus, setFiltroStatus] = useState('TODOS');
-  const [reservaPorFicha, setReservaPorFicha] = useState({});
-  const [exportando, setExportando] = useState(null);
-  const [fichaAberta, setFichaAberta] = useState(null);
-
-  function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 6000); }
-
-  const carregar = useCallback(async () => {
-    setCarregando(true);
-    const { data, error } = await supabase.from('fichas_fnrh').select('*').order('criado_em', { ascending: false });
-    if (error) setErro('Não foi possível carregar. Detalhe técnico: ' + error.message);
-    setFichas(data || []);
-    setCarregando(false);
-  }, []);
-
-  useEffect(() => { carregar(); }, [carregar]);
-
-  async function registrarLog(fichaId, acao, detalhe) {
-    await supabase.from('fichas_fnrh_log').insert({
-      usuario_id: usuario.id, ficha_id: fichaId, acao, detalhe, hotel_id: usuario.hotel_id,
-    });
-  }
-
-  function verDetalhes(ficha) {
-    const abrindo = fichaAberta !== ficha.id;
-    setFichaAberta(abrindo ? ficha.id : null);
-    if (abrindo) registrarLog(ficha.id, 'VISUALIZACAO', `Dados de ${ficha.nome_completo} visualizados.`);
-  }
-
-  async function exportar(ficha) {
-    const reservationId = (reservaPorFicha[ficha.id] || '').trim();
-    if (!reservationId) { setErro('Informe o número da reserva na Cloudbeds antes de exportar.'); return; }
-    setExportando(ficha.id);
-    setErro('');
-    const { data: sessao } = await supabase.auth.getSession();
-    try {
-      const resposta = await fetch('/api/cloudbeds-exportar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
-        body: JSON.stringify({ fichaId: ficha.id, reservationId }),
-      });
-      const resultado = await resposta.json();
-      setExportando(null);
-      if (!resposta.ok || resultado.erro) { setErro(resultado.erro || 'Não foi possível exportar.'); return; }
-      mostrarAviso(`Dados de ${ficha.nome_completo} exportados para a reserva ${reservationId} na Cloudbeds!`);
-      carregar();
-    } catch (e) {
-      setExportando(null);
-      setErro('Falha de conexão com o servidor. Tente novamente.');
-    }
-  }
-
-  const termo = busca.trim().toLowerCase();
-  const filtradas = fichas
-    .filter((f) => filtroStatus === 'TODOS' ? true : f.status === filtroStatus)
-    .filter((f) => !termo || f.nome_completo.toLowerCase().includes(termo) || f.numero_documento.toLowerCase().includes(termo));
-
-  if (carregando) return <p className="texto-suave">Carregando…</p>;
-
-  return (
-    <section>
-      {aviso && <div className="aviso-sucesso">{aviso}</div>}
-      {erro && <div className="aviso-erro">{erro}</div>}
-
-      <div className="fh-barra">
-        <input className="campo" type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nome ou documento…" />
-        <select className="campo" value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)}>
-          <option value="TODOS">Todos os status</option>
-          <option value="PENDENTE">Aguardando exportação</option>
-          <option value="EXPORTADO">Já exportadas</option>
-        </select>
-      </div>
-
-      {filtradas.length === 0 ? (
-        <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>Nenhuma ficha encontrada.</div>
-      ) : (
-        <div className="fh-lista">
-          {filtradas.map((f) => (
-            <div key={f.id} className="cartao fh-item">
-              <div className="fh-item-esq">
-                <div className="fh-item-topo">
-                  <strong>{f.nome_completo}</strong>
-                  <span className="fh-badge" style={f.status === 'EXPORTADO' ? { background: '#DDF2E4', color: '#1E6B3C' } : { background: '#FDF3D7', color: '#8A6100' }}>
-                    {f.status === 'EXPORTADO' ? 'Exportada' : 'Aguardando exportação'}
-                  </span>
-                </div>
-                <div className="texto-suave" style={{ fontSize: 13 }}>
-                  {f.tipo_documento} {f.numero_documento} · {f.email} · {f.telefone}
-                </div>
-                {(f.data_checkin || f.data_checkout) && (
-                  <div className="fh-badge-estadia">
-                    🗓️ Estadia: {formatarData(f.data_checkin)} até {formatarData(f.data_checkout)}
-                  </div>
-                )}
-                <div className="texto-suave" style={{ fontSize: 12 }}>
-                  Enviada em {formatarDataHora(f.criado_em)}
-                  {f.status === 'EXPORTADO' && ` · Exportada para a reserva ${f.cloudbeds_reservation_id} em ${formatarDataHora(f.exportado_em)}`}
-                </div>
-                <button type="button" className="fh-ver-mais" onClick={() => verDetalhes(f)}>
-                  {fichaAberta === f.id ? 'Ver menos ▲' : 'Ver todos os dados ▼'}
-                </button>
-                {fichaAberta === f.id && <DetalhesFicha ficha={f} />}
-              </div>
-              <div className="fh-item-dir">
-                {f.status === 'PENDENTE' ? (
-                  <>
-                    <input className="campo fh-input-reserva" type="text" placeholder="Nº da reserva Cloudbeds"
-                      value={reservaPorFicha[f.id] || ''} onChange={(e) => setReservaPorFicha({ ...reservaPorFicha, [f.id]: e.target.value })} />
-                    <button type="button" className="botao botao-principal" onClick={() => exportar(f)} disabled={exportando === f.id}>
-                      {exportando === f.id ? 'Exportando…' : '☁️ Exportar para Cloudbeds'}
-                    </button>
-                  </>
-                ) : (
-                  <span className="texto-suave" style={{ fontSize: 13 }}>✓ Já vinculada</span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function DetalhesFicha({ ficha: f }) {
-  return (
-    <div className="fh-detalhes">
-      <div><strong>Nascimento:</strong> {formatarData(f.data_nascimento)} · <strong>Gênero:</strong> {f.genero || '—'}</div>
-      <div><strong>Nacionalidade:</strong> {f.nacionalidade || '—'} · <strong>Profissão:</strong> {f.profissao || '—'}</div>
-      <div><strong>Órgão expedidor:</strong> {f.orgao_expedidor || '—'}</div>
-      <div><strong>Endereço:</strong> {[f.endereco, f.numero_endereco, f.complemento].filter(Boolean).join(', ') || '—'}</div>
-      <div><strong>Bairro/Cidade/UF:</strong> {[f.bairro, f.cidade, f.estado].filter(Boolean).join(' · ') || '—'} · <strong>CEP:</strong> {f.cep || '—'} · {f.pais || '—'}</div>
-      <div><strong>Motivo da viagem:</strong> {MOTIVO_LABEL[f.motivo_viagem] || '—'} · <strong>Transporte:</strong> {f.meio_transporte || '—'}</div>
-      <div><strong>Procedência:</strong> {[f.procedencia_cidade, f.procedencia_estado, f.procedencia_pais].filter(Boolean).join(' - ') || '—'}</div>
-      <div><strong>Destino:</strong> {[f.destino_cidade, f.destino_estado, f.destino_pais].filter(Boolean).join(' - ') || '—'}</div>
-    </div>
-  );
-}
-
-// ============================================================================
-// ABA: CONFIGURAR CLOUDBEDS
-// ============================================================================
-
-function PainelConfigCloudbeds() {
-  const [carregando, setCarregando] = useState(true);
-  const [configurado, setConfigurado] = useState(false);
-  const [propertyIdAtual, setPropertyIdAtual] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [propertyId, setPropertyId] = useState('');
-  const [salvando, setSalvando] = useState(false);
-  const [erro, setErro] = useState('');
-  const [aviso, setAviso] = useState('');
-
-  function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 6000); }
-
-  const carregarStatus = useCallback(async () => {
-    setCarregando(true);
-    const { data: sessao } = await supabase.auth.getSession();
-    try {
-      const resposta = await fetch('/api/cloudbeds-status', {
-        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
-      });
-      const resultado = await resposta.json();
-      setConfigurado(!!resultado.configurado);
-      setPropertyIdAtual(resultado.propertyId || '');
-      setPropertyId(resultado.propertyId || '');
-    } catch (e) { /* silencioso */ }
-    setCarregando(false);
-  }, []);
-
-  useEffect(() => { carregarStatus(); }, [carregarStatus]);
-
-  async function salvar(evento) {
-    evento.preventDefault();
-    if (salvando) return;
-    setErro('');
-    if (!apiKey.trim()) { setErro('Cole a chave da API da Cloudbeds.'); return; }
-
-    setSalvando(true);
-    const { data: sessao } = await supabase.auth.getSession();
-    try {
-      const resposta = await fetch('/api/cloudbeds-salvar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
-        body: JSON.stringify({ apiKey: apiKey.trim(), propertyId: propertyId.trim() }),
-      });
-      const resultado = await resposta.json();
-      setSalvando(false);
-      if (!resposta.ok || resultado.erro) { setErro(resultado.erro || 'Não foi possível salvar.'); return; }
-      setApiKey('');
-      mostrarAviso('Credenciais da Cloudbeds salvas com segurança!');
-      carregarStatus();
-    } catch (e) {
-      setSalvando(false);
-      setErro('Falha de conexão com o servidor. Tente novamente.');
-    }
-  }
-
-  if (carregando) return <p className="texto-suave">Carregando…</p>;
-
-  return (
-    <section>
-      {aviso && <div className="aviso-sucesso">{aviso}</div>}
-      {erro && <div className="aviso-erro">{erro}</div>}
-
-      <div className="cartao" style={{ marginBottom: 16 }}>
-        <strong>Status atual: </strong>
-        {configurado
-          ? <span style={{ color: 'var(--sucesso-texto)', fontWeight: 700 }}>✓ Integração configurada</span>
-          : <span style={{ color: 'var(--erro-texto)', fontWeight: 700 }}>✗ Ainda não configurada</span>}
-        {propertyIdAtual && <p className="texto-suave" style={{ fontSize: 13, marginTop: 6 }}>Property ID atual: {propertyIdAtual}</p>}
-      </div>
-
-      <form className="cartao" onSubmit={salvar}>
-        <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>{configurado ? 'Atualizar' : 'Configurar'} credenciais</h2>
-        <p className="texto-suave" style={{ fontSize: 13 }}>
-          No painel da Cloudbeds, vá em <strong>Configurações → API Credentials</strong> e gere uma chave de
-          autoatendimento (Self-Service API Key). Cole ela aqui.
-        </p>
-
-        <label className="rotulo">Chave da API (API Key) *</label>
-        <input className="campo" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="cbat_..." autoComplete="off" />
-        <label className="rotulo">Property ID (opcional — só se o hotel tiver várias propriedades na mesma conta)</label>
-        <input className="campo" type="text" value={propertyId} onChange={(e) => setPropertyId(e.target.value)} />
-
-        <button type="submit" className="botao botao-principal" disabled={salvando} style={{ marginTop: 12 }}>
-          {salvando ? 'Salvando…' : 'Salvar credenciais'}
-        </button>
-      </form>
-
-      <p className="texto-suave" style={{ fontSize: 12, marginTop: 10 }}>
-        🔒 Por segurança, a chave nunca aparece de volta na tela depois de salva — nem para o administrador.
-        Se precisar trocar, é só colar uma nova aqui, ela substitui a anterior.
-      </p>
-    </section>
-  );
-}
-
-// ============================================================================
-// ABA: LOG DE AUDITORIA (só admin)
-// ============================================================================
-
-function PainelLogFichas({ usuario }) {
-  const [logs, setLogs] = useState([]);
-  const [nomes, setNomes] = useState({});
-  const [carregando, setCarregando] = useState(true);
-
-  useEffect(() => {
-    async function carregar() {
-      const [l, u] = await Promise.all([
-        supabase.from('fichas_fnrh_log').select('*').order('data_hora', { ascending: false }).limit(300),
-        supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id),
-      ]);
-      const mapa = {};
-      (u.data || []).forEach((p) => { mapa[p.id] = p.nome; });
-      setNomes(mapa);
-      setLogs(l.data || []);
-      setCarregando(false);
-    }
-    carregar();
-  }, [usuario.hotel_id]);
-
-  const ACAO_LABEL = { VISUALIZACAO: 'Visualização', EXPORTACAO: 'Exportação para Cloudbeds' };
-  const ACAO_COR = { VISUALIZACAO: '#1D4E89', EXPORTACAO: '#1E6B3C' };
-
-  if (carregando) return <p className="texto-suave">Carregando…</p>;
-
-  return (
-    <section className="fh-lista">
-      {logs.length === 0 ? (
-        <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>Nenhum registro no log ainda.</div>
-      ) : (
-        logs.map((l) => (
-          <div key={l.id} className="cartao" style={{ padding: '12px 16px' }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-              <strong>{nomes[l.usuario_id] || `Usuário #${l.usuario_id}`}</strong>
-              <span className="fh-badge" style={{ background: '#F0F0F0', color: ACAO_COR[l.acao] || 'var(--tinta)' }}>
-                {ACAO_LABEL[l.acao] || l.acao}
-              </span>
-            </div>
-            {l.detalhe && <div style={{ fontSize: 14, marginTop: 3 }}>{l.detalhe}</div>}
-            <div className="texto-suave" style={{ fontSize: 12 }}>{formatarDataHora(l.data_hora)}</div>
-          </div>
-        ))
-      )}
-    </section>
-  );
-}
-
-function EstilosFichasAdmin() {
+function EstilosFicha() {
   return (
     <style>{`
-      .fh-abas { display: flex; gap: 6px; overflow-x: auto; margin: 14px 0 16px; padding-bottom: 4px; }
-      .fh-aba { border: 1px solid var(--borda); background: var(--branco); color: var(--tinta); border-radius: 999px; padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; min-height: 42px; }
-      .fh-aba-ativa { background: var(--marca); border-color: var(--marca); color: var(--branco); }
-
-      .fh-barra { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
-      .fh-lista { display: flex; flex-direction: column; gap: 12px; }
-      .fh-item { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
-      .fh-item-topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-      .fh-item-topo strong { font-size: 16px; }
-      .fh-badge { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
-      .fh-badge-estadia { display: inline-block; font-size: 12px; font-weight: 700; color: var(--marca); background: var(--marca-clara); border-radius: 999px; padding: 3px 10px; width: fit-content; }
-      .fh-item-dir { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-      .fh-input-reserva { width: auto; min-width: 200px; }
-      .fh-ver-mais { border: none; background: none; color: var(--marca); font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 0; text-align: left; }
-      .fh-detalhes { background: var(--fundo); border-radius: 10px; padding: 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-
+      .fnrh-secao { font-size: 14px; font-weight: 700; color: var(--marca); margin: 18px 0 8px; border-top: 1px solid var(--borda); padding-top: 14px; }
+      .fnrh-secao:first-child { margin-top: 0; border-top: none; padding-top: 0; }
+      .fnrh-duas { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
+      .fnrh-tres { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 10px; }
+      .fnrh-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 12px; margin: 4px 0 0; }
+      .fnrh-buscando { color: var(--texto-suave); font-weight: 600; font-size: 12px; margin: 4px 0 0; }
+      .fnrh-travado { color: var(--texto-suave); font-weight: 400; font-size: 12px; }
+      input[readonly].campo, select:disabled.campo { background: var(--fundo); color: var(--tinta); cursor: not-allowed; }
+      .fnrh-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 12px; margin: 4px 0 0; }
       @media (min-width: 640px) {
-        .fh-barra { flex-direction: row; align-items: center; }
-        .fh-barra .campo { flex: 1; }
-        .fh-item { flex-direction: row; justify-content: space-between; align-items: flex-start; }
-        .fh-item-dir { align-items: flex-end; }
+        .fnrh-duas { grid-template-columns: 1fr 1fr; }
+        .fnrh-tres { grid-template-columns: 1fr 1fr 1fr; }
       }
     `}</style>
   );
