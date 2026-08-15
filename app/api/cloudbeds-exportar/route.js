@@ -191,35 +191,22 @@ export async function POST(request) {
         const mensagemCloudbeds = dadosGuest?.message || 'não foi possível atualizar o cadastro do hóspede';
         return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (putGuest, guestID ${guestIdReal}): ${mensagemCloudbeds}` }, { status: 400 });
       }
+      // DIAGNÓSTICO: mesmo com "sucesso", mostra o que a Cloudbeds
+      // devolveu de verdade, para conferirmos se os dados realmente
+      // foram aceitos (e não só "engolidos" sem efeito).
+      return Response.json({
+        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. Resposta completa da Cloudbeds: ${JSON.stringify(dadosGuest)}`,
+      }, { status: 400 });
     } else {
-      // Plano B: não achamos um guestID através da busca — tenta pela
-      // própria reserva mesmo (pode não refletir no cadastro do hóspede,
-      // mas ao menos não deixa a exportação travada).
-      const corpoReserva = new URLSearchParams({
-        reservationID: reservationId,
-        status: reservaMiolo.status || 'confirmed',
-        guestFirstName: primeiroNome,
-        guestLastName: sobrenome,
-        guestEmail: ficha.email || '',
-        guestPhone: ficha.telefone || '',
-        guestAddress: [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', '),
-        guestCity: ficha.cidade || '',
-        guestState: ficha.estado || '',
-        guestCountry: paraSiglaPais(ficha.pais),
-        guestZip: ficha.cep || '',
-      });
-      const respostaReservaAtualizada = await fetch(`${CLOUDBEDS_BASE_URL}/putReservation`, {
-        method: 'PUT',
-        headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: corpoReserva.toString(),
-      });
-      const dadosReservaAtualizada = await respostaReservaAtualizada.json().catch(() => null);
-      if (!respostaReservaAtualizada.ok || dadosReservaAtualizada?.success === false) {
-        const mensagemCloudbeds = dadosReservaAtualizada?.message || 'não foi possível atualizar a reserva';
-        return Response.json({
-          erro: `A Cloudbeds recusou o envio dos dados (putReservation, sem guestID encontrado): ${mensagemCloudbeds} (chaves disponíveis na resposta original: ${Object.keys(reservaMiolo).join(', ')})`,
-        }, { status: 400 });
-      }
+      // Antes caíamos silenciosamente no putReservation (que já provamos
+      // não funcionar). Agora, em vez de mascarar isso com uma falsa
+      // mensagem de sucesso, mostramos exatamente o que encontramos (ou
+      // não) nas duas buscas, para investigar de verdade.
+      return Response.json({
+        erro: `[DIAGNÓSTICO] Não encontramos um guestID para essa reserva. ` +
+          `Chaves da resposta de getReservation: ${Object.keys(reservaMiolo).join(', ')}. ` +
+          `guestList dentro dela: ${JSON.stringify(reservaMiolo.guestList || 'não existe')}.`,
+      }, { status: 400 });
     }
 
     // ---- Passo 3 (complementar, opcional) ----
