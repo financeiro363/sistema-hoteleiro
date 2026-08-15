@@ -193,6 +193,9 @@ export async function POST(request) {
       const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
       const siglaPais = paraSiglaPais(ficha.pais);
 
+      // Gênero: convertendo do nosso formato para o que a Cloudbeds usa (M/F)
+      const GENERO_CLOUDBEDS = { Masculino: 'M', Feminino: 'F' };
+
       const corpoGuest = new URLSearchParams({
         guestID: guestIdReal,
         // Nome/e-mail/telefone (já confirmados funcionando com prefixo "guest")
@@ -217,6 +220,19 @@ export async function POST(request) {
         documentType: ficha.tipo_documento || '',
         documentNumber: ficha.numero_documento || '',
         documentIssuingCountry: siglaPais,
+        // Gênero e nacionalidade — campos padrão que faltavam no envio
+        gender: GENERO_CLOUDBEDS[ficha.genero] || '',
+        guestGender: GENERO_CLOUDBEDS[ficha.genero] || '',
+        guestNationality: ficha.nacionalidade || '',
+        nationality: ficha.nacionalidade || '',
+        // Campos personalizados deste hotel — nomes exatos confirmados
+        // via getCustomFields (customFieldID 33748 = CPF, 33749 = Profissão)
+        'customFields[0][customFieldID]': '33748',
+        'customFields[0][customFieldName]': 'CPF (somente números)',
+        'customFields[0][customFieldValue]': (ficha.numero_documento || '').replace(/\D/g, ''),
+        'customFields[1][customFieldID]': '33749',
+        'customFields[1][customFieldName]': 'Profissão',
+        'customFields[1][customFieldValue]': ficha.profissao || '',
       });
       const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
         method: 'PUT',
