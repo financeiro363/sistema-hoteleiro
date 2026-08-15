@@ -147,20 +147,10 @@ export async function POST(request) {
       origemDoAchado = `getReservations — reservationID da reserva encontrada: "${reservaComDetalhes?.reservationID}" (deveríamos ter pedido "${reservationId}") — nome do hóspede encontrado: "${primeiroHospede?.guestName || primeiroHospede?.firstName || '?'}" — total de reservas que essa busca devolveu: ${listaReservas.length}`;
     } catch (e) { origemDoAchado = 'getReservations falhou: ' + e.message; }
 
-    // Reforço: se ainda não achou, tenta pelo getGuestList também
-    if (!guestIdReal) {
-      try {
-        const respostaListaHospedes = await fetch(
-          `${CLOUDBEDS_BASE_URL}/getGuestList?reservationID=${encodeURIComponent(reservationId)}`,
-          { method: 'GET', headers: cabecalhosCloudbeds }
-        );
-        const dadosListaHospedes = await respostaListaHospedes.json().catch(() => null);
-        const listaHospedes = dadosListaHospedes?.data || [];
-        const primeiroHospede = Array.isArray(listaHospedes) ? listaHospedes[0] : null;
-        guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
-        origemDoAchado += ` | getGuestList — reservationID do hóspede encontrado: "${primeiroHospede?.reservationID}" (deveríamos ter pedido "${reservationId}") — nome: "${primeiroHospede?.guestName || primeiroHospede?.firstName || '?'}" — total devolvido: ${listaHospedes.length}`;
-      } catch (e) { origemDoAchado += ' | getGuestList falhou: ' + e.message; }
-    }
+    // ⚠️ REMOVIDO: a busca por getGuestList não estava filtrando pela
+    // reserva certa (devolvia os 100 hóspedes do hotel inteiro), e por
+    // isso já causou uma atualização errada uma vez. Não usar mais esse
+    // caminho até confirmarmos o parâmetro certo de filtro.
 
     // ============================================================
     // MAPEAMENTO DE CAMPOS — ficha FNRH → campos esperados pela Cloudbeds
