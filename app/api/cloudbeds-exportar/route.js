@@ -167,6 +167,19 @@ export async function POST(request) {
     const primeiroNome = partesNome[0] || '';
     const sobrenome = partesNome.slice(1).join(' ') || primeiroNome;
 
+    // DIAGNÓSTICO EXTRA: busca o cadastro ATUAL do hóspede antes de tentar
+    // mudar algo, para vermos com nossos próprios olhos os nomes de campo
+    // que a Cloudbeds realmente usa nesse endpoint (evita mais chute).
+    let cadastroAtualHospede = null;
+    if (guestIdReal) {
+      try {
+        const respostaGetGuest = await fetch(`${CLOUDBEDS_BASE_URL}/getGuest?guestID=${encodeURIComponent(guestIdReal)}`, {
+          method: 'GET', headers: cabecalhosCloudbeds,
+        });
+        cadastroAtualHospede = await respostaGetGuest.json().catch(() => null);
+      } catch (e) { /* segue mesmo sem isso */ }
+    }
+
     // ---- Passo 2: atualiza o cadastro do hóspede de verdade ----
     if (guestIdReal) {
       const corpoGuest = new URLSearchParams({
@@ -195,7 +208,7 @@ export async function POST(request) {
       // devolveu de verdade, para conferirmos se os dados realmente
       // foram aceitos (e não só "engolidos" sem efeito).
       return Response.json({
-        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. Resposta completa da Cloudbeds: ${JSON.stringify(dadosGuest)}`,
+        erro: `[DIAGNÓSTICO — não é erro de verdade] putGuest encontrou e usou o guestID ${guestIdReal}. Resposta completa da Cloudbeds do putGuest: ${JSON.stringify(dadosGuest)}. Cadastro ATUAL do hóspede (getGuest, para vermos os nomes de campo certos): ${JSON.stringify(cadastroAtualHospede)}`,
       }, { status: 400 });
     } else {
       // Antes caíamos silenciosamente no putReservation (que já provamos
