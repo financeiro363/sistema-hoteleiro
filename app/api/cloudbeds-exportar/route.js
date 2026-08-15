@@ -178,17 +178,34 @@ export async function POST(request) {
 
     // ---- Passo 2: atualiza o cadastro do hóspede de verdade ----
     if (guestIdReal) {
+      const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
+      const siglaPais = paraSiglaPais(ficha.pais);
+      // Mapeamento aproximado do tipo de documento brasileiro para os
+      // valores que a Cloudbeds parece esperar (confirmado que eles usam
+      // um texto específico, tipo "Driver's License" — ajustar aqui se
+      // precisar).
+      const DOC_CLOUDBEDS = { CPF: 'National ID', RG: 'National ID', PASSAPORTE: 'Passport' };
+
       const corpoGuest = new URLSearchParams({
         guestID: guestIdReal,
+        // Nome/e-mail/telefone (já confirmados funcionando com prefixo "guest")
         guestFirstName: primeiroNome,
         guestLastName: sobrenome,
         guestEmail: ficha.email || '',
         guestPhone: ficha.telefone || '',
-        guestAddress: [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', '),
-        guestCity: ficha.cidade || '',
-        guestState: ficha.estado || '',
-        guestCountry: paraSiglaPais(ficha.pais),
-        guestZip: ficha.cep || '',
+        // Endereço — mandando os dois formatos possíveis de nome, com e
+        // sem o prefixo "guest", já que não temos certeza qual funciona
+        // para esses campos específicos.
+        guestAddress: enderecoCompleto, address: enderecoCompleto,
+        guestCity: ficha.cidade || '', city: ficha.cidade || '',
+        guestState: ficha.estado || '', state: ficha.estado || '',
+        guestCountry: siglaPais, country: siglaPais,
+        guestZip: ficha.cep || '', zip: ficha.cep || '',
+        // Data de nascimento e documento (campos que faltavam)
+        guestBirthdate: ficha.data_nascimento || '', birthDate: ficha.data_nascimento || '',
+        documentType: DOC_CLOUDBEDS[ficha.tipo_documento] || ficha.tipo_documento || '',
+        documentNumber: ficha.numero_documento || '',
+        documentIssuingCountry: siglaPais,
       });
       const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
         method: 'PUT',
