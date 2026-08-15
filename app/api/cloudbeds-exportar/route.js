@@ -300,6 +300,32 @@ export async function POST(request) {
         : `${metodoUsado}, guestID ${guestIdReal}`;
       return Response.json({ erro: `A Cloudbeds recusou o envio dos dados (${contexto}): ${mensagemCloudbeds}` }, { status: 400 });
     }
+
+    // Quando CRIAMOS um hóspede novo (postGuest), os campos personalizados
+    // (CPF, Profissão, Motivo da viagem, Meio de transporte) às vezes não
+    // "gravam" na mesma chamada — só depois que o hóspede já existe de
+    // verdade. Por isso, logo depois de criar, fazemos um REFORÇO: uma
+    // segunda chamada de ATUALIZAÇÃO (putGuest) nesse mesmo hóspede
+    // recém-criado, repetindo tudo — isso garante que os personalizados
+    // realmente gravem.
+    if (ehHospedeAdicional) {
+      const guestIdRecemCriado =
+        dadosGuest?.data?.guestID || dadosGuest?.data?.newGuestID || dadosGuest?.guestID || dadosGuest?.newGuestID || null;
+      if (guestIdRecemCriado) {
+        const corpoReforco = new URLSearchParams(corpoGuest);
+        corpoReforco.delete('reservationID');
+        corpoReforco.delete('roomID');
+        corpoReforco.set('guestID', guestIdRecemCriado);
+        try {
+          await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
+            method: 'PUT',
+            headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: corpoReforco.toString(),
+          });
+        } catch (e) { /* melhor esforço — o hóspede já foi criado de qualquer forma */ }
+      }
+    }
+
     // Sucesso de verdade — segue em frente para marcar a ficha como
     // exportada (mais abaixo).
 
