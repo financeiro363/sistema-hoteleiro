@@ -37,6 +37,7 @@ const CATEGORIAS_MENU = [
       { href: '/manutencao', rotulo: 'Manutenção' },
       { href: '/estoque', rotulo: 'Estoque' },
       { href: '/governanca', rotulo: 'Governança' },
+      { href: '/pdv', rotulo: 'PDV — Conveniência' },
     ],
   },
   {

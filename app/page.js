@@ -93,6 +93,11 @@ const CATEGORIAS_MODULOS = [
         titulo: 'Governança',
         descricao: 'Rotina das camareiras por quarto, com checklist, integração com Manutenção e Achados e Perdidos.',
       },
+      {
+        href: '/pdv',
+        titulo: 'PDV — Conveniência',
+        descricao: 'Venda rápida com leitor de código de barras, pagamento avulso ou lançamento na conta do quarto via Cloudbeds.',
+      },
     ],
   },
   {
