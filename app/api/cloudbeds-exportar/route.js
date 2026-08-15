@@ -141,10 +141,13 @@ export async function POST(request) {
       const dadosComGuestDetails = await respostaComGuestDetails.json().catch(() => null);
       const listaReservas = dadosComGuestDetails?.data || [];
       const reservaComDetalhes = Array.isArray(listaReservas) ? listaReservas[0] : null;
-      const listaHospedes = reservaComDetalhes?.guestList || reservaComDetalhes?.guests || [];
-      const primeiroHospede = Array.isArray(listaHospedes) ? listaHospedes[0] : null;
+      // IMPORTANTE: guestList vem como um OBJETO (o próprio guestID é a
+      // chave), não uma lista comum — por isso pegamos os "values" dele.
+      const listaHospedesObjeto = reservaComDetalhes?.guestList || reservaComDetalhes?.guests || {};
+      const listaHospedes = Array.isArray(listaHospedesObjeto) ? listaHospedesObjeto : Object.values(listaHospedesObjeto);
+      const primeiroHospede = listaHospedes[0] || null;
       guestIdReal = primeiroHospede?.guestID || primeiroHospede?.guestId || primeiroHospede?.id || null;
-      origemDoAchado = `getReservations — reservationID da reserva encontrada: "${reservaComDetalhes?.reservationID}" (deveríamos ter pedido "${reservationId}") — nome do hóspede encontrado: "${primeiroHospede?.guestName || primeiroHospede?.firstName || '?'}" — total de reservas que essa busca devolveu: ${listaReservas.length}`;
+      origemDoAchado = `getReservations — reservationID da reserva encontrada: "${reservaComDetalhes?.reservationID}" (deveríamos ter pedido "${reservationId}") — nome do hóspede encontrado: "${primeiroHospede?.guestFirstName || primeiroHospede?.guestName || primeiroHospede?.firstName || '?'}" — total de reservas que essa busca devolveu: ${listaReservas.length}`;
     } catch (e) { origemDoAchado = 'getReservations falhou: ' + e.message; }
 
     // ⚠️ REMOVIDO: a busca por getGuestList não estava filtrando pela
