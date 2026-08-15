@@ -222,7 +222,7 @@ export async function POST(request) {
         // Endereço — a resposta trouxe "address2" (complemento) separado,
         // então a rua provavelmente é "address1", não só "address".
         // Mandando todas as variações possíveis.
-        guestAddress: enderecoCompleto, address: enderecoCompleto, address1: enderecoCompleto,
+        guestAddress: enderecoCompleto, address: enderecoCompleto, address1: enderecoCompleto, guestAddress1: enderecoCompleto,
         guestCity: ficha.cidade || '', city: ficha.cidade || '',
         guestState: ficha.estado || '', state: ficha.estado || '',
         guestCountry: siglaPais, country: siglaPais,
@@ -240,21 +240,25 @@ export async function POST(request) {
         gender: GENERO_CLOUDBEDS[ficha.genero] || '',
         guestGender: GENERO_CLOUDBEDS[ficha.genero] || '',
         guestNationality: paraSiglaPais(ficha.nacionalidade), nationality: paraSiglaPais(ficha.nacionalidade),
-        // Campos personalizados deste hotel — nomes exatos confirmados
-        // via getCustomFields (customFieldID 33748 = CPF, 33749 = Profissão)
-        'customFields[0][customFieldID]': '33748',
-        'customFields[0][customFieldName]': 'CPF (somente números)',
-        'customFields[0][customFieldValue]': (ficha.numero_documento || '').replace(/\D/g, ''),
-        'customFields[1][customFieldID]': '33749',
-        'customFields[1][customFieldName]': 'Profissão',
-        'customFields[1][customFieldValue]': ficha.profissao || '',
-        'customFields[2][customFieldID]': '48195',
-        'customFields[2][customFieldName]': 'Motivo da viagem',
-        'customFields[2][customFieldValue]': MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '',
-        'customFields[3][customFieldID]': '48196',
-        'customFields[3][customFieldName]': 'Meio de transporte',
-        'customFields[3][customFieldValue]': MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '',
       });
+
+      // Campos personalizados deste hotel — nomes/IDs exatos confirmados
+      // via getCustomFields. Mandando em DOIS formatos possíveis: como
+      // texto JSON (formato mais comum nesse tipo de API) e também com
+      // colchetes numerados (reforço, caso o primeiro não funcione).
+      const listaCamposPersonalizados = [
+        { customFieldID: '33748', customFieldName: 'CPF (somente números)', customFieldValue: (ficha.numero_documento || '').replace(/\D/g, '') },
+        { customFieldID: '33749', customFieldName: 'Profissão', customFieldValue: ficha.profissao || '' },
+        { customFieldID: '48195', customFieldName: 'Motivo da viagem', customFieldValue: MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
+        { customFieldID: '48196', customFieldName: 'Meio de transporte', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
+      ];
+      corpoGuest.set('customFields', JSON.stringify(listaCamposPersonalizados));
+      listaCamposPersonalizados.forEach((campo, indice) => {
+        corpoGuest.set(`customFields[${indice}][customFieldID]`, campo.customFieldID);
+        corpoGuest.set(`customFields[${indice}][customFieldName]`, campo.customFieldName);
+        corpoGuest.set(`customFields[${indice}][customFieldValue]`, campo.customFieldValue);
+      });
+
       const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
         method: 'PUT',
         headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
