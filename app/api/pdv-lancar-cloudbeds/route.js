@@ -2,15 +2,11 @@
 // ROTA DE SERVIDOR: /api/pdv-lancar-cloudbeds
 // ============================================================================
 // Recebe uma venda do tipo "Lançamento no Quarto" já salva no nosso banco,
-// e lança a cobrança na Cloudbeds: um item por produto (postCustomItem,
-// sem informar pagamento — assim fica "pendente", para o hóspede pagar na
-// saída) + uma anotação na reserva com a descrição da compra.
-//
-// ⚠️ SOBRE OS NOMES DOS CAMPOS: baseei em documentação oficial da
-// Cloudbeds sobre postCustomItem, mas nunca testei contra uma conta real
-// — é bem provável que precise de um pequeno ajuste no primeiro teste
-// (mesma situação que teve no módulo de Fichas de Hóspedes). Os nomes
-// estão reunidos na seção "MAPEAMENTO" abaixo, fácil de ajustar.
+// e lança a cobrança na Cloudbeds usando o endpoint item/v1/items
+// (confirmado na documentação oficial, com print da conta real do
+// hotel) — sem informar pagamento, então fica "pendente" na conta do
+// quarto. O nome do hóspede que retirou o item vai no campo "itemNote"
+// de cada item. Também escreve uma anotação geral na reserva.
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
@@ -85,57 +81,35 @@ export async function POST(request) {
     };
 
     // ============================================================
-    // MAPEAMENTO — um único postCustomItem, com todos os produtos dentro
-    // do parâmetro "items" (a Cloudbeds recusa se não vier assim —
-    // confirmado no primeiro teste real: "Parameter items is required").
+    // MAPEAMENTO — endpoint mais novo e confirmado pela documentação
+    // oficial (item/v1/items). Diferenças importantes em relação à
+    // tentativa anterior:
+    //  - É JSON (não "application/x-www-form-urlencoded")
+    //  - O preço vai em CENTAVOS, como texto (ex.: R$ 10,50 -> "1050")
+    //  - Tem um campo "itemNote" — é aqui que colocamos o nome do
+    //    hóspede que retirou o produto, exatamente o que faltava.
     // ============================================================
-    const corpoItem = new URLSearchParams({
-      reservationID: venda.cloudbeds_reservation_id,
-      // Sem "payments" — deixa a cobrança pendente na conta do quarto,
-      // para ser paga na saída (conforme pedido).
-    });
-    // Mandando em dois formatos possíveis (texto JSON + colchetes
-    // numerados), mesma estratégia que funcionou nos campos
-    // personalizados das Fichas de Hóspedes.
-    const listaItensCloudbeds = itens.map((item) => {
-      // O appItemID PRECISA continuar só ligado ao produto (sem o nome
-      // do hóspede) — a própria Cloudbeds orienta isso, para não criar
-      // um "produto" novo no relatório dela a cada venda.
-      const nomeComHospede = `${item.nome_produto} - ${venda.nome_hospede || 'Hóspede'}`;
-      return {
-        appItemID: String(item.produto_id || item.nome_produto).slice(0, 40),
-        name: nomeComHospede,
-        description: nomeComHospede,
-        quantity: Number(item.quantidade),
-        unitCost: Number(item.preco_unitario),
-        price: Number(item.preco_unitario),
-      };
-    });
-    corpoItem.set('items', JSON.stringify(listaItensCloudbeds));
-    listaItensCloudbeds.forEach((it, indice) => {
-      corpoItem.set(`items[${indice}][appItemID]`, it.appItemID);
-      // A Cloudbeds confirmou "itemQuantity" (com prefixo "item") no
-      // primeiro teste real — mandando os dois formatos por garantia.
-      corpoItem.set(`items[${indice}][itemName]`, it.name);
-      corpoItem.set(`items[${indice}][name]`, it.name);
-      corpoItem.set(`items[${indice}][itemDescription]`, it.description);
-      corpoItem.set(`items[${indice}][description]`, it.description);
-      corpoItem.set(`items[${indice}][itemQuantity]`, String(it.quantity));
-      corpoItem.set(`items[${indice}][quantity]`, String(it.quantity));
-      corpoItem.set(`items[${indice}][itemUnitCost]`, String(it.unitCost));
-      corpoItem.set(`items[${indice}][unitCost]`, String(it.unitCost));
-      corpoItem.set(`items[${indice}][itemPrice]`, String(it.price));
-      corpoItem.set(`items[${indice}][price]`, String(it.price));
-    });
+    const nomeHospedeVenda = venda.nome_hospede || 'Hóspede';
+    const corpoJson = {
+      reservationId: venda.cloudbeds_reservation_id,
+      items: itens.map((item) => ({
+        itemId: String(item.produto_id || item.nome_produto).slice(0, 40),
+        itemQuantity: Number(item.quantidade),
+        itemPrice: String(Math.round(Number(item.preco_unitario) * 100)),
+        itemNote: `${item.nome_produto} — Retirado por: ${nomeHospedeVenda}`,
+        // Sem "payments" e sem "itemPaid" — deixa a cobrança pendente na
+        // conta do quarto, para ser paga na saída (conforme pedido).
+      })),
+    };
 
-    const respostaItem = await fetch(`${CLOUDBEDS_BASE_URL}/postCustomItem`, {
+    const respostaItem = await fetch('https://api.cloudbeds.com/item/v1/items', {
       method: 'POST',
-      headers: { ...cabecalhos, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: corpoItem.toString(),
+      headers: { ...cabecalhos, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(corpoJson),
     });
     const dadosItem = await respostaItem.json().catch(() => null);
     if (!respostaItem.ok || dadosItem?.success === false) {
-      const mensagem = dadosItem?.message || 'não foi possível lançar os itens';
+      const mensagem = dadosItem?.message || JSON.stringify(dadosItem) || 'não foi possível lançar os itens';
       await supabaseAdmin.from('pdv_vendas').update({ cloudbeds_status: 'FALHOU', cloudbeds_erro: mensagem }).eq('id', vendaId);
       return Response.json({ erro: `A Cloudbeds recusou o lançamento: ${mensagem}` }, { status: 400 });
     }
