@@ -108,10 +108,17 @@ export async function POST(request) {
     corpoItem.set('items', JSON.stringify(listaItensCloudbeds));
     listaItensCloudbeds.forEach((it, indice) => {
       corpoItem.set(`items[${indice}][appItemID]`, it.appItemID);
+      // A Cloudbeds confirmou "itemQuantity" (com prefixo "item") no
+      // primeiro teste real — mandando os dois formatos por garantia.
+      corpoItem.set(`items[${indice}][itemName]`, it.name);
       corpoItem.set(`items[${indice}][name]`, it.name);
+      corpoItem.set(`items[${indice}][itemDescription]`, it.description);
       corpoItem.set(`items[${indice}][description]`, it.description);
+      corpoItem.set(`items[${indice}][itemQuantity]`, String(it.quantity));
       corpoItem.set(`items[${indice}][quantity]`, String(it.quantity));
+      corpoItem.set(`items[${indice}][itemUnitCost]`, String(it.unitCost));
       corpoItem.set(`items[${indice}][unitCost]`, String(it.unitCost));
+      corpoItem.set(`items[${indice}][itemPrice]`, String(it.price));
       corpoItem.set(`items[${indice}][price]`, String(it.price));
     });
 
