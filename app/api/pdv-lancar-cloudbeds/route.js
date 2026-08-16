@@ -88,12 +88,24 @@ export async function POST(request) {
     //  - O preço vai em CENTAVOS, como texto (ex.: R$ 10,50 -> "1050")
     //  - Tem um campo "itemNote" — é aqui que colocamos o nome do
     //    hóspede que retirou o produto, exatamente o que faltava.
+    //  - O "itemId" TEM que ser um item que já existe no catálogo da
+    //    Cloudbeds (não dá para inventar um ID) — por isso usamos o
+    //    cloudbeds_item_id salvo no cadastro do produto, não o nosso ID
+    //    interno.
     // ============================================================
+    const itensSemCloudbedsId = itens.filter((item) => !item.cloudbeds_item_id);
+    if (itensSemCloudbedsId.length > 0) {
+      const nomes = itensSemCloudbedsId.map((i) => i.nome_produto).join(', ');
+      return Response.json({
+        erro: `Estes produtos ainda não têm o "ID do item na Cloudbeds" cadastrado: ${nomes}. Cadastre esse ID em Preços e Estoque → editar o produto, e tente de novo.`,
+      }, { status: 400 });
+    }
+
     const nomeHospedeVenda = venda.nome_hospede || 'Hóspede';
     const corpoJson = {
       reservationId: venda.cloudbeds_reservation_id,
       items: itens.map((item) => ({
-        itemId: String(item.produto_id || item.nome_produto).slice(0, 40),
+        itemId: item.cloudbeds_item_id,
         itemQuantity: Number(item.quantidade),
         itemPrice: String(Math.round(Number(item.preco_unitario) * 100)),
         itemNote: `${item.nome_produto} — Retirado por: ${nomeHospedeVenda}`,
