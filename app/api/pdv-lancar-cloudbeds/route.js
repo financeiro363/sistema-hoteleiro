@@ -97,14 +97,20 @@ export async function POST(request) {
     // Mandando em dois formatos possíveis (texto JSON + colchetes
     // numerados), mesma estratégia que funcionou nos campos
     // personalizados das Fichas de Hóspedes.
-    const listaItensCloudbeds = itens.map((item) => ({
-      appItemID: String(item.produto_id || item.nome_produto).slice(0, 40),
-      name: item.nome_produto,
-      description: item.nome_produto,
-      quantity: Number(item.quantidade),
-      unitCost: Number(item.preco_unitario),
-      price: Number(item.preco_unitario),
-    }));
+    const listaItensCloudbeds = itens.map((item) => {
+      // O appItemID PRECISA continuar só ligado ao produto (sem o nome
+      // do hóspede) — a própria Cloudbeds orienta isso, para não criar
+      // um "produto" novo no relatório dela a cada venda.
+      const nomeComHospede = `${item.nome_produto} - ${venda.nome_hospede || 'Hóspede'}`;
+      return {
+        appItemID: String(item.produto_id || item.nome_produto).slice(0, 40),
+        name: nomeComHospede,
+        description: nomeComHospede,
+        quantity: Number(item.quantidade),
+        unitCost: Number(item.preco_unitario),
+        price: Number(item.preco_unitario),
+      };
+    });
     corpoItem.set('items', JSON.stringify(listaItensCloudbeds));
     listaItensCloudbeds.forEach((it, indice) => {
       corpoItem.set(`items[${indice}][appItemID]`, it.appItemID);
