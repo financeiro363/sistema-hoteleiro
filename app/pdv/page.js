@@ -221,6 +221,7 @@ function PainelVender({ usuario }) {
       venda_id: venda.id, produto_id: i.produto.id, nome_produto: i.produto.nome,
       quantidade: i.quantidade, preco_unitario: i.produto.preco_venda,
       custo_unitario: i.produto.custo_aquisicao, subtotal: i.quantidade * i.produto.preco_venda,
+      cloudbeds_item_id: i.produto.cloudbeds_item_id || null,
     }));
     const { error: erroItens } = await supabase.from('pdv_venda_itens').insert(itensParaInserir);
     if (erroItens) {
@@ -341,19 +342,21 @@ function PainelVender({ usuario }) {
       </div>
 
       {mostrarCheckout && (
-        <ModalCheckout total={total} onFechar={() => setMostrarCheckout(false)} onConfirmar={finalizarVenda} />
+        <ModalCheckout total={total} carrinho={carrinho} onFechar={() => setMostrarCheckout(false)} onConfirmar={finalizarVenda} />
       )}
     </section>
   );
 }
 
-function ModalCheckout({ total, onFechar, onConfirmar }) {
+function ModalCheckout({ total, carrinho, onFechar, onConfirmar }) {
   const [tipoPagamento, setTipoPagamento] = useState('AVULSO');
   const [formaPagamentoAvulso, setFormaPagamentoAvulso] = useState('DINHEIRO');
   const [reservationId, setReservationId] = useState('');
   const [nomeHospede, setNomeHospede] = useState('');
   const [confirmando, setConfirmando] = useState(false);
   const [erroLocal, setErroLocal] = useState('');
+
+  const itensSemIdCloudbeds = (carrinho || []).filter((i) => !i.produto.cloudbeds_item_id).map((i) => i.produto.nome);
 
   async function confirmar() {
     setErroLocal('');
@@ -394,6 +397,11 @@ function ModalCheckout({ total, onFechar, onConfirmar }) {
             <input className="campo" type="text" value={reservationId} onChange={(e) => setReservationId(e.target.value)} placeholder="Ex.: 6927275007856" />
             <label className="rotulo">Nome do hóspede</label>
             <input className="campo" type="text" value={nomeHospede} onChange={(e) => setNomeHospede(e.target.value)} placeholder="Nome de quem retirou os itens" />
+            {itensSemIdCloudbeds.length > 0 && (
+              <div className="aviso-erro" style={{ fontSize: 12 }}>
+                ⚠️ {itensSemIdCloudbeds.join(', ')} ainda não {itensSemIdCloudbeds.length > 1 ? 'têm' : 'tem'} o "ID do item na Cloudbeds" cadastrado — a venda será registrada aqui, mas pode não conseguir ser lançada na conta do quarto até isso ser configurado (aba Preços e Estoque).
+              </div>
+            )}
           </div>
         )}
 
@@ -442,6 +450,7 @@ function PainelEstoque({ usuario }) {
       sku: dados.sku.trim() || null,
       codigo_barras: dados.codigo_barras.trim() || null,
       categoria: dados.categoria.trim() || null,
+      cloudbeds_item_id: dados.cloudbeds_item_id.trim() || null,
       preco_venda: Number(dados.preco_venda) || 0,
       custo_aquisicao: Number(dados.custo_aquisicao) || 0,
       estoque_atual: Number(dados.estoque_atual) || 0,
@@ -480,7 +489,11 @@ function PainelEstoque({ usuario }) {
             <tbody>
               {filtrados.map((p) => (
                 <tr key={p.id} style={p.estoque_atual <= p.estoque_minimo ? { background: '#FDF3D7' } : undefined}>
-                  <td><strong>{p.nome}</strong>{p.sku && <div className="texto-suave" style={{ fontSize: 11 }}>SKU: {p.sku}</div>}</td>
+                  <td>
+                    <strong>{p.nome}</strong>
+                    {p.sku && <div className="texto-suave" style={{ fontSize: 11 }}>SKU: {p.sku}</div>}
+                    <div style={{ fontSize: 11 }}>{p.cloudbeds_item_id ? <span style={{ color: 'var(--sucesso-texto)' }}>✓ Cloudbeds OK</span> : <span style={{ color: 'var(--aviso-texto)' }}>⚠️ sem ID Cloudbeds</span>}</div>
+                  </td>
                   <td>{p.categoria || '—'}</td>
                   <td>{formatarMoeda(p.preco_venda)}</td>
                   <td>{formatarMoeda(p.custo_aquisicao)}</td>
@@ -504,6 +517,7 @@ function ModalProduto({ produto, onFechar, onSalvar }) {
   const [sku, setSku] = useState(produto.sku || '');
   const [codigoBarras, setCodigoBarras] = useState(produto.codigo_barras || '');
   const [categoria, setCategoria] = useState(produto.categoria || '');
+  const [cloudbedsItemId, setCloudbedsItemId] = useState(produto.cloudbeds_item_id || '');
   const [precoVenda, setPrecoVenda] = useState(produto.preco_venda ?? '');
   const [custoAquisicao, setCustoAquisicao] = useState(produto.custo_aquisicao ?? '');
   const [estoqueAtual, setEstoqueAtual] = useState(produto.estoque_atual ?? '');
@@ -515,7 +529,7 @@ function ModalProduto({ produto, onFechar, onSalvar }) {
   async function salvar() {
     if (!nome.trim()) { setErroLocal('Informe o nome do produto.'); return; }
     setSalvando(true);
-    await onSalvar({ id: produto.id, nome, sku, codigo_barras: codigoBarras, categoria, preco_venda: precoVenda, custo_aquisicao: custoAquisicao, estoque_atual: estoqueAtual, estoque_minimo: estoqueMinimo, ativo });
+    await onSalvar({ id: produto.id, nome, sku, codigo_barras: codigoBarras, categoria, cloudbeds_item_id: cloudbedsItemId, preco_venda: precoVenda, custo_aquisicao: custoAquisicao, estoque_atual: estoqueAtual, estoque_minimo: estoqueMinimo, ativo });
     setSalvando(false);
   }
 
@@ -534,6 +548,12 @@ function ModalProduto({ produto, onFechar, onSalvar }) {
 
         <label className="rotulo">Categoria</label>
         <input className="campo" type="text" value={categoria} onChange={(e) => setCategoria(e.target.value)} placeholder="Ex.: Bebidas, Snacks..." />
+
+        <label className="rotulo">ID do item na Cloudbeds</label>
+        <input className="campo" type="text" value={cloudbedsItemId} onChange={(e) => setCloudbedsItemId(e.target.value)} placeholder="Ex.: 123456" />
+        <p className="texto-suave" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>
+          Cadastre esse produto primeiro na Cloudbeds (Configurações → Itens/Point of Sale) e cole aqui o ID que ela gerar. Sem isso, esse produto não pode ser lançado na conta do quarto.
+        </p>
 
         <div className="pdv-duas">
           <div><label className="rotulo">Preço de venda (R$)</label><input className="campo" type="number" step="0.01" min="0" value={precoVenda} onChange={(e) => setPrecoVenda(e.target.value)} /></div>
