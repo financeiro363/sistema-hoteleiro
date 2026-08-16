@@ -525,6 +525,27 @@ function ModalProduto({ produto, onFechar, onSalvar }) {
   const [ativo, setAtivo] = useState(produto.ativo ?? true);
   const [salvando, setSalvando] = useState(false);
   const [erroLocal, setErroLocal] = useState('');
+  const [itensCloudbeds, setItensCloudbeds] = useState(null);
+  const [buscandoCloudbeds, setBuscandoCloudbeds] = useState(false);
+
+  async function buscarItensCloudbeds() {
+    setBuscandoCloudbeds(true);
+    setErroLocal('');
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/pdv-listar-itens-cloudbeds', {
+        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
+      });
+      const resultado = await resposta.json();
+      setBuscandoCloudbeds(false);
+      if (!resposta.ok || resultado.erro) { setErroLocal(resultado.erro || 'Não foi possível buscar os itens.'); return; }
+      const lista = Array.isArray(resultado.itens) ? resultado.itens : Object.values(resultado.itens || {});
+      setItensCloudbeds(lista);
+    } catch (e) {
+      setBuscandoCloudbeds(false);
+      setErroLocal('Falha de conexão ao buscar os itens da Cloudbeds.');
+    }
+  }
 
   async function salvar() {
     if (!nome.trim()) { setErroLocal('Informe o nome do produto.'); return; }
@@ -550,10 +571,34 @@ function ModalProduto({ produto, onFechar, onSalvar }) {
         <input className="campo" type="text" value={categoria} onChange={(e) => setCategoria(e.target.value)} placeholder="Ex.: Bebidas, Snacks..." />
 
         <label className="rotulo">ID do item na Cloudbeds</label>
-        <input className="campo" type="text" value={cloudbedsItemId} onChange={(e) => setCloudbedsItemId(e.target.value)} placeholder="Ex.: 123456" />
-        <p className="texto-suave" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>
-          Cadastre esse produto primeiro na Cloudbeds (Configurações → Itens/Point of Sale) e cole aqui o ID que ela gerar. Sem isso, esse produto não pode ser lançado na conta do quarto.
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input className="campo" type="text" value={cloudbedsItemId} onChange={(e) => setCloudbedsItemId(e.target.value)} placeholder="Ex.: 123456" style={{ flex: 1 }} />
+          <button type="button" className="botao botao-suave" onClick={buscarItensCloudbeds} disabled={buscandoCloudbeds} style={{ whiteSpace: 'nowrap' }}>
+            {buscandoCloudbeds ? 'Buscando…' : '🔄 Buscar da Cloudbeds'}
+          </button>
+        </div>
+        <p className="texto-suave" style={{ fontSize: 12, marginTop: 4, marginBottom: 12 }}>
+          Cadastre esse produto primeiro na Cloudbeds (Configurações → Products → Items and Services), depois clique em "Buscar da Cloudbeds" e escolha ele na lista abaixo — mais seguro do que copiar o ID na mão.
         </p>
+        {itensCloudbeds && (
+          <div className="pdv-lista-cloudbeds">
+            {itensCloudbeds.length === 0 ? (
+              <p className="texto-suave" style={{ fontSize: 13 }}>Nenhum item encontrado — cadastre primeiro na Cloudbeds.</p>
+            ) : (
+              itensCloudbeds.map((it, indice) => {
+                const id = it.itemId || it.appItemID || it.id || it.itemID || '';
+                const nome = it.itemName || it.name || it.title || `Item ${id}`;
+                return (
+                  <button key={id || indice} type="button" className="pdv-item-cloudbeds-opcao"
+                    onClick={() => setCloudbedsItemId(String(id))}>
+                    <span>{nome}</span>
+                    <span className="texto-suave" style={{ fontSize: 11 }}>ID: {id}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
 
         <div className="pdv-duas">
           <div><label className="rotulo">Preço de venda (R$)</label><input className="campo" type="number" step="0.01" min="0" value={precoVenda} onChange={(e) => setPrecoVenda(e.target.value)} /></div>
@@ -629,6 +674,10 @@ function EstilosPDV() {
       .pdv-tabela-wrap { overflow-x: auto; }
       .pdv-tabela { width: 100%; border-collapse: collapse; background: var(--branco); border-radius: 10px; overflow: hidden; }
       .pdv-tabela th { text-align: left; font-size: 12px; color: var(--texto-suave); padding: 10px 12px; border-bottom: 2px solid var(--borda); }
+      .pdv-lista-cloudbeds { max-height: 220px; overflow-y: auto; border: 1px solid var(--borda); border-radius: 10px; margin-bottom: 14px; }
+      .pdv-item-cloudbeds-opcao { display: flex; justify-content: space-between; width: 100%; text-align: left; padding: 10px 12px; border: none; border-bottom: 1px solid var(--borda); background: var(--branco); cursor: pointer; font-family: inherit; font-size: 13px; }
+      .pdv-item-cloudbeds-opcao:last-child { border-bottom: none; }
+      .pdv-item-cloudbeds-opcao:hover { background: var(--marca-clara); }
       .pdv-tabela td { padding: 10px 12px; border-bottom: 1px solid var(--borda); font-size: 14px; }
 
       @media (min-width: 640px) {
