@@ -149,6 +149,27 @@ function PainelVender({ usuario }) {
     }
   }
 
+  async function cancelarVendaPendente(venda) {
+    const confirmou = window.confirm(`Cancelar a venda #${venda.numero_venda}? O estoque dos produtos dela será devolvido automaticamente. Essa ação não pode ser desfeita.`);
+    if (!confirmou) return;
+    setReenviando(venda.id);
+    // Devolve o estoque de cada item dessa venda
+    const { data: itensDaVenda } = await supabase.from('pdv_venda_itens').select('produto_id, quantidade').eq('venda_id', venda.id);
+    for (const item of itensDaVenda || []) {
+      if (!item.produto_id) continue;
+      const { data: produtoAtual } = await supabase.from('pdv_produtos').select('estoque_atual').eq('id', item.produto_id).single();
+      if (produtoAtual) {
+        await supabase.from('pdv_produtos').update({ estoque_atual: Number(produtoAtual.estoque_atual) + Number(item.quantidade) }).eq('id', item.produto_id);
+      }
+    }
+    const { error } = await supabase.from('pdv_vendas').update({ status: 'CANCELADA', cloudbeds_status: 'NAO_APLICAVEL' }).eq('id', venda.id);
+    setReenviando(null);
+    if (error) { mostrarAviso('Não foi possível cancelar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso(`Venda #${venda.numero_venda} cancelada — estoque devolvido.`);
+    carregarVendasPendentes();
+    carregarProdutos();
+  }
+
   useEffect(() => { carregarTurno(); carregarProdutos(); carregarVendasPendentes(); }, [carregarTurno, carregarProdutos, carregarVendasPendentes]);
   useEffect(() => { if (turno && inputBuscaRef.current) inputBuscaRef.current.focus(); }, [turno]);
 
@@ -408,9 +429,14 @@ function PainelVender({ usuario }) {
                 <span>Venda #{v.numero_venda} · {v.nome_hospede || 'Hóspede'} · reserva {v.cloudbeds_reservation_id}</span>
                 {v.cloudbeds_erro && <div className="texto-suave" style={{ fontSize: 11 }}>Erro: {v.cloudbeds_erro}</div>}
               </div>
-              <button type="button" className="botao botao-suave" onClick={() => reenviarParaCloudbeds(v)} disabled={reenviando === v.id}>
-                {reenviando === v.id ? 'Enviando…' : '🔄 Tentar de novo'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button type="button" className="botao botao-suave" onClick={() => reenviarParaCloudbeds(v)} disabled={reenviando === v.id}>
+                  {reenviando === v.id ? 'Enviando…' : '🔄 Tentar de novo'}
+                </button>
+                <button type="button" className="botao botao-perigo" onClick={() => cancelarVendaPendente(v)} disabled={reenviando === v.id}>
+                  🗑️ Cancelar
+                </button>
+              </div>
             </div>
           ))}
         </div>

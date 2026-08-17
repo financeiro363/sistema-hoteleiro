@@ -70,6 +70,7 @@ export default function CabecalhoSite() {
   const [logado, setLogado] = useState(false);
   const [nomeUsuario, setNomeUsuario] = useState('');
   const [papelUsuario, setPapelUsuario] = useState('');
+  const [nomeHotel, setNomeHotel] = useState('');
   const [souSuperAdmin, setSouSuperAdmin] = useState(false);
   const [podeIncluirAtestado, setPodeIncluirAtestado] = useState(false);
 
@@ -84,20 +85,24 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('nome, papel, super_admin, pode_incluir_atestado')
+          .select('nome, papel, super_admin, pode_incluir_atestado, hotel_id')
           .eq('auth_id', data.session.user.id)
           .single();
         if (ativo && perfil?.nome) setNomeUsuario(perfil.nome.split(' ')[0]);
         if (ativo) setPapelUsuario(perfil?.papel || '');
         if (ativo) setSouSuperAdmin(perfil?.super_admin === true);
         if (ativo) setPodeIncluirAtestado(perfil?.pode_incluir_atestado === true);
+        if (perfil?.hotel_id) {
+          const { data: hotel } = await supabase.from('hoteis').select('nome_fantasia').eq('id', perfil.hotel_id).single();
+          if (ativo && hotel?.nome_fantasia) setNomeHotel(hotel.nome_fantasia);
+        }
       }
     }
     carregarSessao();
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setNomeHotel(''); }
       else carregarSessao();
     });
 
@@ -141,7 +146,10 @@ export default function CabecalhoSite() {
         {/* Logo */}
         <Link href="/" className="logo" aria-label="Sistema Hoteleiro — Início">
           <span className="logo-simbolo" aria-hidden="true">⌂</span>
-          Sistema Hoteleiro
+          <span>
+            Sistema Hoteleiro
+            {nomeHotel && <span className="cabecalho-nome-hotel">{nomeHotel}</span>}
+          </span>
         </Link>
 
         {/* Menu de navegação */}
