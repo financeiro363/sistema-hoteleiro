@@ -26,6 +26,19 @@
 //     pra pessoa escolher manualmente.
 // ============================================================================
 
+async function buscarNaBrasilAPI(cnpj) {
+  const controlador = new AbortController();
+  const tempoLimite = setTimeout(() => controlador.abort(), 10000);
+  try {
+    return await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, {
+      method: 'GET',
+      signal: controlador.signal,
+    });
+  } finally {
+    clearTimeout(tempoLimite);
+  }
+}
+
 export async function GET(request) {
   try {
     const url = new URL(request.url);
@@ -35,17 +48,13 @@ export async function GET(request) {
       return Response.json({ erro: 'CNPJ inválido.' }, { status: 400 });
     }
 
-    const controlador = new AbortController();
-    const tempoLimite = setTimeout(() => controlador.abort(), 10000);
-
-    let resposta;
-    try {
-      resposta = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, {
-        method: 'GET',
-        signal: controlador.signal,
-      });
-    } finally {
-      clearTimeout(tempoLimite);
+    // A BrasilAPI é gratuita e comunitária — às vezes soluça. Tenta uma vez,
+    // e se não for "não encontrado" (404, que é uma resposta definitiva),
+    // tenta mais uma vez antes de desistir e pedir preenchimento manual.
+    let resposta = await buscarNaBrasilAPI(cnpj);
+    if (!resposta.ok && resposta.status !== 404) {
+      await new Promise((r) => setTimeout(r, 800));
+      resposta = await buscarNaBrasilAPI(cnpj);
     }
 
     if (resposta.status === 404) {
@@ -56,7 +65,7 @@ export async function GET(request) {
     }
     if (!resposta.ok) {
       return Response.json(
-        { erro: 'Não foi possível consultar a Receita Federal agora. Preencha os dados manualmente.' },
+        { erro: `Não foi possível consultar a Receita Federal agora (código ${resposta.status}). Preencha os dados manualmente ou tente de novo em alguns instantes.` },
         { status: 502 }
       );
     }
