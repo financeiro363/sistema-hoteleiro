@@ -115,6 +115,22 @@ function validarTelefoneBR(texto) {
 
 function apenasNumeros(texto) { return String(texto || '').replace(/\D/g, ''); }
 
+function formatarCEP(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 8);
+  if (d.length <= 5) return d;
+  return `${d.slice(0, 5)}-${d.slice(5)}`;
+}
+
+// Deixa o código do CNAE no formato padrão (ex.: "6202-3/00"), que é como
+// aparece em qualquer cadastro/nota fiscal — a Receita devolve só os
+// números corridos.
+function formatarCNAE(codigo) {
+  const d = String(codigo || '').replace(/\D/g, '').padStart(7, '0');
+  if (d.length !== 7) return String(codigo || '');
+  return `${d.slice(0, 4)}-${d.slice(4, 5)}/${d.slice(5, 7)}`;
+}
+
+
 // ---- Linha digitável do boleto: decodificação (matemática pura, sem libs) --
 //
 // A "linha digitável" de um boleto bancário (47 números) tem, escondidos nela,
@@ -984,14 +1000,111 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
   const [erroForm, setErroForm] = useState('');
   const [excluindoId, setExcluindoId] = useState(null);
 
+  // ---- Dados da empresa (preenchidos automaticamente a partir do CNPJ) ----
+  const [nomeFantasia, setNomeFantasia] = useState('');
+  const [situacaoCadastral, setSituacaoCadastral] = useState('');
+  const [cep, setCep] = useState('');
+  const [logradouro, setLogradouro] = useState('');
+  const [numeroEndereco, setNumeroEndereco] = useState('');
+  const [complemento, setComplemento] = useState('');
+  const [bairro, setBairro] = useState('');
+  const [cidade, setCidade] = useState('');
+  const [estado, setEstado] = useState('');
+  const [cnaePrincipal, setCnaePrincipal] = useState(null);
+  const [cnaesSecundarios, setCnaesSecundarios] = useState([]);
+  const [capitalSocial, setCapitalSocial] = useState('');
+  const [naturezaJuridica, setNaturezaJuridica] = useState('');
+  const [porte, setPorte] = useState('');
+  const [optanteSimples, setOptanteSimples] = useState(false);
+  const [optanteMei, setOptanteMei] = useState(false);
+  const [formaTributacao, setFormaTributacao] = useState('');
+  const [socios, setSocios] = useState([]);
+  const [buscandoCnpj, setBuscandoCnpj] = useState(false);
+  const [cnpjEncontrado, setCnpjEncontrado] = useState(false);
+  const [erroCnpj, setErroCnpj] = useState('');
+
+  function limparDadosEmpresa() {
+    setNomeFantasia(''); setSituacaoCadastral(''); setCep(''); setLogradouro('');
+    setNumeroEndereco(''); setComplemento(''); setBairro(''); setCidade(''); setEstado('');
+    setCnaePrincipal(null); setCnaesSecundarios([]); setCapitalSocial(''); setNaturezaJuridica('');
+    setPorte(''); setOptanteSimples(false); setOptanteMei(false); setFormaTributacao('');
+    setSocios([]); setCnpjEncontrado(false); setErroCnpj('');
+  }
+
+  // Busca automática dos dados da empresa assim que o CNPJ é digitado por
+  // completo (fonte: Receita Federal, via BrasilAPI) — funciona pra Clientes
+  // e Fornecedores, já que os dois usam este mesmo formulário.
+  async function buscarPorCnpj(valorDocumento) {
+    const digitos = apenasNumeros(valorDocumento);
+    if (digitos.length !== 14 || !validarCNPJ(digitos)) return;
+    setBuscandoCnpj(true);
+    setErroCnpj('');
+    try {
+      const resposta = await fetch(`/api/consultar-cnpj?cnpj=${digitos}`);
+      const dados = await resposta.json();
+      if (!resposta.ok || !dados?.encontrado) {
+        setErroCnpj(dados?.erro || 'Não foi possível consultar a Receita Federal agora. Preencha os dados manualmente.');
+        setBuscandoCnpj(false);
+        return;
+      }
+      // Só preenche o nome se o campo ainda estiver vazio — pra não sobrescrever algo que a pessoa já digitou.
+      setNome((atual) => (atual.trim() ? atual : dados.razaoSocial || ''));
+      setNomeFantasia(dados.nomeFantasia || '');
+      setSituacaoCadastral(dados.situacaoCadastral || '');
+      setCep(dados.endereco?.cep ? formatarCEP(dados.endereco.cep) : '');
+      setLogradouro(dados.endereco?.logradouro || '');
+      setNumeroEndereco(dados.endereco?.numero || '');
+      setComplemento(dados.endereco?.complemento || '');
+      setBairro(dados.endereco?.bairro || '');
+      setCidade(dados.endereco?.cidade || '');
+      setEstado(dados.endereco?.estado || '');
+      setCnaePrincipal(dados.cnaePrincipal ? { codigo: formatarCNAE(dados.cnaePrincipal.codigo), descricao: dados.cnaePrincipal.descricao } : null);
+      setCnaesSecundarios((dados.cnaesSecundarios || []).map((c) => ({ codigo: formatarCNAE(c.codigo), descricao: c.descricao })));
+      setCapitalSocial(dados.capitalSocial != null ? String(dados.capitalSocial) : '');
+      setNaturezaJuridica(dados.naturezaJuridica || '');
+      setPorte(dados.porte || '');
+      setOptanteSimples(!!dados.optanteSimples);
+      setOptanteMei(!!dados.optanteMei);
+      setFormaTributacao(dados.optanteMei ? 'MEI' : dados.optanteSimples ? 'Simples Nacional' : '');
+      setSocios(dados.socios || []);
+      setCnpjEncontrado(true);
+    } catch (e) {
+      setErroCnpj('Não foi possível consultar a Receita Federal agora (sem conexão). Preencha os dados manualmente.');
+    }
+    setBuscandoCnpj(false);
+  }
+
   function abrirNovo() {
     setEditandoId(null); setNome(''); setDocumento(''); setEmail(''); setTelefone(''); setErroForm('');
+    limparDadosEmpresa();
     setMostrarForm(true);
   }
   function abrirEdicao(r) {
     setEditandoId(r.id); setNome(r.nome); setDocumento(r.documento || ''); setEmail(r.email || '');
     setTelefone(r.telefone ? formatarTelefoneBR(r.telefone) : '');
-    setErroForm(''); setMostrarForm(true);
+    setErroForm('');
+    const de = r.dados_empresa || null;
+    setNomeFantasia(de?.nome_fantasia || '');
+    setSituacaoCadastral(de?.situacao_cadastral || '');
+    setCep(de?.endereco?.cep ? formatarCEP(de.endereco.cep) : '');
+    setLogradouro(de?.endereco?.logradouro || '');
+    setNumeroEndereco(de?.endereco?.numero || '');
+    setComplemento(de?.endereco?.complemento || '');
+    setBairro(de?.endereco?.bairro || '');
+    setCidade(de?.endereco?.cidade || '');
+    setEstado(de?.endereco?.estado || '');
+    setCnaePrincipal(de?.cnae_principal || null);
+    setCnaesSecundarios(de?.cnaes_secundarios || []);
+    setCapitalSocial(de?.capital_social != null ? String(de.capital_social) : '');
+    setNaturezaJuridica(de?.natureza_juridica || '');
+    setPorte(de?.porte || '');
+    setOptanteSimples(!!de?.optante_simples);
+    setOptanteMei(!!de?.optante_mei);
+    setFormaTributacao(de?.forma_tributacao || '');
+    setSocios(de?.socios || []);
+    setCnpjEncontrado(!!de);
+    setErroCnpj('');
+    setMostrarForm(true);
   }
 
   async function salvar(evento) {
@@ -1008,7 +1121,36 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
       setErroForm('O telefone precisa ter DDD + número (10 ou 11 dígitos). Ex.: (83) 90000-0000.');
       return;
     }
-    const dados = { nome: nome.trim(), documento: documento.trim() || null, email: email.trim() || null, telefone: telefone.trim() || null };
+
+    const ehCNPJ = apenasNumeros(documento).length === 14;
+    const dadosEmpresa = ehCNPJ ? {
+      nome_fantasia: nomeFantasia.trim() || null,
+      situacao_cadastral: situacaoCadastral || null,
+      endereco: {
+        cep: apenasNumeros(cep) || null,
+        logradouro: logradouro.trim() || null,
+        numero: numeroEndereco.trim() || null,
+        complemento: complemento.trim() || null,
+        bairro: bairro.trim() || null,
+        cidade: cidade.trim() || null,
+        estado: estado.trim() || null,
+      },
+      cnae_principal: cnaePrincipal,
+      cnaes_secundarios: cnaesSecundarios,
+      capital_social: capitalSocial.trim() ? Number(String(capitalSocial).replace(',', '.')) : null,
+      natureza_juridica: naturezaJuridica || null,
+      porte: porte || null,
+      optante_simples: optanteSimples,
+      optante_mei: optanteMei,
+      forma_tributacao: formaTributacao || null,
+      socios,
+      atualizado_em: new Date().toISOString(),
+    } : null;
+
+    const dados = {
+      nome: nome.trim(), documento: documento.trim() || null, email: email.trim() || null,
+      telefone: telefone.trim() || null, dados_empresa: dadosEmpresa,
+    };
 
     setSalvando(true);
     if (editandoId) {
@@ -1061,7 +1203,12 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
             <div>
               <label className="rotulo">CPF ou CNPJ</label>
               <input className="campo" type="text" inputMode="numeric" value={documento}
-                onChange={(e) => setDocumento(formatarDocumento(e.target.value))} placeholder="000.000.000-00" />
+                onChange={(e) => {
+                  const novoValor = formatarDocumento(e.target.value);
+                  setDocumento(novoValor);
+                  if (apenasNumeros(novoValor).length !== 14) { limparDadosEmpresa(); }
+                  buscarPorCnpj(novoValor);
+                }} placeholder="000.000.000-00" />
               {(() => {
                 const status = documento.trim() ? validarDocumento(documento) : null;
                 if (status === true) return <p className="fn-doc-ok">✓ documento válido</p>;
@@ -1077,6 +1224,129 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
           </div>
           <label className="rotulo">E-mail</label>
           <input className="campo" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+
+          {apenasNumeros(documento).length === 14 && (
+            <div style={{ marginTop: 10, marginBottom: 4, padding: 12, background: 'var(--marca-clara, #E2EFEA)', borderRadius: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <strong style={{ fontSize: 14 }}>📋 Dados da empresa (Receita Federal)</strong>
+                <button type="button" className="botao botao-contorno" disabled={buscandoCnpj}
+                  onClick={() => buscarPorCnpj(documento)}>
+                  {buscandoCnpj ? 'Buscando…' : '🔄 Buscar de novo'}
+                </button>
+              </div>
+
+              {buscandoCnpj && <p className="texto-suave" style={{ fontSize: 13, marginTop: 6 }}>Consultando a Receita Federal…</p>}
+              {erroCnpj && <p className="fn-doc-erro" style={{ marginTop: 6 }}>{erroCnpj}</p>}
+
+              {(cnpjEncontrado || nomeFantasia || logradouro || naturezaJuridica) && (
+                <>
+                  {situacaoCadastral && (
+                    <p style={{ fontSize: 12, marginTop: 6 }}>Situação cadastral: <strong>{situacaoCadastral}</strong></p>
+                  )}
+
+                  <label className="rotulo" style={{ marginTop: 8 }}>Nome fantasia</label>
+                  <input className="campo" type="text" value={nomeFantasia} onChange={(e) => setNomeFantasia(e.target.value)} />
+
+                  <div className="fn-duas">
+                    <div>
+                      <label className="rotulo">CEP</label>
+                      <input className="campo" type="text" inputMode="numeric" value={cep}
+                        onChange={(e) => setCep(formatarCEP(e.target.value))} />
+                    </div>
+                    <div>
+                      <label className="rotulo">Número</label>
+                      <input className="campo" type="text" value={numeroEndereco} onChange={(e) => setNumeroEndereco(e.target.value)} />
+                    </div>
+                  </div>
+                  <label className="rotulo">Logradouro</label>
+                  <input className="campo" type="text" value={logradouro} onChange={(e) => setLogradouro(e.target.value)} />
+                  <div className="fn-duas">
+                    <div>
+                      <label className="rotulo">Bairro</label>
+                      <input className="campo" type="text" value={bairro} onChange={(e) => setBairro(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="rotulo">Complemento</label>
+                      <input className="campo" type="text" value={complemento} onChange={(e) => setComplemento(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="fn-duas">
+                    <div>
+                      <label className="rotulo">Cidade</label>
+                      <input className="campo" type="text" value={cidade} onChange={(e) => setCidade(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="rotulo">Estado (UF)</label>
+                      <input className="campo" type="text" value={estado}
+                        onChange={(e) => setEstado(e.target.value.toUpperCase().slice(0, 2))} placeholder="PB" />
+                    </div>
+                  </div>
+
+                  {cnaePrincipal && (
+                    <p style={{ fontSize: 13, marginTop: 8 }}>
+                      <strong>Atividade principal:</strong> {cnaePrincipal.codigo}{cnaePrincipal.descricao ? ` — ${cnaePrincipal.descricao}` : ''}
+                    </p>
+                  )}
+                  {cnaesSecundarios.length > 0 && (
+                    <details style={{ fontSize: 13, marginTop: 4 }}>
+                      <summary style={{ cursor: 'pointer' }}>Atividades secundárias ({cnaesSecundarios.length})</summary>
+                      <ul style={{ margin: '6px 0 0 18px' }}>
+                        {cnaesSecundarios.map((c, i) => (
+                          <li key={i}>{c.codigo}{c.descricao ? ` — ${c.descricao}` : ''}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+
+                  <div className="fn-duas" style={{ marginTop: 8 }}>
+                    <div>
+                      <label className="rotulo">Capital social</label>
+                      <input className="campo" type="number" step="0.01" value={capitalSocial}
+                        onChange={(e) => setCapitalSocial(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="rotulo">Natureza jurídica</label>
+                      <input className="campo" type="text" value={naturezaJuridica} readOnly />
+                    </div>
+                  </div>
+
+                  <label className="rotulo" style={{ marginTop: 8 }}>Forma de tributação</label>
+                  <select className="campo" value={formaTributacao} onChange={(e) => setFormaTributacao(e.target.value)}>
+                    <option value="">— Selecione —</option>
+                    <option value="MEI">MEI</option>
+                    <option value="Simples Nacional">Simples Nacional</option>
+                    <option value="Lucro Presumido">Lucro Presumido</option>
+                    <option value="Lucro Real">Lucro Real</option>
+                  </select>
+                  <p className="texto-suave" style={{ fontSize: 11, marginTop: 4 }}>
+                    {(optanteSimples || optanteMei)
+                      ? 'A Receita Federal confirma que esta empresa está no Simples Nacional/MEI — já deixamos selecionado.'
+                      : 'A Receita Federal não divulga publicamente se é Lucro Presumido ou Lucro Real — confirme com o contador antes de salvar.'}
+                  </p>
+
+                  {socios.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <label className="rotulo">Sócios (Quadro Societário)</label>
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        {socios.map((s, i) => (
+                          <div key={i} style={{ fontSize: 13, background: '#fff', borderRadius: 6, padding: '6px 10px' }}>
+                            <strong>{s.nome}</strong>
+                            <div className="texto-suave" style={{ fontSize: 12 }}>
+                              {s.qualificacao}{(s.documentoMascarado || s.documento) ? ` · CPF/CNPJ: ${s.documentoMascarado || s.documento}` : ''}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="texto-suave" style={{ fontSize: 11, marginTop: 4 }}>
+                        Por proteção de dados (LGPD), a Receita Federal só libera o CPF dos sócios parcialmente mascarado — não é possível obter o CPF completo por essa consulta.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           {erroForm && <div className="aviso-erro">{erroForm}</div>}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <button type="submit" className="botao botao-principal" disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
@@ -1093,8 +1363,12 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
             <div key={r.id} className="cartao fn-item-cad">
               <div>
                 <strong>{r.nome}</strong>
+                {r.dados_empresa?.nome_fantasia && (
+                  <div className="texto-suave" style={{ fontSize: 12 }}>{r.dados_empresa.nome_fantasia}</div>
+                )}
                 <div className="texto-suave" style={{ fontSize: 13 }}>
                   {r.documento || '—'} {r.telefone ? `· ${r.telefone}` : ''} {r.email ? `· ${r.email}` : ''}
+                  {r.dados_empresa?.endereco?.cidade ? ` · ${r.dados_empresa.endereco.cidade}${r.dados_empresa.endereco.estado ? '/' + r.dados_empresa.endereco.estado : ''}` : ''}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
