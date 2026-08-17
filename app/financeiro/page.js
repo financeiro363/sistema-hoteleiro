@@ -1238,8 +1238,7 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
               {buscandoCnpj && <p className="texto-suave" style={{ fontSize: 13, marginTop: 6 }}>Consultando a Receita Federal…</p>}
               {erroCnpj && <p className="fn-doc-erro" style={{ marginTop: 6 }}>{erroCnpj}</p>}
 
-              {(cnpjEncontrado || nomeFantasia || logradouro || naturezaJuridica) && (
-                <>
+              <>
                   {situacaoCadastral && (
                     <p style={{ fontSize: 12, marginTop: 6 }}>Situação cadastral: <strong>{situacaoCadastral}</strong></p>
                   )}
@@ -1343,7 +1342,6 @@ function PainelCadastroSimples({ titulo, tabela, registros, area, usuario, salva
                     </div>
                   )}
                 </>
-              )}
             </div>
           )}
 
