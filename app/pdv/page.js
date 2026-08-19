@@ -20,6 +20,86 @@ function formatarDataHora(valor) {
   } catch (e) { return String(valor); }
 }
 
+// ============================================================================
+// IMPRESSÃO DO FECHAMENTO DE TURNO
+// Janela isolada (não usa window.print() da página atual) — mesmo padrão já
+// usado na impressão da Ficha de Hóspede, que evita bagunçar o layout.
+// ============================================================================
+function montarHtmlFechamentoTurno({ nomeHotel, nomeOperador, abertoEm, fechadoEm, resumo }) {
+  const escapar = (texto) => String(texto ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const linhasEstoque = resumo.estoque.map((e) => `
+    <tr>
+      <td>${escapar(e.produto.nome)}</td>
+      <td class="num">${e.recebido != null ? e.recebido : '—'}</td>
+      <td class="num">${e.atual}</td>
+      <td class="num ${e.diferenca ? 'divergente' : ''}">${e.diferenca != null ? (e.diferenca > 0 ? '+' : '') + e.diferenca : '—'}</td>
+    </tr>`).join('');
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fechamento de turno — ${escapar(nomeOperador)}</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 14px; margin: 18px 0 6px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  .cabecalho { text-align: center; margin-bottom: 16px; }
+  .info-linha { font-size: 12px; color: #444; margin: 2px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #eee; }
+  th { color: #555; font-weight: 600; }
+  td.num, th.num { text-align: right; }
+  .linha-total td { font-weight: 700; border-top: 2px solid #333; }
+  .divergente { color: #A31212; font-weight: 700; }
+  .assinatura { margin-top: 50px; font-size: 12px; }
+  .assinatura .linha { border-top: 1px solid #333; width: 280px; margin-top: 44px; padding-top: 4px; }
+</style>
+</head>
+<body>
+  <div class="cabecalho">
+    <h1>${escapar(nomeHotel)}</h1>
+    <div class="info-linha">Fechamento de Turno — Conveniência (PDV)</div>
+  </div>
+
+  <div class="info-linha"><strong>Operador:</strong> ${escapar(nomeOperador)}</div>
+  <div class="info-linha"><strong>Aberto em:</strong> ${escapar(formatarDataHora(abertoEm))}</div>
+  <div class="info-linha"><strong>Fechado em:</strong> ${escapar(formatarDataHora(fechadoEm))}</div>
+
+  <h2>Formas de pagamento (dinheiro em caixa)</h2>
+  <table>
+    <tr><td>Dinheiro</td><td class="num">${formatarMoeda(resumo.pagamentos.DINHEIRO)}</td></tr>
+    <tr><td>Pix</td><td class="num">${formatarMoeda(resumo.pagamentos.PIX)}</td></tr>
+    <tr><td>Cartão</td><td class="num">${formatarMoeda(resumo.pagamentos.CARTAO)}</td></tr>
+    <tr class="linha-total"><td>Subtotal em caixa</td><td class="num">${formatarMoeda(resumo.subtotalCaixa)}</td></tr>
+    <tr><td>Lançado no quarto (não entra no caixa físico)</td><td class="num">${formatarMoeda(resumo.pagamentos.quarto)}</td></tr>
+    <tr class="linha-total"><td>TOTAL GERAL DE VENDAS DO TURNO</td><td class="num">${formatarMoeda(resumo.totalGeral)}</td></tr>
+  </table>
+
+  <h2>Conferência de estoque (passagem de bastão)</h2>
+  <table>
+    <thead><tr><th>Produto</th><th class="num">Recebido</th><th class="num">Repassando agora</th><th class="num">Diferença</th></tr></thead>
+    <tbody>${linhasEstoque || '<tr><td colspan="4">Nenhum produto cadastrado.</td></tr>'}</tbody>
+  </table>
+
+  <div class="assinatura">
+    <div class="linha">Assinatura do operador (${escapar(nomeOperador)})</div>
+  </div>
+</body>
+</html>`;
+}
+
+function imprimirFechamentoTurno(dados) {
+  const janela = window.open('', '_blank', 'width=900,height=1000');
+  if (!janela) return;
+  janela.document.open();
+  janela.document.write(montarHtmlFechamentoTurno(dados));
+  janela.document.close();
+  janela.onload = () => { janela.focus(); janela.print(); };
+  setTimeout(() => { try { janela.focus(); janela.print(); } catch (e) {} }, 400);
+}
+
 export default function PDV() {
   const router = useRouter();
   const [verificandoLogin, setVerificandoLogin] = useState(true);
@@ -94,6 +174,8 @@ function PainelVender({ usuario }) {
   const [mostrarCheckout, setMostrarCheckout] = useState(false);
   const [vendasPendentes, setVendasPendentes] = useState([]);
   const [reenviando, setReenviando] = useState(null);
+  const [resumoFechamento, setResumoFechamento] = useState(null);
+  const [carregandoResumo, setCarregandoResumo] = useState(false);
   const inputBuscaRef = useRef(null);
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 6000); }
@@ -175,22 +257,93 @@ function PainelVender({ usuario }) {
 
   async function abrirTurno() {
     setAbrindoTurno(true);
-    const { error } = await supabase.from('pdv_turnos').insert({
-      hotel_id: usuario.hotel_id, usuario_abertura_id: usuario.id, status: 'ABERTO',
-    });
+    const { data: novoTurno, error } = await supabase.from('pdv_turnos')
+      .insert({ hotel_id: usuario.hotel_id, usuario_abertura_id: usuario.id, status: 'ABERTO' })
+      .select().single();
+    if (error || !novoTurno) {
+      setAbrindoTurno(false);
+      setErro('Não foi possível abrir o turno. Detalhe técnico: ' + error?.message);
+      return;
+    }
+    // Fotografa a quantidade de cada produto no momento da abertura, pra
+    // depois conseguir mostrar "recebi X, estou passando Y" no fechamento.
+    if (produtos.length > 0) {
+      const linhas = produtos.map((p) => ({
+        hotel_id: usuario.hotel_id, turno_id: novoTurno.id, tipo: 'ABERTURA',
+        produto_id: p.id, nome_produto: p.nome, quantidade: p.estoque_atual,
+      }));
+      await supabase.from('pdv_turno_estoque').insert(linhas);
+    }
     setAbrindoTurno(false);
-    if (error) { setErro('Não foi possível abrir o turno. Detalhe técnico: ' + error.message); return; }
     carregarTurno();
   }
 
   async function fecharTurno() {
     setFechandoTurno(true);
+
+    // Fotografa o FECHAMENTO do estoque (o que está indo para o próximo operador).
+    if (produtos.length > 0) {
+      const linhasFechamento = produtos.map((p) => ({
+        hotel_id: usuario.hotel_id, turno_id: turno.id, tipo: 'FECHAMENTO',
+        produto_id: p.id, nome_produto: p.nome, quantidade: p.estoque_atual,
+      }));
+      await supabase.from('pdv_turno_estoque').insert(linhasFechamento);
+    }
+
     const { error } = await supabase.from('pdv_turnos')
       .update({ status: 'FECHADO', fechado_em: new Date().toISOString() }).eq('id', turno.id);
     setFechandoTurno(false);
     if (error) { setErro('Não foi possível fechar o turno. Detalhe técnico: ' + error.message); return; }
+
+    if (resumoFechamento) {
+      const { data: hotelInfo } = await supabase.from('hoteis').select('nome_fantasia').eq('id', usuario.hotel_id).maybeSingle();
+      imprimirFechamentoTurno({
+        nomeHotel: hotelInfo?.nome_fantasia || 'Sistema Hoteleiro',
+        nomeOperador: usuario.nome,
+        abertoEm: turno.aberto_em,
+        fechadoEm: new Date().toISOString(),
+        resumo: resumoFechamento,
+      });
+    }
+
     setMostrarFechamento(false);
+    setResumoFechamento(null);
     carregarTurno();
+  }
+
+  async function prepararFechamento() {
+    setMostrarFechamento(true);
+    setCarregandoResumo(true);
+
+    // 1) Vendas concluídas deste turno, para somar por forma de pagamento.
+    const { data: vendasDoTurno } = await supabase.from('pdv_vendas')
+      .select('tipo_pagamento, forma_pagamento_avulso, valor_total')
+      .eq('turno_id', turno.id).eq('status', 'CONCLUIDA');
+
+    const pagamentos = { DINHEIRO: 0, PIX: 0, CARTAO: 0, quarto: 0 };
+    (vendasDoTurno || []).forEach((v) => {
+      if (v.tipo_pagamento === 'QUARTO') { pagamentos.quarto += Number(v.valor_total); }
+      else if (v.forma_pagamento_avulso && pagamentos[v.forma_pagamento_avulso] != null) {
+        pagamentos[v.forma_pagamento_avulso] += Number(v.valor_total);
+      }
+    });
+    const subtotalCaixa = pagamentos.DINHEIRO + pagamentos.PIX + pagamentos.CARTAO;
+    const totalGeral = subtotalCaixa + pagamentos.quarto;
+
+    // 2) Quantidade recebida na abertura deste turno, para comparar com o
+    // estoque atual (o que está sendo repassado agora).
+    const { data: abertura } = await supabase.from('pdv_turno_estoque')
+      .select('produto_id, nome_produto, quantidade').eq('turno_id', turno.id).eq('tipo', 'ABERTURA');
+    const mapaRecebido = Object.fromEntries((abertura || []).map((a) => [a.produto_id, Number(a.quantidade)]));
+
+    const estoque = produtos.map((p) => {
+      const recebido = mapaRecebido[p.id] ?? null;
+      const atual = Number(p.estoque_atual);
+      return { produto: p, recebido, atual, diferenca: recebido != null ? atual - recebido : null };
+    });
+
+    setResumoFechamento({ pagamentos, subtotalCaixa, totalGeral, estoque });
+    setCarregandoResumo(false);
   }
 
   async function aceitarTurnoEEstoque(contagens) {
@@ -220,6 +373,14 @@ function PainelVender({ usuario }) {
         await supabase.from('pdv_produtos').update({ estoque_atual: c.contada, atualizado_em: new Date().toISOString() }).eq('id', c.produto.id);
       }
     }
+
+    // 3b) Fotografa a ABERTURA do turno novo com a contagem física recém
+    // confirmada — é isso que o novo operador realmente recebeu na mão.
+    const linhasAbertura = contagens.map((c) => ({
+      hotel_id: usuario.hotel_id, turno_id: novoTurno.id, tipo: 'ABERTURA',
+      produto_id: c.produto.id, nome_produto: c.produto.nome, quantidade: c.contada,
+    }));
+    await supabase.from('pdv_turno_estoque').insert(linhasAbertura);
 
     // 4) Fecha definitivamente o turno anterior, com o resultado da conferência
     await supabase.from('pdv_turnos').update({
@@ -372,12 +533,13 @@ function PainelVender({ usuario }) {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <p className="texto-suave" style={{ fontSize: 12, margin: 0 }}>Turno aberto em {formatarDataHora(turno.aberto_em)}</p>
-        <button type="button" className="botao botao-suave" style={{ fontSize: 12, padding: '6px 12px' }} onClick={() => setMostrarFechamento(true)}>
+        <button type="button" className="botao botao-suave" style={{ fontSize: 12, padding: '6px 12px' }} onClick={prepararFechamento}>
           🔒 Fechar meu turno
         </button>
       </div>
       {mostrarFechamento && (
-        <ModalFechamento produtos={produtos} fechando={fechandoTurno} onConfirmar={fecharTurno} onFechar={() => setMostrarFechamento(false)} />
+        <ModalFechamento resumo={resumoFechamento} carregando={carregandoResumo} fechando={fechandoTurno}
+          onConfirmar={fecharTurno} onFechar={() => { setMostrarFechamento(false); setResumoFechamento(null); }} />
       )}
 
       <div className="pdv-busca-area">
@@ -530,26 +692,53 @@ function ModalCheckout({ total, carrinho, onFechar, onConfirmar }) {
 // FECHAR TURNO — mostra o extrato de estoque esperado antes de confirmar
 // ============================================================================
 
-function ModalFechamento({ produtos, fechando, onConfirmar, onFechar }) {
+function ModalFechamento({ resumo, carregando, fechando, onConfirmar, onFechar }) {
   return (
     <div className="pdv-overlay" role="dialog" aria-modal="true">
-      <div className="pdv-modal">
+      <div className="pdv-modal" style={{ maxWidth: 560 }}>
         <h2 style={{ marginTop: 0 }}>Fechar turno</h2>
-        <p className="texto-suave" style={{ fontSize: 13 }}>
-          Extrato de estoque esperado (o que o sistema calcula que deveria sobrar de cada produto). A próxima pessoa vai conferir isso fisicamente ao assumir o turno.
-        </p>
-        <div className="pdv-extrato">
-          {produtos.map((p) => (
-            <div key={p.id} className="pdv-extrato-linha">
-              <span>{p.nome}</span>
-              <strong>{p.estoque_atual}</strong>
+
+        {carregando || !resumo ? (
+          <p className="texto-suave">Calculando o resumo do turno…</p>
+        ) : (
+          <>
+            <p className="texto-suave" style={{ fontSize: 13 }}>
+              Confira os valores abaixo antes de confirmar. Ao fechar, um comprovante para impressão vai abrir automaticamente.
+            </p>
+
+            <h3 style={{ fontSize: 14, marginBottom: 6 }}>Formas de pagamento</h3>
+            <div className="pdv-extrato">
+              <div className="pdv-extrato-linha"><span>Dinheiro</span><strong>{formatarMoeda(resumo.pagamentos.DINHEIRO)}</strong></div>
+              <div className="pdv-extrato-linha"><span>Pix</span><strong>{formatarMoeda(resumo.pagamentos.PIX)}</strong></div>
+              <div className="pdv-extrato-linha"><span>Cartão</span><strong>{formatarMoeda(resumo.pagamentos.CARTAO)}</strong></div>
+              <div className="pdv-extrato-linha" style={{ borderTop: '1px solid #ccc', paddingTop: 6, marginTop: 4 }}>
+                <span>Subtotal em caixa</span><strong>{formatarMoeda(resumo.subtotalCaixa)}</strong>
+              </div>
+              <div className="pdv-extrato-linha"><span>Lançado no quarto</span><strong>{formatarMoeda(resumo.pagamentos.quarto)}</strong></div>
+              <div className="pdv-extrato-linha" style={{ borderTop: '2px solid #333', paddingTop: 6, marginTop: 4 }}>
+                <span><strong>Total geral do turno</strong></span><strong>{formatarMoeda(resumo.totalGeral)}</strong>
+              </div>
             </div>
-          ))}
-          {produtos.length === 0 && <p className="texto-suave">Nenhum produto cadastrado.</p>}
-        </div>
+
+            <h3 style={{ fontSize: 14, marginTop: 16, marginBottom: 6 }}>Estoque — recebido x repassando agora</h3>
+            <div className="pdv-extrato">
+              {resumo.estoque.map((e) => (
+                <div key={e.produto.id} className="pdv-extrato-linha">
+                  <span>{e.produto.nome}</span>
+                  <span>
+                    {e.recebido != null ? e.recebido : '—'} → <strong>{e.atual}</strong>
+                    {e.diferenca ? <span style={{ color: 'var(--erro-texto, #A31212)', marginLeft: 6 }}>({e.diferenca > 0 ? '+' : ''}{e.diferenca})</span> : null}
+                  </span>
+                </div>
+              ))}
+              {resumo.estoque.length === 0 && <p className="texto-suave">Nenhum produto cadastrado.</p>}
+            </div>
+          </>
+        )}
+
         <div className="pdv-modal-botoes">
-          <button type="button" className="botao botao-principal" onClick={onConfirmar} disabled={fechando} style={{ flex: 1 }}>
-            {fechando ? 'Fechando…' : '✓ Confirmar Fechamento'}
+          <button type="button" className="botao botao-principal" onClick={onConfirmar} disabled={fechando || carregando || !resumo} style={{ flex: 1 }}>
+            {fechando ? 'Fechando…' : '✓ Confirmar e Imprimir'}
           </button>
           <button type="button" className="botao botao-suave" onClick={onFechar}>Cancelar</button>
         </div>
@@ -833,12 +1022,25 @@ function ModalProduto({ produto, onFechar, onSalvar }) {
 // ============================================================================
 
 function PainelRelatorios({ usuario }) {
+  const [subRelatorio, setSubRelatorio] = useState('desempenho');
+
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
   const [linhas, setLinhas] = useState([]); // agregado por produto
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [divergencias, setDivergencias] = useState([]);
+
+  // ---- Lançamentos detalhados (venda por venda, com filtros) ----
+  const [operadores, setOperadores] = useState([]);
+  const [produtosLista, setProdutosLista] = useState([]);
+  const [dataInicioLog, setDataInicioLog] = useState('');
+  const [dataFimLog, setDataFimLog] = useState('');
+  const [operadorFiltro, setOperadorFiltro] = useState('');
+  const [produtoFiltro, setProdutoFiltro] = useState('');
+  const [vendasDetalhadas, setVendasDetalhadas] = useState([]);
+  const [carregandoLog, setCarregandoLog] = useState(true);
+  const [erroLog, setErroLog] = useState('');
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -886,6 +1088,53 @@ function PainelRelatorios({ usuario }) {
 
   useEffect(() => { carregar(); carregarDivergencias(); }, [carregar, carregarDivergencias]);
 
+  // Carrega as listas usadas nos filtros (operadores e produtos), uma vez.
+  useEffect(() => {
+    (async () => {
+      const [{ data: pessoas }, { data: prods }] = await Promise.all([
+        supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id).order('nome', { ascending: true }),
+        supabase.from('pdv_produtos').select('id, nome').order('nome', { ascending: true }),
+      ]);
+      setOperadores(pessoas || []);
+      setProdutosLista(prods || []);
+    })();
+  }, [usuario.hotel_id]);
+
+  const carregarLancamentos = useCallback(async () => {
+    setCarregandoLog(true);
+    setErroLog('');
+    let consulta = supabase.from('pdv_vendas')
+      .select('id, numero_venda, criado_em, tipo_pagamento, forma_pagamento_avulso, valor_total, vendido_por_id, nome_hospede, pdv_venda_itens!inner(produto_id, nome_produto, quantidade, subtotal)')
+      .eq('hotel_id', usuario.hotel_id)
+      .eq('status', 'CONCLUIDA')
+      .order('criado_em', { ascending: false })
+      .limit(300);
+    if (dataInicioLog) consulta = consulta.gte('criado_em', dataInicioLog);
+    if (dataFimLog) consulta = consulta.lte('criado_em', dataFimLog + 'T23:59:59');
+    if (operadorFiltro) consulta = consulta.eq('vendido_por_id', operadorFiltro);
+    if (produtoFiltro) consulta = consulta.eq('pdv_venda_itens.produto_id', produtoFiltro);
+
+    const { data, error } = await consulta;
+    if (error) { setErroLog('Não foi possível carregar. Detalhe técnico: ' + error.message); setCarregandoLog(false); return; }
+    setVendasDetalhadas(data || []);
+    setCarregandoLog(false);
+  }, [usuario.hotel_id, dataInicioLog, dataFimLog, operadorFiltro, produtoFiltro]);
+
+  useEffect(() => { if (subRelatorio === 'lancamentos') carregarLancamentos(); }, [subRelatorio, carregarLancamentos]);
+
+  const mapaOperadores = Object.fromEntries(operadores.map((o) => [String(o.id), o.nome]));
+
+  // Soma por dia (considerando o valor total da venda, não repetido por item)
+  const totaisPorDia = (() => {
+    const mapa = {};
+    vendasDetalhadas.forEach((v) => {
+      const dia = (v.criado_em || '').slice(0, 10);
+      mapa[dia] = (mapa[dia] || 0) + Number(v.valor_total);
+    });
+    return Object.entries(mapa).sort((a, b) => b[0].localeCompare(a[0]));
+  })();
+  const totalGeralLog = vendasDetalhadas.reduce((s, v) => s + Number(v.valor_total), 0);
+
   const receitaTotal = linhas.reduce((s, l) => s + l.receita, 0);
   const custoTotal = linhas.reduce((s, l) => s + l.custo, 0);
   const lucroTotal = receitaTotal - custoTotal;
@@ -893,70 +1142,155 @@ function PainelRelatorios({ usuario }) {
 
   return (
     <section>
-      {erro && <div className="aviso-erro">{erro}</div>}
+      <nav className="pdv-abas" aria-label="Tipo de relatório" style={{ marginBottom: 16 }}>
+        <button type="button" className={subRelatorio === 'desempenho' ? 'pdv-aba pdv-aba-ativa' : 'pdv-aba'} onClick={() => setSubRelatorio('desempenho')}>📈 Desempenho</button>
+        <button type="button" className={subRelatorio === 'lancamentos' ? 'pdv-aba pdv-aba-ativa' : 'pdv-aba'} onClick={() => setSubRelatorio('lancamentos')}>🧾 Lançamentos Detalhados</button>
+      </nav>
 
-      <div className="pdv-barra">
-        <div>
-          <label className="rotulo">De</label>
-          <input className="campo" type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
-        </div>
-        <div>
-          <label className="rotulo">Até</label>
-          <input className="campo" type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
-        </div>
-      </div>
+      {subRelatorio === 'desempenho' && (
+        <>
+          {erro && <div className="aviso-erro">{erro}</div>}
 
-      <div className="pdv-resumo-cards">
-        <div className="pdv-resumo-card"><span className="texto-suave">Receita total</span><strong>{formatarMoeda(receitaTotal)}</strong></div>
-        <div className="pdv-resumo-card"><span className="texto-suave">Custo total</span><strong>{formatarMoeda(custoTotal)}</strong></div>
-        <div className="pdv-resumo-card"><span className="texto-suave">Lucro total</span><strong>{formatarMoeda(lucroTotal)}</strong></div>
-      </div>
+          <div className="pdv-barra">
+            <div>
+              <label className="rotulo">De</label>
+              <input className="campo" type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Até</label>
+              <input className="campo" type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
+            </div>
+          </div>
 
-      <h2 style={{ fontSize: 16, marginTop: 24 }}>Curva ABC (por receita)</h2>
-      <p className="texto-suave" style={{ fontSize: 12, marginTop: -8 }}>A = até 80% da receita acumulada · B = até 95% · C = o restante</p>
-      {carregando ? <p className="texto-suave">Carregando…</p> : (
-        <div className="pdv-tabela-wrap">
-          <table className="pdv-tabela">
-            <thead><tr><th>Classe</th><th>Produto</th><th>Qtd. vendida</th><th>Receita</th><th>Custo</th><th>Lucro</th><th>Margem</th></tr></thead>
-            <tbody>
-              {linhas.map((l, i) => (
-                <tr key={i}>
-                  <td><span style={{ fontWeight: 700, color: CLASSE_COR[l.classe] }}>{l.classe}</span></td>
-                  <td>{l.nome}</td>
-                  <td>{l.quantidade}</td>
-                  <td>{formatarMoeda(l.receita)}</td>
-                  <td>{formatarMoeda(l.custo)}</td>
-                  <td>{formatarMoeda(l.lucro)}</td>
-                  <td>{l.margem.toFixed(1)}%</td>
-                </tr>
-              ))}
-              {linhas.length === 0 && <tr><td colSpan={7} className="texto-suave" style={{ textAlign: 'center', padding: 20 }}>Nenhuma venda no período.</td></tr>}
-            </tbody>
-          </table>
-        </div>
+          <div className="pdv-resumo-cards">
+            <div className="pdv-resumo-card"><span className="texto-suave">Receita total</span><strong>{formatarMoeda(receitaTotal)}</strong></div>
+            <div className="pdv-resumo-card"><span className="texto-suave">Custo total</span><strong>{formatarMoeda(custoTotal)}</strong></div>
+            <div className="pdv-resumo-card"><span className="texto-suave">Lucro total</span><strong>{formatarMoeda(lucroTotal)}</strong></div>
+          </div>
+
+          <h2 style={{ fontSize: 16, marginTop: 24 }}>Curva ABC (por receita)</h2>
+          <p className="texto-suave" style={{ fontSize: 12, marginTop: -8 }}>A = até 80% da receita acumulada · B = até 95% · C = o restante</p>
+          {carregando ? <p className="texto-suave">Carregando…</p> : (
+            <div className="pdv-tabela-wrap">
+              <table className="pdv-tabela">
+                <thead><tr><th>Classe</th><th>Produto</th><th>Qtd. vendida</th><th>Receita</th><th>Custo</th><th>Lucro</th><th>Margem</th></tr></thead>
+                <tbody>
+                  {linhas.map((l, i) => (
+                    <tr key={i}>
+                      <td><span style={{ fontWeight: 700, color: CLASSE_COR[l.classe] }}>{l.classe}</span></td>
+                      <td>{l.nome}</td>
+                      <td>{l.quantidade}</td>
+                      <td>{formatarMoeda(l.receita)}</td>
+                      <td>{formatarMoeda(l.custo)}</td>
+                      <td>{formatarMoeda(l.lucro)}</td>
+                      <td>{l.margem.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                  {linhas.length === 0 && <tr><td colSpan={7} className="texto-suave" style={{ textAlign: 'center', padding: 20 }}>Nenhuma venda no período.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <h2 style={{ fontSize: 16, marginTop: 28 }}>⚠️ Divergências de estoque (trocas de turno)</h2>
+          <p className="texto-suave" style={{ fontSize: 12, marginTop: -8 }}>Produtos onde a contagem física não bateu com o esperado, indicando em qual troca de turno isso ocorreu.</p>
+          <div className="pdv-tabela-wrap">
+            <table className="pdv-tabela">
+              <thead><tr><th>Data</th><th>Produto</th><th>Esperado</th><th>Contado</th><th>Diferença</th></tr></thead>
+              <tbody>
+                {divergencias.map((d) => (
+                  <tr key={d.id}>
+                    <td>{formatarDataHora(d.criado_em)}</td>
+                    <td>{d.nome_produto}</td>
+                    <td>{d.quantidade_esperada}</td>
+                    <td>{d.quantidade_contada}</td>
+                    <td style={{ color: Number(d.divergencia) < 0 ? 'var(--erro-texto)' : 'var(--sucesso-texto)', fontWeight: 700 }}>
+                      {Number(d.divergencia) > 0 ? '+' : ''}{d.divergencia}
+                    </td>
+                  </tr>
+                ))}
+                {divergencias.length === 0 && <tr><td colSpan={5} className="texto-suave" style={{ textAlign: 'center', padding: 20 }}>Nenhuma divergência registrada — ótimo sinal!</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
-      <h2 style={{ fontSize: 16, marginTop: 28 }}>⚠️ Divergências de estoque (trocas de turno)</h2>
-      <p className="texto-suave" style={{ fontSize: 12, marginTop: -8 }}>Produtos onde a contagem física não bateu com o esperado, indicando em qual troca de turno isso ocorreu.</p>
-      <div className="pdv-tabela-wrap">
-        <table className="pdv-tabela">
-          <thead><tr><th>Data</th><th>Produto</th><th>Esperado</th><th>Contado</th><th>Diferença</th></tr></thead>
-          <tbody>
-            {divergencias.map((d) => (
-              <tr key={d.id}>
-                <td>{formatarDataHora(d.criado_em)}</td>
-                <td>{d.nome_produto}</td>
-                <td>{d.quantidade_esperada}</td>
-                <td>{d.quantidade_contada}</td>
-                <td style={{ color: Number(d.divergencia) < 0 ? 'var(--erro-texto)' : 'var(--sucesso-texto)', fontWeight: 700 }}>
-                  {Number(d.divergencia) > 0 ? '+' : ''}{d.divergencia}
-                </td>
-              </tr>
-            ))}
-            {divergencias.length === 0 && <tr><td colSpan={5} className="texto-suave" style={{ textAlign: 'center', padding: 20 }}>Nenhuma divergência registrada — ótimo sinal!</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      {subRelatorio === 'lancamentos' && (
+        <>
+          {erroLog && <div className="aviso-erro">{erroLog}</div>}
+
+          <div className="pdv-barra">
+            <div>
+              <label className="rotulo">De</label>
+              <input className="campo" type="date" value={dataInicioLog} onChange={(e) => setDataInicioLog(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Até</label>
+              <input className="campo" type="date" value={dataFimLog} onChange={(e) => setDataFimLog(e.target.value)} />
+            </div>
+            <div>
+              <label className="rotulo">Operador</label>
+              <select className="campo" value={operadorFiltro} onChange={(e) => setOperadorFiltro(e.target.value)}>
+                <option value="">Todos</option>
+                {operadores.map((o) => <option key={o.id} value={o.id}>{o.nome}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="rotulo">Produto</label>
+              <select className="campo" value={produtoFiltro} onChange={(e) => setProdutoFiltro(e.target.value)}>
+                <option value="">Todos</option>
+                {produtosLista.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="pdv-resumo-cards">
+            <div className="pdv-resumo-card"><span className="texto-suave">Total no filtro</span><strong>{formatarMoeda(totalGeralLog)}</strong></div>
+            <div className="pdv-resumo-card"><span className="texto-suave">Nº de vendas</span><strong>{vendasDetalhadas.length}</strong></div>
+          </div>
+
+          <h2 style={{ fontSize: 16, marginTop: 20 }}>Somatório por dia</h2>
+          <div className="pdv-tabela-wrap">
+            <table className="pdv-tabela">
+              <thead><tr><th>Dia</th><th>Total vendido</th></tr></thead>
+              <tbody>
+                {totaisPorDia.map(([dia, total]) => (
+                  <tr key={dia}>
+                    <td>{dia.split('-').reverse().join('/')}</td>
+                    <td>{formatarMoeda(total)}</td>
+                  </tr>
+                ))}
+                {totaisPorDia.length === 0 && <tr><td colSpan={2} className="texto-suave" style={{ textAlign: 'center', padding: 20 }}>Nenhuma venda no filtro.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+
+          <h2 style={{ fontSize: 16, marginTop: 24 }}>Vendas ({vendasDetalhadas.length})</h2>
+          {carregandoLog ? <p className="texto-suave">Carregando…</p> : (
+            <div className="pdv-tabela-wrap">
+              <table className="pdv-tabela">
+                <thead><tr><th>Data/Hora</th><th>Venda</th><th>Operador</th><th>Itens</th><th>Pagamento</th><th>Valor</th></tr></thead>
+                <tbody>
+                  {vendasDetalhadas.map((v) => (
+                    <tr key={v.id}>
+                      <td>{formatarDataHora(v.criado_em)}</td>
+                      <td>#{v.numero_venda}</td>
+                      <td>{mapaOperadores[String(v.vendido_por_id)] || '—'}</td>
+                      <td style={{ fontSize: 12 }}>
+                        {(v.pdv_venda_itens || []).map((it) => `${it.quantidade}× ${it.nome_produto}`).join(', ')}
+                      </td>
+                      <td>{v.tipo_pagamento === 'QUARTO' ? `Quarto (${v.nome_hospede || 's/nome'})` : (v.forma_pagamento_avulso || '—')}</td>
+                      <td>{formatarMoeda(v.valor_total)}</td>
+                    </tr>
+                  ))}
+                  {vendasDetalhadas.length === 0 && <tr><td colSpan={6} className="texto-suave" style={{ textAlign: 'center', padding: 20 }}>Nenhuma venda encontrada no filtro.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
