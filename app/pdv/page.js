@@ -25,7 +25,7 @@ function formatarDataHora(valor) {
 // Janela isolada (não usa window.print() da página atual) — mesmo padrão já
 // usado na impressão da Ficha de Hóspede, que evita bagunçar o layout.
 // ============================================================================
-function montarHtmlFechamentoTurno({ nomeHotel, nomeOperador, abertoEm, fechadoEm, resumo }) {
+function montarHtmlFechamentoTurno({ nomeHotel, nomeOperador, abertoEm, fechadoEm, situacao, resumo }) {
   const escapar = (texto) => String(texto ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const linhasEstoque = resumo.estoque.map((e) => `
     <tr>
@@ -66,6 +66,7 @@ function montarHtmlFechamentoTurno({ nomeHotel, nomeOperador, abertoEm, fechadoE
   <div class="info-linha"><strong>Operador:</strong> ${escapar(nomeOperador)}</div>
   <div class="info-linha"><strong>Aberto em:</strong> ${escapar(formatarDataHora(abertoEm))}</div>
   <div class="info-linha"><strong>Fechado em:</strong> ${escapar(formatarDataHora(fechadoEm))}</div>
+  <div class="info-linha"><strong>Situação:</strong> ${escapar(situacao || '—')}</div>
 
   <h2>Formas de pagamento (dinheiro em caixa)</h2>
   <table>
@@ -158,12 +159,18 @@ export default function PDV() {
 // ============================================================================
 
 function PainelVender({ usuario }) {
+  const souAdmin = usuario.papel === 'ADMIN';
   const [turno, setTurno] = useState(null);
-  const [turnoPendente, setTurnoPendente] = useState(null); // turno fechado por outra pessoa, aguardando conferência
+  const [turnoPendente, setTurnoPendente] = useState(null); // turno passado especificamente pra mim, aguardando minha conferência
+  const [turnoPendenteDeOutro, setTurnoPendenteDeOutro] = useState(null); // turno passado pra outra pessoa (só informativo)
   const [carregandoTurno, setCarregandoTurno] = useState(true);
   const [abrindoTurno, setAbrindoTurno] = useState(false);
   const [fechandoTurno, setFechandoTurno] = useState(false);
-  const [mostrarFechamento, setMostrarFechamento] = useState(false);
+  const [mostrarPainelTurno, setMostrarPainelTurno] = useState(false);
+  const [modoPainelTurno, setModoPainelTurno] = useState('consulta'); // 'consulta' | 'fechar'
+  const [acaoFechamento, setAcaoFechamento] = useState(null); // 'PASSAR' | 'ENCERRAR' | null
+  const [proximoOperadorId, setProximoOperadorId] = useState('');
+  const [operadoresHotel, setOperadoresHotel] = useState([]);
 
   const [produtos, setProdutos] = useState([]);
   const [busca, setBusca] = useState('');
@@ -180,6 +187,14 @@ function PainelVender({ usuario }) {
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 6000); }
 
+  const mapaOperadores = Object.fromEntries(operadoresHotel.map((o) => [String(o.id), o.nome]));
+
+  const carregarOperadores = useCallback(async () => {
+    const { data } = await supabase.from('usuarios').select('id, nome')
+      .eq('hotel_id', usuario.hotel_id).eq('ativo', true).order('nome', { ascending: true });
+    setOperadoresHotel((data || []).filter((o) => o.id !== usuario.id));
+  }, [usuario.id, usuario.hotel_id]);
+
   const carregarTurno = useCallback(async () => {
     setCarregandoTurno(true);
     // 1) Eu já tenho um turno aberto?
@@ -187,18 +202,34 @@ function PainelVender({ usuario }) {
       .eq('usuario_abertura_id', usuario.id).eq('hotel_id', usuario.hotel_id).eq('status', 'ABERTO')
       .order('aberto_em', { ascending: false }).limit(1).maybeSingle();
     if (meuTurno) {
-      setTurno(meuTurno); setTurnoPendente(null); setCarregandoTurno(false);
+      setTurno(meuTurno); setTurnoPendente(null); setTurnoPendenteDeOutro(null); setCarregandoTurno(false);
       return;
     }
     setTurno(null);
-    // 2) Existe algum turno FECHADO (de qualquer pessoa) aguardando
-    // conferência física antes de um novo turno poder abrir?
-    const { data: fechado } = await supabase.from('pdv_turnos').select('*')
-      .eq('hotel_id', usuario.hotel_id).eq('status', 'FECHADO')
+    // 2) Existe algum turno passado especificamente PRA MIM, aguardando eu conferir e aceitar?
+    const { data: paraMim } = await supabase.from('pdv_turnos').select('*')
+      .eq('hotel_id', usuario.hotel_id).eq('status', 'FECHADO').eq('passado_para_id', usuario.id)
       .order('fechado_em', { ascending: false }).limit(1).maybeSingle();
-    setTurnoPendente(fechado || null);
+    if (paraMim) {
+      setTurnoPendente(paraMim); setTurnoPendenteDeOutro(null); setCarregandoTurno(false);
+      return;
+    }
+    setTurnoPendente(null);
+    // 3) Existe algum turno passado pra OUTRA pessoa, ainda aguardando ela? (só pra avisar na tela)
+    const { data: deOutro } = await supabase.from('pdv_turnos').select('*')
+      .eq('hotel_id', usuario.hotel_id).eq('status', 'FECHADO').not('passado_para_id', 'is', null)
+      .order('fechado_em', { ascending: false }).limit(1).maybeSingle();
+    setTurnoPendenteDeOutro(deOutro || null);
     setCarregandoTurno(false);
   }, [usuario.id, usuario.hotel_id]);
+
+  async function cancelarPassagemPendente(t) {
+    const confirmou = window.confirm(`Cancelar a passagem de turno pendente para ${mapaOperadores[String(t.passado_para_id)] || 'esse operador'}? O caixa fica livre para qualquer pessoa abrir um turno novo.`);
+    if (!confirmou) return;
+    await supabase.from('pdv_turnos').update({ status: 'ENCERRADO' }).eq('id', t.id);
+    mostrarAviso('Passagem cancelada — o caixa está livre.');
+    carregarTurno();
+  }
 
   const carregarProdutos = useCallback(async () => {
     const { data } = await supabase.from('pdv_produtos').select('*').eq('ativo', true).order('nome', { ascending: true });
@@ -252,7 +283,7 @@ function PainelVender({ usuario }) {
     carregarProdutos();
   }
 
-  useEffect(() => { carregarTurno(); carregarProdutos(); carregarVendasPendentes(); }, [carregarTurno, carregarProdutos, carregarVendasPendentes]);
+  useEffect(() => { carregarTurno(); carregarProdutos(); carregarVendasPendentes(); carregarOperadores(); }, [carregarTurno, carregarProdutos, carregarVendasPendentes, carregarOperadores]);
   useEffect(() => { if (turno && inputBuscaRef.current) inputBuscaRef.current.focus(); }, [turno]);
 
   async function abrirTurno() {
@@ -278,10 +309,20 @@ function PainelVender({ usuario }) {
     carregarTurno();
   }
 
-  async function fecharTurno() {
+  async function confirmarFechamento() {
+    // Modo consulta: só fecha o painel, não mexe em nada.
+    if (modoPainelTurno === 'consulta') {
+      setMostrarPainelTurno(false); setResumoFechamento(null);
+      return;
+    }
+
+    setErro('');
+    if (!acaoFechamento) { setErro('Escolha se vai passar o turno para alguém ou encerrar sem passar.'); return; }
+    if (acaoFechamento === 'PASSAR' && !proximoOperadorId) { setErro('Escolha para quem você está passando o turno.'); return; }
+
     setFechandoTurno(true);
 
-    // Fotografa o FECHAMENTO do estoque (o que está indo para o próximo operador).
+    // Fotografa o FECHAMENTO do estoque (o que está indo para o próximo operador, ou ficando parado se ninguém assumir agora).
     if (produtos.length > 0) {
       const linhasFechamento = produtos.map((p) => ({
         hotel_id: usuario.hotel_id, turno_id: turno.id, tipo: 'FECHAMENTO',
@@ -290,8 +331,15 @@ function PainelVender({ usuario }) {
       await supabase.from('pdv_turno_estoque').insert(linhasFechamento);
     }
 
-    const { error } = await supabase.from('pdv_turnos')
-      .update({ status: 'FECHADO', fechado_em: new Date().toISOString() }).eq('id', turno.id);
+    // A diferença chave: "ENCERRADO" nunca aparece pra ninguém como turno
+    // pendente de aceite — o caixa simplesmente fica fechado até alguém
+    // clicar em "Abrir Turno" de novo. Só "FECHADO" (com passado_para_id
+    // preenchido) dispara a tela de conferência, e só pra essa pessoa.
+    const payload = acaoFechamento === 'PASSAR'
+      ? { status: 'FECHADO', passado_para_id: Number(proximoOperadorId), usuario_fechamento_id: usuario.id, fechado_em: new Date().toISOString() }
+      : { status: 'ENCERRADO', passado_para_id: null, usuario_fechamento_id: usuario.id, fechado_em: new Date().toISOString() };
+
+    const { error } = await supabase.from('pdv_turnos').update(payload).eq('id', turno.id);
     setFechandoTurno(false);
     if (error) { setErro('Não foi possível fechar o turno. Detalhe técnico: ' + error.message); return; }
 
@@ -302,17 +350,22 @@ function PainelVender({ usuario }) {
         nomeOperador: usuario.nome,
         abertoEm: turno.aberto_em,
         fechadoEm: new Date().toISOString(),
+        situacao: acaoFechamento === 'PASSAR'
+          ? `Passado para ${mapaOperadores[proximoOperadorId] || 'outro operador'}`
+          : 'Encerrado sem passagem — caixa fechado',
         resumo: resumoFechamento,
       });
     }
 
-    setMostrarFechamento(false);
-    setResumoFechamento(null);
+    mostrarAviso(acaoFechamento === 'PASSAR'
+      ? `Turno passado para ${mapaOperadores[proximoOperadorId] || 'outro operador'}.`
+      : 'Turno encerrado — o caixa está fechado até alguém abrir de novo.');
+
+    setMostrarPainelTurno(false); setResumoFechamento(null); setAcaoFechamento(null); setProximoOperadorId('');
     carregarTurno();
   }
 
-  async function prepararFechamento() {
-    setMostrarFechamento(true);
+  async function carregarResumoTurno() {
     setCarregandoResumo(true);
 
     // 1) Vendas concluídas deste turno, para somar por forma de pagamento.
@@ -342,8 +395,32 @@ function PainelVender({ usuario }) {
       return { produto: p, recebido, atual, diferenca: recebido != null ? atual - recebido : null };
     });
 
-    setResumoFechamento({ pagamentos, subtotalCaixa, totalGeral, estoque });
+    // 3) Detalhe venda a venda deste turno — pra "onde foram lançados" ficar visível na consulta.
+    const { data: itensDoTurno } = await supabase.from('pdv_venda_itens')
+      .select('nome_produto, quantidade, subtotal, pdv_vendas!inner(turno_id, status)')
+      .eq('pdv_vendas.turno_id', turno.id).eq('pdv_vendas.status', 'CONCLUIDA');
+    const mapaItens = {};
+    (itensDoTurno || []).forEach((it) => {
+      if (!mapaItens[it.nome_produto]) mapaItens[it.nome_produto] = { nome: it.nome_produto, quantidade: 0, total: 0 };
+      mapaItens[it.nome_produto].quantidade += Number(it.quantidade);
+      mapaItens[it.nome_produto].total += Number(it.subtotal);
+    });
+    const itensVendidos = Object.values(mapaItens).sort((a, b) => b.total - a.total);
+
+    setResumoFechamento({ pagamentos, subtotalCaixa, totalGeral, estoque, itensVendidos });
     setCarregandoResumo(false);
+  }
+
+  function abrirConsultaTurno() {
+    setModoPainelTurno('consulta'); setErro('');
+    setMostrarPainelTurno(true);
+    carregarResumoTurno();
+  }
+
+  function abrirFechamentoTurno() {
+    setModoPainelTurno('fechar'); setAcaoFechamento(null); setProximoOperadorId(''); setErro('');
+    setMostrarPainelTurno(true);
+    carregarResumoTurno();
   }
 
   async function aceitarTurnoEEstoque(contagens) {
@@ -517,11 +594,27 @@ function PainelVender({ usuario }) {
   if (!turno) {
     return (
       <div className="cartao" style={{ textAlign: 'center', padding: 32 }}>
-        <h2 style={{ marginTop: 0 }}>Nenhum turno de caixa aberto</h2>
-        <p className="texto-suave">Abra um turno para começar a vender.</p>
-        <button type="button" className="botao botao-principal" onClick={abrirTurno} disabled={abrindoTurno}>
-          {abrindoTurno ? 'Abrindo…' : '▶️ Abrir turno'}
-        </button>
+        <h2 style={{ marginTop: 0 }}>🔴 Caixa fechado</h2>
+        {aviso && <div className="aviso-sucesso" style={{ textAlign: 'left' }}>{aviso}</div>}
+        {turnoPendenteDeOutro ? (
+          <>
+            <p className="texto-suave">
+              O turno foi passado para <strong>{mapaOperadores[String(turnoPendenteDeOutro.passado_para_id)] || 'outro operador'}</strong> em {formatarDataHora(turnoPendenteDeOutro.fechado_em)}, e está aguardando a conferência dele(a) antes de reabrir o caixa.
+            </p>
+            {souAdmin && (
+              <button type="button" className="botao botao-suave" style={{ marginBottom: 14 }} onClick={() => cancelarPassagemPendente(turnoPendenteDeOutro)}>
+                Cancelar essa passagem e liberar o caixa
+              </button>
+            )}
+          </>
+        ) : (
+          <p className="texto-suave">Nenhum turno aberto no momento. Abra um turno para começar a vender ou lançar itens.</p>
+        )}
+        <div>
+          <button type="button" className="botao botao-principal" onClick={abrirTurno} disabled={abrindoTurno}>
+            {abrindoTurno ? 'Abrindo…' : '🔓 Abrir Turno'}
+          </button>
+        </div>
       </div>
     );
   }
@@ -531,15 +624,27 @@ function PainelVender({ usuario }) {
       {aviso && <div className="aviso-sucesso">{aviso}</div>}
       {erro && <div className="aviso-erro">{erro}</div>}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <p className="texto-suave" style={{ fontSize: 12, margin: 0 }}>Turno aberto em {formatarDataHora(turno.aberto_em)}</p>
-        <button type="button" className="botao botao-suave" style={{ fontSize: 12, padding: '6px 12px' }} onClick={prepararFechamento}>
-          🔒 Fechar meu turno
-        </button>
+      <div className="pdv-turno-barra">
+        <div>
+          <span className="pdv-turno-status">🟢 Turno aberto</span>
+          <span className="texto-suave" style={{ fontSize: 12 }}> desde {formatarDataHora(turno.aberto_em)}</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" className="botao botao-contorno" style={{ fontSize: 12, padding: '6px 12px' }} onClick={abrirConsultaTurno}>
+            📊 Consultar Turno Atual
+          </button>
+          <button type="button" className="botao botao-suave" style={{ fontSize: 12, padding: '6px 12px' }} onClick={abrirFechamentoTurno}>
+            🔒 Fechar / Passar Turno
+          </button>
+        </div>
       </div>
-      {mostrarFechamento && (
+      {mostrarPainelTurno && (
         <ModalFechamento resumo={resumoFechamento} carregando={carregandoResumo} fechando={fechandoTurno}
-          onConfirmar={fecharTurno} onFechar={() => { setMostrarFechamento(false); setResumoFechamento(null); }} />
+          modo={modoPainelTurno} acaoFechamento={acaoFechamento} setAcaoFechamento={setAcaoFechamento}
+          operadores={operadoresHotel} proximoOperadorId={proximoOperadorId} setProximoOperadorId={setProximoOperadorId}
+          erro={erro}
+          onConfirmar={confirmarFechamento}
+          onFechar={() => { setMostrarPainelTurno(false); setResumoFechamento(null); setErro(''); }} />
       )}
 
       <div className="pdv-busca-area">
@@ -692,18 +797,23 @@ function ModalCheckout({ total, carrinho, onFechar, onConfirmar }) {
 // FECHAR TURNO — mostra o extrato de estoque esperado antes de confirmar
 // ============================================================================
 
-function ModalFechamento({ resumo, carregando, fechando, onConfirmar, onFechar }) {
+function ModalFechamento({ resumo, carregando, fechando, modo, acaoFechamento, setAcaoFechamento, operadores, proximoOperadorId, setProximoOperadorId, erro, onConfirmar, onFechar }) {
+  const ehConsulta = modo === 'consulta';
+  const podeConfirmar = ehConsulta || (acaoFechamento === 'ENCERRAR') || (acaoFechamento === 'PASSAR' && !!proximoOperadorId);
+
   return (
     <div className="pdv-overlay" role="dialog" aria-modal="true">
       <div className="pdv-modal" style={{ maxWidth: 560 }}>
-        <h2 style={{ marginTop: 0 }}>Fechar turno</h2>
+        <h2 style={{ marginTop: 0 }}>{ehConsulta ? '📊 Turno Atual' : '🔒 Fechar Turno'}</h2>
 
         {carregando || !resumo ? (
           <p className="texto-suave">Calculando o resumo do turno…</p>
         ) : (
           <>
             <p className="texto-suave" style={{ fontSize: 13 }}>
-              Confira os valores abaixo antes de confirmar. Ao fechar, um comprovante para impressão vai abrir automaticamente.
+              {ehConsulta
+                ? 'Isto é só uma consulta — nada é fechado aqui.'
+                : 'Confira os valores abaixo antes de confirmar. Ao fechar, um comprovante para impressão vai abrir automaticamente.'}
             </p>
 
             <h3 style={{ fontSize: 14, marginBottom: 6 }}>Formas de pagamento</h3>
@@ -714,11 +824,25 @@ function ModalFechamento({ resumo, carregando, fechando, onConfirmar, onFechar }
               <div className="pdv-extrato-linha" style={{ borderTop: '1px solid #ccc', paddingTop: 6, marginTop: 4 }}>
                 <span>Subtotal em caixa</span><strong>{formatarMoeda(resumo.subtotalCaixa)}</strong>
               </div>
-              <div className="pdv-extrato-linha"><span>Lançado no quarto</span><strong>{formatarMoeda(resumo.pagamentos.quarto)}</strong></div>
+              <div className="pdv-extrato-linha"><span>Lançado no quarto (reserva)</span><strong>{formatarMoeda(resumo.pagamentos.quarto)}</strong></div>
               <div className="pdv-extrato-linha" style={{ borderTop: '2px solid #333', paddingTop: 6, marginTop: 4 }}>
                 <span><strong>Total geral do turno</strong></span><strong>{formatarMoeda(resumo.totalGeral)}</strong>
               </div>
             </div>
+
+            {resumo.itensVendidos && resumo.itensVendidos.length > 0 && (
+              <>
+                <h3 style={{ fontSize: 14, marginTop: 16, marginBottom: 6 }}>O que foi vendido</h3>
+                <div className="pdv-extrato">
+                  {resumo.itensVendidos.map((it, i) => (
+                    <div key={i} className="pdv-extrato-linha">
+                      <span>{it.quantidade}× {it.nome}</span>
+                      <strong>{formatarMoeda(it.total)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
 
             <h3 style={{ fontSize: 14, marginTop: 16, marginBottom: 6 }}>Estoque — recebido x repassando agora</h3>
             <div className="pdv-extrato">
@@ -733,14 +857,53 @@ function ModalFechamento({ resumo, carregando, fechando, onConfirmar, onFechar }
               ))}
               {resumo.estoque.length === 0 && <p className="texto-suave">Nenhum produto cadastrado.</p>}
             </div>
+
+            {!ehConsulta && (
+              <>
+                <h3 style={{ fontSize: 14, marginTop: 18, marginBottom: 6 }}>O que você quer fazer?</h3>
+                <div className="pdv-opcoes-fechamento">
+                  <button type="button"
+                    className={acaoFechamento === 'PASSAR' ? 'pdv-opcao-fechamento pdv-opcao-fechamento-ativa' : 'pdv-opcao-fechamento'}
+                    onClick={() => setAcaoFechamento('PASSAR')}>
+                    <strong>🤝 Passar o bastão</strong>
+                    <span className="texto-suave" style={{ fontSize: 12 }}>Escolher quem assume o turno agora</span>
+                  </button>
+                  <button type="button"
+                    className={acaoFechamento === 'ENCERRAR' ? 'pdv-opcao-fechamento pdv-opcao-fechamento-ativa' : 'pdv-opcao-fechamento'}
+                    onClick={() => setAcaoFechamento('ENCERRAR')}>
+                    <strong>🔒 Encerrar sem passar</strong>
+                    <span className="texto-suave" style={{ fontSize: 12 }}>Caixa fica fechado até alguém abrir de novo</span>
+                  </button>
+                </div>
+
+                {acaoFechamento === 'PASSAR' && (
+                  <div style={{ marginTop: 10 }}>
+                    <label className="rotulo">Passar o turno para quem?</label>
+                    <select className="campo" value={proximoOperadorId} onChange={(e) => setProximoOperadorId(e.target.value)}>
+                      <option value="">Selecione o próximo operador</option>
+                      {operadores.map((o) => <option key={o.id} value={o.id}>{o.nome}</option>)}
+                    </select>
+                    {operadores.length === 0 && <p className="texto-suave" style={{ fontSize: 12, marginTop: 4 }}>Nenhum outro usuário ativo encontrado neste hotel.</p>}
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
 
+        {erro && <div className="aviso-erro" style={{ marginTop: 10 }}>{erro}</div>}
+
         <div className="pdv-modal-botoes">
-          <button type="button" className="botao botao-principal" onClick={onConfirmar} disabled={fechando || carregando || !resumo} style={{ flex: 1 }}>
-            {fechando ? 'Fechando…' : '✓ Confirmar e Imprimir'}
-          </button>
-          <button type="button" className="botao botao-suave" onClick={onFechar}>Cancelar</button>
+          {ehConsulta ? (
+            <button type="button" className="botao botao-principal" onClick={onFechar} style={{ flex: 1 }}>Fechar</button>
+          ) : (
+            <>
+              <button type="button" className="botao botao-principal" onClick={onConfirmar} disabled={fechando || carregando || !resumo || !podeConfirmar} style={{ flex: 1 }}>
+                {fechando ? 'Fechando…' : acaoFechamento === 'PASSAR' ? '✓ Passar Turno e Imprimir' : acaoFechamento === 'ENCERRAR' ? '✓ Encerrar Turno e Imprimir' : 'Escolha uma opção acima'}
+              </button>
+              <button type="button" className="botao botao-suave" onClick={onFechar}>Cancelar</button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1339,6 +1502,21 @@ function EstilosPDV() {
       .pdv-checkbox { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 12px 0; cursor: pointer; }
       .pdv-checkbox input { width: 18px; height: 18px; }
 
+      .pdv-turno-barra {
+        display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+        background: var(--marca-clara); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;
+      }
+      .pdv-turno-status { font-weight: 700; color: var(--marca); font-size: 14px; }
+      .pdv-opcoes-fechamento { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .pdv-opcao-fechamento {
+        display: flex; flex-direction: column; gap: 4px; text-align: left; font-family: inherit;
+        border: 2px solid var(--borda); border-radius: 10px; padding: 12px 14px; background: var(--branco); cursor: pointer;
+      }
+      .pdv-opcao-fechamento:hover { border-color: var(--marca); }
+      .pdv-opcao-fechamento-ativa { border-color: var(--marca); background: var(--marca-clara); }
+      @media (max-width: 520px) {
+        .pdv-opcoes-fechamento { grid-template-columns: 1fr; }
+      }
       .pdv-extrato { max-height: 300px; overflow-y: auto; border: 1px solid var(--borda); border-radius: 10px; margin: 12px 0; }
       .pdv-extrato-linha { display: flex; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid var(--borda); font-size: 14px; }
       .pdv-extrato-linha:last-child { border-bottom: none; }
