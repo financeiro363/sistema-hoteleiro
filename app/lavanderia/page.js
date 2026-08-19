@@ -89,9 +89,18 @@ export default function Lavanderia() {
   // Nova Entrada
   const [eHospede, setEHospede] = useState('');
   const [eApartamento, setEApartamento] = useState('');
+  const [eReserva, setEReserva] = useState('');
   const [eItens, setEItens] = useState([]); // [{peca, servico, preco, avaria}]
   const [ePecaId, setEPecaId] = useState('');
   const [erroEntrada, setErroEntrada] = useState('');
+  const [enviandoCloudbeds, setEnviandoCloudbeds] = useState(null); // id do lote sendo enviado
+
+  // Configuração da Cloudbeds (admin)
+  const [itemCloudbedsLavanderia, setItemCloudbedsLavanderia] = useState('');
+  const [itensCloudbedsConfig, setItensCloudbedsConfig] = useState(null);
+  const [buscandoCloudbedsConfig, setBuscandoCloudbedsConfig] = useState(false);
+  const [salvandoConfigCloudbeds, setSalvandoConfigCloudbeds] = useState(false);
+  const [erroConfigCloudbeds, setErroConfigCloudbeds] = useState('');
 
   // Comprovante aberto
   const [comprovante, setComprovante] = useState(null);
@@ -139,8 +148,9 @@ export default function Lavanderia() {
       setVerificandoLogin(false);
 
       const { data: h } = await supabase
-        .from('hoteis').select('nome_fantasia').eq('id', dadosUsuario.hotel_id).single();
+        .from('hoteis').select('nome_fantasia, lavanderia_cloudbeds_item_id').eq('id', dadosUsuario.hotel_id).single();
       if (ativo && h?.nome_fantasia) setNomeHotel(h.nome_fantasia);
+      if (ativo && h?.lavanderia_cloudbeds_item_id) setItemCloudbedsLavanderia(h.lavanderia_cloudbeds_item_id);
     }
     verificar();
     return () => { ativo = false; };
@@ -236,11 +246,39 @@ export default function Lavanderia() {
     return `${prefixo}${String(maior + 1 + extra).padStart(4, '0')}`;
   }
 
+  async function lancarNoCloudbeds(lote) {
+    setEnviandoCloudbeds(lote.id);
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/lavanderia-lancar-cloudbeds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ loteId: lote.id }),
+      });
+      const resultado = await resposta.json();
+      setEnviandoCloudbeds(null);
+      if (!resposta.ok || resultado.erro) {
+        mostrarAviso(`⚠️ Lote ${lote.codigo} salvo, mas a Cloudbeds recusou: ${resultado.erro || 'erro desconhecido'}. Você pode tentar de novo no Painel Geral.`);
+        setLotes((atuais) => atuais.map((l) => l.id === lote.id ? { ...l, cloudbeds_status: 'FALHOU', cloudbeds_erro: resultado.erro } : l));
+        return false;
+      }
+      mostrarAviso(`✅ Lote ${lote.codigo} lançado na reserva ${lote.numero_reserva} com sucesso!`);
+      setLotes((atuais) => atuais.map((l) => l.id === lote.id ? { ...l, cloudbeds_status: 'ENVIADO', cloudbeds_erro: null } : l));
+      return true;
+    } catch (e) {
+      setEnviandoCloudbeds(null);
+      mostrarAviso(`⚠️ Lote ${lote.codigo} salvo, mas houve falha de conexão ao enviar para a Cloudbeds. Tente de novo no Painel Geral.`);
+      setLotes((atuais) => atuais.map((l) => l.id === lote.id ? { ...l, cloudbeds_status: 'FALHOU' } : l));
+      return false;
+    }
+  }
+
   async function darEntrada() {
     if (salvando) return;
     setErroEntrada('');
     if (!eHospede.trim()) { setErroEntrada('Informe o nome do hóspede.'); return; }
     if (!eApartamento.trim()) { setErroEntrada('Informe o apartamento.'); return; }
+    if (!eReserva.trim()) { setErroEntrada('Informe o número da reserva na Cloudbeds — é pra ela que a cobrança vai.'); return; }
     if (eItens.length === 0) { setErroEntrada('Adicione pelo menos uma peça.'); return; }
 
     setSalvando(true);
@@ -253,6 +291,8 @@ export default function Lavanderia() {
           codigo: proximoCodigo(tentativa),
           nome_hospede: eHospede.trim(),
           apartamento: eApartamento.trim(),
+          numero_reserva: eReserva.trim(),
+          cloudbeds_status: 'NAO_ENVIADO',
           itens: eItens,
           valor_total: totalEntrada,
           criado_por_id: usuario.id,
@@ -268,12 +308,16 @@ export default function Lavanderia() {
     if (!salvo) { setErroEntrada('Não foi possível dar entrada. Detalhe técnico: ' + erroFinal); return; }
 
     await registrarLog('Entrada de Item',
-      `Lote ${salvo.codigo}: ${eItens.length} peça(s) para ${salvo.nome_hospede} (apto ${salvo.apartamento}). Total: ${dinheiro(salvo.valor_total)}.`);
+      `Lote ${salvo.codigo}: ${eItens.length} peça(s) para ${salvo.nome_hospede} (apto ${salvo.apartamento}, reserva ${salvo.numero_reserva}). Total: ${dinheiro(salvo.valor_total)}.`);
 
-    setEHospede(''); setEApartamento(''); setEItens([]); setEPecaId('');
+    setEHospede(''); setEApartamento(''); setEReserva(''); setEItens([]); setEPecaId('');
     setLotes([salvo, ...lotes]);
     setComprovante(salvo);
-    mostrarAviso(`Entrada registrada! Comprovante ${salvo.codigo} aberto para impressão.`);
+    mostrarAviso(`Entrada registrada! Enviando cobrança para a reserva ${salvo.numero_reserva}…`);
+
+    // Lança na Cloudbeds logo em seguida — se falhar, o lote fica marcado
+    // como FALHOU e pode ser reenviado depois pelo Painel Geral.
+    await lancarNoCloudbeds(salvo);
   }
 
   // ---- Ciclo de vida (Operação Rápida) ----
@@ -394,6 +438,36 @@ export default function Lavanderia() {
     carregarTudo(usuario);
   }
 
+  // ---- Configuração do item de Lavanderia na Cloudbeds (admin) ----
+  async function buscarItensCloudbedsConfig() {
+    setBuscandoCloudbedsConfig(true);
+    setErroConfigCloudbeds('');
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/pdv-listar-itens-cloudbeds', {
+        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
+      });
+      const resultado = await resposta.json();
+      setBuscandoCloudbedsConfig(false);
+      if (!resposta.ok || resultado.erro) { setErroConfigCloudbeds(resultado.erro || 'Não foi possível buscar os itens.'); return; }
+      const lista = Array.isArray(resultado.itens) ? resultado.itens : Object.values(resultado.itens || {});
+      setItensCloudbedsConfig(lista);
+    } catch (e) {
+      setBuscandoCloudbedsConfig(false);
+      setErroConfigCloudbeds('Falha de conexão ao buscar os itens da Cloudbeds.');
+    }
+  }
+
+  async function salvarConfigCloudbeds() {
+    setSalvandoConfigCloudbeds(true);
+    setErroConfigCloudbeds('');
+    const { error } = await supabase.from('hoteis')
+      .update({ lavanderia_cloudbeds_item_id: itemCloudbedsLavanderia.trim() || null }).eq('id', usuario.hotel_id);
+    setSalvandoConfigCloudbeds(false);
+    if (error) { setErroConfigCloudbeds('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso('Configuração da Cloudbeds salva!');
+  }
+
   // ---- Filtros do painel ----
   const lotesFiltrados = lotes.filter((l) => {
     if (fStatus !== 'TODOS' && l.status !== fStatus) return false;
@@ -503,6 +577,14 @@ export default function Lavanderia() {
                     <div className="lv-item-meta">
                       {(Array.isArray(l.itens) ? l.itens.length : 0)} peça(s) · Entrada em {formatarDataHora(l.criado_em)} por {nomeDe(l.criado_por_id)}
                     </div>
+                    {l.numero_reserva && (
+                      <div className="lv-item-meta">
+                        Reserva {l.numero_reserva} —{' '}
+                        {l.cloudbeds_status === 'ENVIADO' && <span style={{ color: 'var(--sucesso-texto, #1E6B3C)', fontWeight: 700 }}>✓ Lançado na Cloudbeds</span>}
+                        {l.cloudbeds_status === 'FALHOU' && <span style={{ color: 'var(--erro-texto, #A31212)', fontWeight: 700 }}>⚠️ Falhou{l.cloudbeds_erro ? `: ${l.cloudbeds_erro}` : ''}</span>}
+                        {(!l.cloudbeds_status || l.cloudbeds_status === 'NAO_ENVIADO') && <span style={{ color: 'var(--texto-suave)' }}>⏳ Aguardando envio</span>}
+                      </div>
+                    )}
                     {l.status === 'ENTREGUE' && (
                       <div className="lv-item-entregue">
                         {MEIO_ENTREGA_LABEL[l.meio_entrega] || '—'} · por {nomeDe(l.entregue_por_id)} em {formatarDataHora(l.entregue_em)}
@@ -518,6 +600,11 @@ export default function Lavanderia() {
                       <button type="button" className="botao botao-contorno" onClick={() => setComprovante(l)}>
                         Comprovante
                       </button>
+                      {l.numero_reserva && l.cloudbeds_status !== 'ENVIADO' && (
+                        <button type="button" className="botao botao-perigo" onClick={() => lancarNoCloudbeds(l)} disabled={enviandoCloudbeds === l.id}>
+                          {enviandoCloudbeds === l.id ? 'Enviando…' : '🔄 Tentar lançar na Cloudbeds'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -540,7 +627,7 @@ export default function Lavanderia() {
             </div>
           )}
 
-          <div className="lv-duas">
+          <div className="lv-tres">
             <div>
               <label className="rotulo">Hóspede *</label>
               <input className="campo" type="text" value={eHospede}
@@ -550,6 +637,11 @@ export default function Lavanderia() {
               <label className="rotulo">Apartamento *</label>
               <input className="campo" type="text" value={eApartamento}
                 onChange={(e) => setEApartamento(e.target.value)} placeholder="Ex.: 204" />
+            </div>
+            <div>
+              <label className="rotulo">Nº da Reserva (Cloudbeds) *</label>
+              <input className="campo" type="text" value={eReserva}
+                onChange={(e) => setEReserva(e.target.value)} placeholder="Ex.: 308213-1" />
             </div>
           </div>
 
@@ -601,12 +693,23 @@ export default function Lavanderia() {
             Valor Total: <strong>{dinheiro(totalEntrada)}</strong>
           </div>
 
+          {(eHospede.trim() || eReserva.trim()) && (
+            <div className="lv-confirmacao">
+              Confira antes de enviar: <strong>{eHospede.trim() || '(nome não informado)'}</strong>
+              {' — Reserva '}<strong>{eReserva.trim() || '(não informada)'}</strong>
+              {' — '}<strong>{dinheiro(totalEntrada)}</strong>
+            </div>
+          )}
+
           {erroEntrada && <div className="aviso-erro">{erroEntrada}</div>}
 
           <button type="button" className="botao botao-principal" onClick={darEntrada}
             disabled={salvando || catalogo.length === 0} style={{ marginTop: 12 }}>
-            {salvando ? 'Salvando…' : 'Dar Entrada e Imprimir Comprovante'}
+            {salvando ? 'Salvando…' : 'Finalizar Lançamento'}
           </button>
+          <p className="texto-suave" style={{ fontSize: 12, marginTop: 8 }}>
+            Ao finalizar: o lote é registrado, o comprovante interno abre para impressão, e a cobrança é enviada automaticamente para a reserva informada na Cloudbeds.
+          </p>
         </section>
       )}
 
@@ -701,6 +804,45 @@ export default function Lavanderia() {
       {/* ================= CATÁLOGO (admin) ================= */}
       {subAba === 'catalogo' && souAdmin && (
         <section>
+          <div className="cartao" style={{ marginBottom: 14 }}>
+            <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>⚙️ Configuração da Cloudbeds</h2>
+            <p className="texto-suave" style={{ fontSize: 12, marginTop: 0, marginBottom: 10 }}>
+              Escolha qual item cadastrado na Cloudbeds (Configurações → Products → Items and Services) representa "Serviço de Lavanderia". Esse mesmo item é reaproveitado em toda cobrança — o valor e o detalhamento de cada lançamento vão junto, dinamicamente.
+            </p>
+            <label className="rotulo">ID do item na Cloudbeds</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input className="campo" type="text" value={itemCloudbedsLavanderia}
+                onChange={(e) => setItemCloudbedsLavanderia(e.target.value)} placeholder="Ex.: 123456" style={{ flex: 1 }} />
+              <button type="button" className="botao botao-suave" onClick={buscarItensCloudbedsConfig} disabled={buscandoCloudbedsConfig} style={{ whiteSpace: 'nowrap' }}>
+                {buscandoCloudbedsConfig ? 'Buscando…' : '🔄 Buscar da Cloudbeds'}
+              </button>
+            </div>
+            {erroConfigCloudbeds && <div className="aviso-erro" style={{ marginTop: 8 }}>{erroConfigCloudbeds}</div>}
+            {itensCloudbedsConfig && (
+              <div className="lv-lista-cloudbeds">
+                {itensCloudbedsConfig.length === 0 ? (
+                  <p className="texto-suave" style={{ fontSize: 13 }}>Nenhum item encontrado — cadastre primeiro na Cloudbeds.</p>
+                ) : (
+                  itensCloudbedsConfig.map((it, indice) => {
+                    const id = it.itemId || it.appItemID || it.id || it.itemID || '';
+                    const nomeItem = it.itemName || it.name || it.title || `Item ${id}`;
+                    return (
+                      <button key={id || indice} type="button" className="lv-item-cloudbeds-opcao"
+                        onClick={() => setItemCloudbedsLavanderia(String(id))}>
+                        <span>{nomeItem}</span>
+                        <span className="texto-suave" style={{ fontSize: 11 }}>ID: {id}</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+            <button type="button" className="botao botao-principal" onClick={salvarConfigCloudbeds}
+              disabled={salvandoConfigCloudbeds} style={{ marginTop: 12 }}>
+              {salvandoConfigCloudbeds ? 'Salvando…' : 'Salvar configuração'}
+            </button>
+          </div>
+
           <div className="cartao" style={{ marginBottom: 14 }}>
             <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>Nova peça</h2>
             <label className="rotulo">Nome da peça *</label>
@@ -988,6 +1130,20 @@ function EstilosLavanderia() {
         font-size: 17px; margin-top: 14px; background: var(--marca-clara);
         color: var(--marca); border-radius: 10px; padding: 10px 14px;
       }
+      .lv-confirmacao {
+        font-size: 13px; margin-top: 10px; background: #FDF3D7; color: #8A6100;
+        border-radius: 10px; padding: 10px 14px; border: 1px solid #f0dfa0;
+      }
+      .lv-lista-cloudbeds {
+        display: flex; flex-direction: column; gap: 6px; max-height: 220px;
+        overflow-y: auto; margin-top: 10px;
+      }
+      .lv-item-cloudbeds-opcao {
+        display: flex; justify-content: space-between; align-items: center;
+        border: 1px solid var(--borda); border-radius: 8px; padding: 8px 12px;
+        background: var(--branco); cursor: pointer; font-family: inherit; font-size: 13px; text-align: left;
+      }
+      .lv-item-cloudbeds-opcao:hover { border-color: var(--marca); }
 
       .lv-rapida-item { text-align: left; cursor: pointer; font-family: inherit; color: inherit; width: 100%; border: 1px solid var(--borda); }
       .lv-rapida-item:hover { border-color: var(--marca); }
