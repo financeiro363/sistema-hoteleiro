@@ -15,8 +15,14 @@
 //   pra todo mundo na tela de arrumação.
 // - Insights (admin): limpos x pendentes, ranking de produtividade por
 //   camareira, log detalhado (Apartamento | Camareira | Início | Fim | Duração).
-// - Configurações (admin): Cloudbeds API Key (campo senha com olho,
-//   simulado/visual — sem chamada real à API, documentado na tela).
+// - Configurações (admin): status da integração real com a Cloudbeds
+//   (reaproveita a mesma credencial já usada em Fichas de Hóspedes/PDV — não
+//   tem chave própria aqui) + botão de testar conexão. O vínculo entre cada
+//   apartamento e o quarto correspondente na Cloudbeds é feito na aba
+//   "Quartos". Ao marcar um quarto como sujo, ou finalizar a arrumação
+//   (fica limpo), o status é enviado de verdade pra Cloudbeds via
+//   POST /postHousekeepingStatus (endpoint oficial, API v1.3) — só quando o
+//   quarto já tiver esse vínculo configurado.
 // ============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
@@ -121,8 +127,10 @@ export default function Governanca() {
 
   // ---- Configurações (Cloudbeds) ----
   const [config, setConfig] = useState(null);
-  const [cloudbedsKey, setCloudbedsKey] = useState('');
-  const [mostrarChave, setMostrarChave] = useState(false);
+  const [quartosCloudbeds, setQuartosCloudbeds] = useState(null); // null = ainda não carregado
+  const [carregandoCloudbeds, setCarregandoCloudbeds] = useState(false);
+  const [erroCloudbeds, setErroCloudbeds] = useState('');
+  const [salvandoVinculo, setSalvandoVinculo] = useState(null); // id do quarto sendo vinculado
 
   const souAdmin = usuario?.papel === 'ADMIN';
 
@@ -179,7 +187,6 @@ export default function Governanca() {
       const { data: cfg } = await supabase
         .from('governanca_config').select('*').eq('hotel_id', u.hotel_id).maybeSingle();
       setConfig(cfg);
-      setCloudbedsKey(cfg?.cloudbeds_api_key || '');
     }
 
     setCarregando(false);
@@ -191,7 +198,34 @@ export default function Governanca() {
 
   function mostrarSync(msg) {
     setMsgSync(msg);
-    setTimeout(() => setMsgSync(''), 3000);
+    setTimeout(() => setMsgSync(''), 4000);
+  }
+
+  // Envia a mudança de status pra Cloudbeds de verdade (via nossa rota de
+  // servidor — a chave nunca passa pelo navegador). Se o quarto ainda não
+  // tiver vínculo configurado, avisa isso claramente em vez de fingir que
+  // sincronizou.
+  async function sincronizarComCloudbeds(quarto, roomCondition) {
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/governanca-atualizar-cloudbeds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ quartoId: quarto.id, roomCondition }),
+      });
+      const resultado = await resposta.json();
+      if (resultado.naoVinculado) {
+        mostrarSync(`Apartamento ${quarto.numero}: status atualizado aqui (esse quarto ainda não está vinculado a um quarto da Cloudbeds — configure em Quartos).`);
+        return;
+      }
+      if (!resposta.ok || resultado.erro) {
+        mostrarSync(`⚠️ Apartamento ${quarto.numero}: status atualizado aqui, mas a Cloudbeds recusou — ${resultado.erro || 'erro desconhecido'}`);
+        return;
+      }
+      mostrarSync(`✅ Apartamento ${quarto.numero}: status sincronizado com a Cloudbeds de verdade.`);
+    } catch (e) {
+      mostrarSync(`⚠️ Apartamento ${quarto.numero}: status atualizado aqui, mas houve falha de conexão ao enviar para a Cloudbeds.`);
+    }
   }
 
   // ================= CAMAREIRA: fluxo de arrumação =================
@@ -224,7 +258,9 @@ export default function Governanca() {
     setChecklist(CHECKLIST_VAZIO);
     setSessaoAtiva({ ...novaSessao, quarto });
     setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, status: 'EM_ARRUMACAO' } : q)));
-    mostrarSync(`Quarto ${quarto.numero}: status "Em Arrumação" sincronizado com a Cloudbeds.`);
+    // Não há status equivalente a "em arrumação" na Cloudbeds (ela só
+    // conhece limpo/sujo/inspecionado) — por isso não avisamos nada aqui;
+    // a sincronização de verdade acontece quando o quarto fica pronto.
   }
 
   async function alternarChecklist(chave) {
@@ -253,7 +289,7 @@ export default function Governanca() {
     setSalvando(false);
     const numero = sessaoAtiva.quarto.numero;
     setQuartos(quartos.map((q) => (q.id === sessaoAtiva.quarto.id ? { ...q, status: 'LIMPO', ultima_limpeza: fimEm } : q)));
-    mostrarSync(`Quarto ${numero}: status "Limpo" sincronizado com a Cloudbeds.`);
+    sincronizarComCloudbeds(sessaoAtiva.quarto, 'clean');
 
     setPopupManutencao({ quartoNumero: numero });
     setManutTemProblema(null); setManutDescricao(''); setManutPrioridade('MEDIA'); setErroPopup('');
@@ -378,6 +414,7 @@ export default function Governanca() {
     if (error) { setErro('Não foi possível atualizar. Detalhe técnico: ' + error.message); return; }
     setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, status: 'SUJO' } : q)));
     mostrarAviso(`Quarto ${quarto.numero} marcado como sujo (check-out simulado).`);
+    sincronizarComCloudbeds(quarto, 'dirty');
   }
 
   async function excluirQuarto(q) {
@@ -417,20 +454,34 @@ export default function Governanca() {
     .map((c) => ({ ...c, tempoMedio: c.total > 0 ? c.somaMinutos / c.total : 0 }))
     .sort((a, b) => b.total - a.total);
 
-  // ================= CONFIGURAÇÕES (Cloudbeds) =================
+  // ================= CONFIGURAÇÕES / INTEGRAÇÃO REAL COM A CLOUDBEDS =================
 
-  async function salvarChaveCloudbeds() {
-    if (salvando) return;
-    setSalvando(true);
-    const { error } = await supabase.from('governanca_config').upsert({
-      hotel_id: usuario.hotel_id,
-      cloudbeds_api_key: cloudbedsKey.trim() || null,
-      atualizado_em: new Date().toISOString(),
-      atualizado_por_id: usuario.id,
-    });
-    setSalvando(false);
-    if (error) { setErro('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
-    mostrarAviso('Chave salva! (lembrete: neste sistema a sincronização com a Cloudbeds é simulada/visual)');
+  async function carregarQuartosCloudbeds() {
+    setCarregandoCloudbeds(true);
+    setErroCloudbeds('');
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/governanca-listar-cloudbeds', {
+        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
+      });
+      const resultado = await resposta.json();
+      setCarregandoCloudbeds(false);
+      if (!resposta.ok || resultado.erro) { setErroCloudbeds(resultado.erro || 'Não foi possível consultar a Cloudbeds.'); return; }
+      setQuartosCloudbeds(resultado.quartos || []);
+    } catch (e) {
+      setCarregandoCloudbeds(false);
+      setErroCloudbeds('Falha de conexão ao consultar a Cloudbeds.');
+    }
+  }
+
+  async function salvarVinculoCloudbeds(quarto, cloudbedsRoomId) {
+    setSalvandoVinculo(quarto.id);
+    const { error } = await supabase.from('quartos')
+      .update({ cloudbeds_room_id: cloudbedsRoomId || null }).eq('id', quarto.id);
+    setSalvandoVinculo(null);
+    if (error) { setErro('Não foi possível salvar o vínculo. Detalhe técnico: ' + error.message); return; }
+    setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, cloudbeds_room_id: cloudbedsRoomId || null } : q)));
+    mostrarAviso(cloudbedsRoomId ? `Apartamento ${quarto.numero} vinculado à Cloudbeds!` : `Vínculo removido do apartamento ${quarto.numero}.`);
   }
 
   if (verificandoLogin) {
@@ -532,6 +583,26 @@ export default function Governanca() {
       {/* ================= QUARTOS (admin) ================= */}
       {!carregando && subAba === 'quartos' && souAdmin && (
         <section>
+          <div className="cartao" style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <h2 style={{ fontSize: '1.1rem', margin: 0 }}>🔗 Vínculo com a Cloudbeds</h2>
+                <p className="texto-suave" style={{ fontSize: 12, marginTop: 4 }}>
+                  Cada apartamento precisa ser vinculado ao quarto correspondente na Cloudbeds pra que a sincronização de status funcione. Carregue a lista da Cloudbeds e escolha o par certo pra cada apartamento abaixo.
+                </p>
+              </div>
+              <button type="button" className="botao botao-suave" onClick={carregarQuartosCloudbeds} disabled={carregandoCloudbeds} style={{ whiteSpace: 'nowrap' }}>
+                {carregandoCloudbeds ? 'Buscando…' : '🔄 Carregar quartos da Cloudbeds'}
+              </button>
+            </div>
+            {erroCloudbeds && <div className="aviso-erro" style={{ marginTop: 10 }}>{erroCloudbeds}</div>}
+            {quartosCloudbeds && (
+              <p className="texto-suave" style={{ fontSize: 12, marginTop: 10 }}>
+                {quartosCloudbeds.length} quarto(s) encontrado(s) na Cloudbeds. Use o seletor em cada apartamento abaixo pra vincular.
+              </p>
+            )}
+          </div>
+
           <div className="gv-barra">
             <p className="texto-suave" style={{ fontSize: 13, margin: 0 }}>
               Um quarto sem camareira atribuída fica invisível na tela de arrumação de todo mundo.
@@ -580,6 +651,20 @@ export default function Governanca() {
                       {q.camareira_id ? `Camareira: ${nomeDe(q.camareira_id)}` : 'Sem camareira atribuída'}
                       {q.ultima_limpeza ? ` · última limpeza em ${formatarDataHora(q.ultima_limpeza)}` : ''}
                     </div>
+                    {quartosCloudbeds && (
+                      <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <select className="campo" style={{ fontSize: 12, padding: '4px 8px' }}
+                          value={q.cloudbeds_room_id || ''}
+                          onChange={(e) => salvarVinculoCloudbeds(q, e.target.value)}
+                          disabled={salvandoVinculo === q.id}>
+                          <option value="">— Não vinculado à Cloudbeds —</option>
+                          {quartosCloudbeds.map((rc) => (
+                            <option key={rc.roomID} value={rc.roomID}>{rc.roomName} ({rc.roomTypeName})</option>
+                          ))}
+                        </select>
+                        {salvandoVinculo === q.id && <span className="texto-suave" style={{ fontSize: 11 }}>salvando…</span>}
+                      </div>
+                    )}
                   </div>
                   <div className="gv-item-quarto-acoes">
                     {q.status !== 'SUJO' && q.status !== 'EM_ARRUMACAO' && (
@@ -673,30 +758,30 @@ export default function Governanca() {
       {/* ================= CONFIGURAÇÕES (admin) ================= */}
       {!carregando && subAba === 'config' && souAdmin && (
         <section>
-          <div className="cartao" style={{ maxWidth: 480 }}>
+          <div className="cartao" style={{ maxWidth: 560 }}>
             <h2 style={{ fontSize: '1.1rem', marginTop: 0 }}>Integração Cloudbeds</h2>
             <p className="texto-suave" style={{ fontSize: 13 }}>
-              Neste sistema, a sincronização com a Cloudbeds (mensagens como "status sincronizado")
-              é <strong>simulada/visual</strong> — não existe, por enquanto, uma chamada real à API da Cloudbeds.
+              A Governança usa a <strong>mesma credencial da Cloudbeds</strong> já configurada para as
+              Fichas de Hóspedes e o PDV — não é preciso cadastrar uma chave separada aqui.
             </p>
-            <label className="rotulo">Cloudbeds API Key</label>
-            <div className="gv-chave-campo">
-              <input className="campo" type={mostrarChave ? 'text' : 'password'} value={cloudbedsKey}
-                onChange={(e) => setCloudbedsKey(e.target.value)} placeholder="Cole aqui a chave de API" />
-              <button type="button" className="gv-olho" onClick={() => setMostrarChave(!mostrarChave)}
-                aria-label={mostrarChave ? 'Esconder chave' : 'Mostrar chave'}>
-                {mostrarChave ? '🙈' : '👁️'}
-              </button>
+
+            <div style={{ background: '#FDF3D7', color: '#8A6100', borderRadius: 10, padding: '10px 14px', fontSize: 13, margin: '10px 0' }}>
+              ⚠️ <strong>Atenção:</strong> a chave de API da Cloudbeds usada hoje foi criada com os escopos de
+              Hóspede/Reserva/Hotel/Acomodação. Governança usa um escopo <strong>separado</strong>
+              ("Housekeeping" — Ler e Escrever). Se a sincronização abaixo falhar com erro de permissão,
+              entre em Configurações → API Credentials na Cloudbeds e adicione esse escopo à chave existente.
             </div>
-            {config?.atualizado_em && (
-              <p className="texto-suave" style={{ fontSize: 12, marginTop: 6 }}>
-                Última atualização: {formatarDataHora(config.atualizado_em)} por {nomeDe(config.atualizado_por_id)}
-              </p>
-            )}
-            <button type="button" className="botao botao-principal" onClick={salvarChaveCloudbeds}
-              disabled={salvando} style={{ marginTop: 12 }}>
-              {salvando ? 'Salvando…' : 'Salvar Chave'}
+
+            <button type="button" className="botao botao-principal" onClick={carregarQuartosCloudbeds} disabled={carregandoCloudbeds}>
+              {carregandoCloudbeds ? 'Testando…' : '🔄 Testar conexão'}
             </button>
+            {erroCloudbeds && <div className="aviso-erro" style={{ marginTop: 10 }}>{erroCloudbeds}</div>}
+            {quartosCloudbeds && !erroCloudbeds && (
+              <div style={{ background: '#DDF2E4', color: '#1E6B3C', borderRadius: 10, padding: '10px 14px', fontSize: 13, marginTop: 10 }}>
+                ✅ Conexão funcionando! Encontramos {quartosCloudbeds.length} quarto(s) na Cloudbeds.
+                Agora vá na aba "Quartos" pra vincular cada apartamento ao quarto correspondente.
+              </div>
+            )}
           </div>
         </section>
       )}
