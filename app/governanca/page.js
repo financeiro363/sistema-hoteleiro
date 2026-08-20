@@ -131,6 +131,7 @@ export default function Governanca() {
   const [carregandoCloudbeds, setCarregandoCloudbeds] = useState(false);
   const [erroCloudbeds, setErroCloudbeds] = useState('');
   const [salvandoVinculo, setSalvandoVinculo] = useState(null); // id do quarto sendo vinculado
+  const [importandoCloudbeds, setImportandoCloudbeds] = useState(false);
 
   const souAdmin = usuario?.papel === 'ADMIN';
 
@@ -484,6 +485,40 @@ export default function Governanca() {
     mostrarAviso(cloudbedsRoomId ? `Apartamento ${quarto.numero} vinculado à Cloudbeds!` : `Vínculo removido do apartamento ${quarto.numero}.`);
   }
 
+  // Cadastrar quarto por quarto manualmente pra depois vincular seria muito
+  // trabalho num hotel com dezenas de quartos. Esse botão faz os dois passos
+  // de uma vez: cria o apartamento aqui (usando o nome do quarto da
+  // Cloudbeds como número) já com o vínculo pronto. Quartos que já existirem
+  // aqui (mesmo número, comparando sem diferenciar maiúsculas/espaços) só
+  // recebem o vínculo, sem duplicar.
+  async function importarQuartosDaCloudbeds() {
+    if (!quartosCloudbeds || quartosCloudbeds.length === 0) return;
+    setImportandoCloudbeds(true);
+    setErro('');
+
+    const normalizar = (t) => String(t || '').trim().toLowerCase();
+    const porNumero = Object.fromEntries(quartos.map((q) => [normalizar(q.numero), q]));
+
+    let criados = 0, vinculados = 0, jaOk = 0;
+    for (const rc of quartosCloudbeds) {
+      const existente = porNumero[normalizar(rc.roomName)];
+      if (existente) {
+        if (existente.cloudbeds_room_id === rc.roomID) { jaOk++; continue; }
+        const { error } = await supabase.from('quartos').update({ cloudbeds_room_id: rc.roomID }).eq('id', existente.id);
+        if (!error) vinculados++;
+      } else {
+        const { error } = await supabase.from('quartos').insert({
+          numero: rc.roomName, cloudbeds_room_id: rc.roomID, status: 'SUJO', hotel_id: usuario.hotel_id,
+        });
+        if (!error) criados++;
+      }
+    }
+
+    setImportandoCloudbeds(false);
+    mostrarAviso(`Importação concluída: ${criados} apartamento(s) criado(s), ${vinculados} vinculado(s) a um já existente, ${jaOk} já estavam certos.`);
+    carregarTudo(usuario);
+  }
+
   if (verificandoLogin) {
     return (
       <main className="conteudo">
@@ -597,9 +632,17 @@ export default function Governanca() {
             </div>
             {erroCloudbeds && <div className="aviso-erro" style={{ marginTop: 10 }}>{erroCloudbeds}</div>}
             {quartosCloudbeds && (
-              <p className="texto-suave" style={{ fontSize: 12, marginTop: 10 }}>
-                {quartosCloudbeds.length} quarto(s) encontrado(s) na Cloudbeds. Use o seletor em cada apartamento abaixo pra vincular.
-              </p>
+              <>
+                <p className="texto-suave" style={{ fontSize: 12, marginTop: 10 }}>
+                  {quartosCloudbeds.length} quarto(s) encontrado(s) na Cloudbeds.
+                  {quartos.length === 0
+                    ? ' Vocês ainda não têm nenhum apartamento cadastrado aqui — use o botão abaixo pra importar todos de uma vez, já vinculados.'
+                    : ' Use o seletor em cada apartamento abaixo pra vincular, ou importe de uma vez os que faltam.'}
+                </p>
+                <button type="button" className="botao botao-principal" onClick={importarQuartosDaCloudbeds} disabled={importandoCloudbeds} style={{ marginTop: 6 }}>
+                  {importandoCloudbeds ? 'Importando…' : `📥 Importar/vincular os ${quartosCloudbeds.length} quartos automaticamente`}
+                </button>
+              </>
             )}
           </div>
 
