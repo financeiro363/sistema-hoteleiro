@@ -164,6 +164,10 @@ export default function CabecalhoSite() {
             </Link>
           )}
 
+          <Link href="/tarefas-pessoais" className={caminhoAtual === '/tarefas-pessoais' ? 'ativa' : ''}>
+            📝 Minhas Tarefas
+          </Link>
+
           {papelUsuario === 'CONTADOR' ? (
             // Visão restrita do Contador: só os destinos que ele pode acessar
             <>
