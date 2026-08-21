@@ -16,6 +16,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -107,6 +108,7 @@ export default function Contabilidade() {
       if (dadosUsuario.papel !== 'ADMIN' && dadosUsuario.papel !== 'CONTADOR') { router.push('/'); return; }
       if (!ativo) return;
       setUsuario(dadosUsuario);
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
       setVerificandoLogin(false);
     }
     verificar();
