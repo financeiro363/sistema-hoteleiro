@@ -11,6 +11,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 function formatarData(valor) {
   if (!valor) return '—';
@@ -46,6 +47,7 @@ export default function FichasHospedes() {
       // para ADMIN, mais abaixo.
       if (!ativo) return;
       setUsuario(dadosUsuario);
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
       setVerificandoLogin(false);
 
       const { data: hotel } = await supabase.from('hoteis').select('nome_fantasia').eq('id', dadosUsuario.hotel_id).single();
