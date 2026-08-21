@@ -28,7 +28,7 @@ export async function POST(request) {
     if (!nome || !email || !papel) {
       return Response.json({ erro: 'Preencha nome, e-mail e papel.' }, { status: 400 });
     }
-    if (!['ADMIN', 'COLABORADOR', 'CONTADOR'].includes(papel)) {
+    if (!['ADMIN', 'COLABORADOR', 'CONTADOR', 'MANUTENCAO', 'CAMAREIRA'].includes(papel)) {
       return Response.json({ erro: 'Papel inválido.' }, { status: 400 });
     }
 
