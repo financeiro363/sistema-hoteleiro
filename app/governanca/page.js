@@ -86,6 +86,7 @@ export default function Governanca() {
   const [verificandoLogin, setVerificandoLogin] = useState(true);
   const [usuario, setUsuario] = useState(null);
   const [colegas, setColegas] = useState([]);
+  const [camareiras, setCamareiras] = useState([]);
   const [nomesUsuarios, setNomesUsuarios] = useState({});
 
   const [quartos, setQuartos] = useState([]);
@@ -179,6 +180,7 @@ export default function Governanca() {
       .from('usuarios').select('id, nome, papel').eq('hotel_id', u.hotel_id).order('nome', { ascending: true });
     if (pessoas) {
       setColegas(pessoas);
+      setCamareiras(pessoas.filter((p) => p.papel === 'CAMAREIRA'));
       const mapa = {};
       pessoas.forEach((p) => { mapa[p.id] = p.nome; });
       setNomesUsuarios(mapa);
@@ -743,8 +745,13 @@ export default function Governanca() {
               <label className="rotulo">Camareira responsável</label>
               <select className="campo" value={qCamareira} onChange={(e) => setQCamareira(e.target.value)}>
                 <option value="">— Sem camareira atribuída —</option>
-                {colegas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                {camareiras.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
               </select>
+              {camareiras.length === 0 && (
+                <p className="texto-suave" style={{ fontSize: 12, marginTop: 4 }}>
+                  Nenhum usuário com o perfil "Camareira" cadastrado ainda — crie um em Administração → Usuários.
+                </p>
+              )}
               {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
                 <button type="submit" className="botao botao-principal" disabled={salvando}>
@@ -770,8 +777,13 @@ export default function Governanca() {
                       <label className="rotulo">Camareira responsável</label>
                       <select className="campo" value={qCamareira} onChange={(e) => setQCamareira(e.target.value)}>
                         <option value="">— Sem camareira atribuída —</option>
-                        {colegas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                        {camareiras.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
                       </select>
+                      {camareiras.length === 0 && (
+                        <p className="texto-suave" style={{ fontSize: 12, marginTop: 4 }}>
+                          Nenhum usuário com o perfil "Camareira" cadastrado ainda.
+                        </p>
+                      )}
                       {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
                         <button type="submit" className="botao botao-principal" disabled={salvando}>
