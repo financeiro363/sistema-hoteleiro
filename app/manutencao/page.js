@@ -62,6 +62,7 @@ export default function Manutencao() {
   const [verificandoLogin, setVerificandoLogin] = useState(true);
   const [usuario, setUsuario] = useState(null);
   const [colegas, setColegas] = useState([]);
+  const [tecnicos, setTecnicos] = useState([]);
   const [nomesUsuarios, setNomesUsuarios] = useState({});
 
   const [chamados, setChamados] = useState([]);
@@ -131,6 +132,7 @@ export default function Manutencao() {
       .from('usuarios').select('id, nome, papel').eq('hotel_id', u.hotel_id).order('nome', { ascending: true });
     if (pessoas) {
       setColegas(pessoas);
+      setTecnicos(pessoas.filter((p) => p.papel === 'MANUTENCAO'));
       const mapa = {};
       pessoas.forEach((p) => { mapa[p.id] = p.nome; });
       setNomesUsuarios(mapa);
@@ -323,7 +325,7 @@ export default function Manutencao() {
           <select className="campo mn-atribuir" value={c.responsavel_id || ''}
             onChange={(e) => atribuir(c, e.target.value)} disabled={salvando}>
             <option value="">— Atribuir técnico —</option>
-            {colegas.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+            {tecnicos.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
           </select>
         )}
 
@@ -412,8 +414,13 @@ export default function Manutencao() {
               <label className="rotulo">Atribuir a (opcional)</label>
               <select className="campo" value={fResponsavel} onChange={(e) => setFResponsavel(e.target.value)}>
                 <option value="">— Ninguém por enquanto —</option>
-                {colegas.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                {tecnicos.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
               </select>
+              {tecnicos.length === 0 && (
+                <p className="texto-suave" style={{ fontSize: 12, marginTop: 4 }}>
+                  Nenhum usuário com o perfil "Manutenção" cadastrado ainda — crie um em Administração → Usuários.
+                </p>
+              )}
             </div>
           </div>
 
