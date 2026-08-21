@@ -20,6 +20,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -114,6 +115,7 @@ export default function Manutencao() {
       if (error || !dadosUsuario) { router.push('/login'); return; }
       if (!ativo) return;
       setUsuario(dadosUsuario);
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router, '/manutencao')) return;
       setSubAba(dadosUsuario.papel === 'ADMIN' ? 'kanban' : 'minhas');
       setVerificandoLogin(false);
     }
@@ -281,9 +283,6 @@ export default function Manutencao() {
 
   // ---- Minhas Tarefas (técnico) ----
   const minhas = chamados.filter((c) => c.responsavel_id === usuario?.id);
-  const minhasExecucao = minhas.filter((c) => c.status === 'EM_EXECUCAO');
-  const minhasPendentes = minhas.filter((c) => c.status === 'PENDENTE');
-  const minhasConcluidas = minhas.filter((c) => c.status === 'CONCLUIDO').slice(0, 10);
 
   // ---- Log filtrado ----
   const termoLog = buscaLog.trim().toLowerCase();
@@ -479,36 +478,29 @@ export default function Manutencao() {
         </div>
       )}
 
-      {/* ================= MINHAS TAREFAS (técnico) ================= */}
+      {/* ================= MINHAS TAREFAS (técnico) — quadro Kanban ================= */}
       {!carregando && subAba === 'minhas' && (
-        <section style={{ maxWidth: 640, margin: '0 auto' }}>
-          {minhas.length === 0 ? (
-            <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>
-              Nenhuma manutenção atribuída a você por enquanto.
-            </div>
-          ) : (
-            <>
-              {minhasExecucao.length > 0 && (
-                <>
-                  <h3 style={{ fontSize: '1rem', margin: '4px 0 8px' }}>🔨 Em execução</h3>
-                  <div className="mn-lista">{minhasExecucao.map((c) => <CardChamado key={c.id} c={c} compacto />)}</div>
-                </>
-              )}
-              {minhasPendentes.length > 0 && (
-                <>
-                  <h3 style={{ fontSize: '1rem', margin: '16px 0 8px' }}>⏳ Pendentes</h3>
-                  <div className="mn-lista">{minhasPendentes.map((c) => <CardChamado key={c.id} c={c} compacto />)}</div>
-                </>
-              )}
-              {minhasConcluidas.length > 0 && (
-                <>
-                  <h3 style={{ fontSize: '1rem', margin: '16px 0 8px' }}>✅ Concluídas recentemente</h3>
-                  <div className="mn-lista">{minhasConcluidas.map((c) => <CardChamado key={c.id} c={c} compacto />)}</div>
-                </>
-              )}
-            </>
-          )}
-        </section>
+        <div className="mn-kanban">
+          {['PENDENTE', 'EM_EXECUCAO', 'CONCLUIDO'].map((coluna) => {
+            const daColuna = minhas
+              .filter((c) => c.status === coluna)
+              .sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em));
+            return (
+              <div key={coluna} className="mn-coluna">
+                <div className="mn-coluna-titulo">
+                  {STATUS_EMOJI[coluna]} {STATUS_LABEL[coluna]} <span className="mn-coluna-contador">{daColuna.length}</span>
+                </div>
+                <div className="mn-coluna-cards">
+                  {daColuna.length === 0 ? (
+                    <div className="mn-coluna-vazia">Nenhum chamado aqui.</div>
+                  ) : (
+                    daColuna.map((c) => <CardChamado key={c.id} c={c} compacto />)
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {/* ================= INSIGHTS (admin) ================= */}
