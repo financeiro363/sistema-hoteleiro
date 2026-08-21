@@ -15,6 +15,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -249,6 +250,7 @@ export default function SalaReuniao() {
       if (error || !dadosUsuario) { router.push('/login'); return; }
       if (!ativo) return;
       setUsuario(dadosUsuario);
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
       setVerificandoLogin(false);
     }
     verificar();
