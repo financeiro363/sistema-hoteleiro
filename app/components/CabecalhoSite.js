@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { PAPEIS_RESTRITOS } from '../../lib/restricaoAcesso';
 
 const CATEGORIAS_MENU = [
   {
@@ -60,6 +61,13 @@ function linkVisivelPara(link, papelUsuario) {
   if (link.soAdminOuContador) return papelUsuario === 'ADMIN';
   return true;
 }
+
+// Rótulo de cada página usada por um papel restrito (Manutenção/Camareira),
+// pra montar o link certo no menu enxuto deles.
+const ROTULO_PAGINA_RESTRITA = {
+  '/manutencao': '🔧 Manutenção',
+  '/governanca': '🧹 Governança',
+};
 
 export default function CabecalhoSite() {
   const caminhoAtual = usePathname();
@@ -158,7 +166,7 @@ export default function CabecalhoSite() {
           className={menuAberto ? 'navegacao aberta' : 'navegacao'}
           aria-label="Menu principal"
         >
-          {papelUsuario !== 'CONTADOR' && (
+          {papelUsuario !== 'CONTADOR' && !PAPEIS_RESTRITOS[papelUsuario] && (
             <Link href="/" className={caminhoAtual === '/' ? 'ativa' : ''}>
               Início
             </Link>
@@ -168,7 +176,19 @@ export default function CabecalhoSite() {
             📝 Minhas Tarefas
           </Link>
 
-          {papelUsuario === 'CONTADOR' ? (
+          {PAPEIS_RESTRITOS[papelUsuario] ? (
+            // Perfil com acesso restrito (Manutenção, Camareira): só a
+            // segunda página permitida pra esse papel aparece — nada mais.
+            <>
+              {PAPEIS_RESTRITOS[papelUsuario].paginas
+                .filter((pagina) => pagina !== '/tarefas-pessoais')
+                .map((pagina) => (
+                  <Link key={pagina} href={pagina} className={caminhoAtual === pagina ? 'ativa' : ''}>
+                    {ROTULO_PAGINA_RESTRITA[pagina] || pagina}
+                  </Link>
+                ))}
+            </>
+          ) : papelUsuario === 'CONTADOR' ? (
             // Visão restrita do Contador: só os destinos que ele pode acessar
             <>
               <Link href="/contabilidade" className={caminhoAtual === '/contabilidade' ? 'ativa' : ''}>
