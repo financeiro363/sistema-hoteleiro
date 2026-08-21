@@ -18,9 +18,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 const PAPEL_LABEL = {
   ADMIN: 'Administrador', COLABORADOR: 'Colaborador', CONTADOR: 'Contador (só vê Contabilidade)',
+  MANUTENCAO: 'Manutenção (só Minhas Tarefas + Manutenção)', CAMAREIRA: 'Camareira (só Minhas Tarefas + Governança)',
 };
 
 function formatarDataHora(valor) {
@@ -104,6 +106,7 @@ export default function ControleUsuarios() {
       if (dadosUsuario.papel !== 'ADMIN') { router.push('/'); return; }
       if (!ativo) return;
       setUsuario(dadosUsuario);
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
       setVerificandoLogin(false);
     }
     verificar();
