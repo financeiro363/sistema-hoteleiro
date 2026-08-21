@@ -9,6 +9,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 // ---- Constantes de apoio ----------------------------------------------------
 
@@ -26,8 +27,8 @@ const COR_STATUS = {
 
 // Cores das etiquetas de prioridade
 const COR_PRIORIDADE = {
-  'Baixa':   { fundo: '#F0F0F0', texto: '#555555' },
-  'Média':   { fundo: '#E3EEF9', texto: '#2A5E9C' },
+  'Baixa':   { fundo: '#DDF2E4', texto: '#1E6B3C' },
+  'Média':   { fundo: '#FDF3D7', texto: '#8A6100' },
   'Alta':    { fundo: '#FCE8D9', texto: '#A34E00' },
   'Urgente': { fundo: '#FBDDDD', texto: '#A31212' },
 };
@@ -174,11 +175,17 @@ export default function PaginaSolicitacoes() {
       }
       if (!ativo) return;
       setUsuario(perfil);
+      if (bloquearSeNaoPermitido(perfil.papel, router)) return;
 
       // 3) Busca os colegas do mesmo hotel (para escolher destinatários)
+      //    Filtra hotel_id explicitamente aqui — o banco pode permitir ver
+      //    mais gente (ex.: quem tem o "chapéu" de administrador geral),
+      //    mas essa lista específica é só para escolher gente do PRÓPRIO
+      //    hotel, mesmo que a pessoa logada também administre outros.
       const { data: listaColegas } = await supabase
         .from('usuarios')
         .select('id, nome, email, papel')
+        .eq('hotel_id', perfil.hotel_id)
         .order('nome', { ascending: true });
       if (ativo) setColegas(listaColegas || []);
 
@@ -642,11 +649,6 @@ export default function PaginaSolicitacoes() {
     }
   }
 
-  async function sair() {
-    await supabase.auth.signOut();
-    router.push('/login');
-  }
-
   // ---- Telas de carregamento / erro -----------------------------------------
 
   if (carregando) {
@@ -691,17 +693,10 @@ export default function PaginaSolicitacoes() {
 
       {/* Cabeçalho */}
       <header className="sol-cabecalho">
-        <div className="sol-cabecalho-linha1">
-          <h1>Solicitações</h1>
-          <div className="sol-cabecalho-acoes">
-            <span className="sol-usuario-logado">
-              {usuario.nome} {souAdmin ? '· Admin' : ''}
-            </span>
-            <button type="button" className="sol-botao-suave" onClick={sair}>
-              Sair
-            </button>
-          </div>
-        </div>
+        <span className="olho">Fluxo de trabalho</span>
+        <h1 style={{ margin: 0 }}>
+          Solicitações{souAdmin ? ' · Admin' : ''}
+        </h1>
         <p className="sol-subtitulo">
           Crie, receba, acompanhe e encaminhe tarefas da equipe — como um e-mail interno do hotel.
         </p>
@@ -1229,12 +1224,8 @@ function EstilosDoModulo() {
   return (
     <style>{`
       .sol-pagina {
-        min-height: 100vh;
-        background: #F6F7F5;
-        color: #22302B;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
         padding: 16px;
-        max-width: 960px;
+        max-width: 1040px;
         margin: 0 auto;
       }
       .sol-carregando, .sol-vazio {
@@ -1270,8 +1261,8 @@ function EstilosDoModulo() {
         font-size: 15px; font-weight: 600; cursor: pointer;
         min-height: 44px;
       }
-      .sol-botao-principal { background: #0F5C55; color: #FFFFFF; }
-      .sol-botao-principal:hover { background: #0C4A45; }
+      .sol-botao-principal { background: var(--marca, #0E5A4E); color: #FFFFFF; }
+      .sol-botao-principal:hover { background: var(--marca-escura, #0A453C); }
       .sol-botao-suave { background: #E7EAE7; color: #22302B; }
       .sol-botao-suave:hover { background: #DBDFDB; }
       .sol-botao-concluir { background: #1E6B3C; color: #FFFFFF; }
