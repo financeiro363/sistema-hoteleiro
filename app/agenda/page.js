@@ -10,6 +10,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 // Telefone brasileiro: máscara ao vivo (fixo ou celular) + validação de DDD
 function formatarTelefoneBR(texto) {
@@ -67,6 +68,7 @@ export default function AgendaTelefonica() {
       }
       if (!ativo) return;
       setUsuario(dadosUsuario);
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
       setVerificandoLogin(false);
     }
     verificar();
