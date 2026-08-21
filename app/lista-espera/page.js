@@ -13,6 +13,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 // ---- Funções de apoio -------------------------------------------------------
 
@@ -135,6 +136,7 @@ export default function ListaEspera() {
       }
       if (!ativo) return;
       setUsuario(dadosUsuario);
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
       setVerificandoLogin(false);
 
       // Busca o nome fantasia do hotel (para assinar a mensagem)
