@@ -139,6 +139,9 @@ export default function Governanca() {
   const [webhookAtivo, setWebhookAtivo] = useState(false);
 
   const souAdmin = usuario?.papel === 'ADMIN';
+  // Quartos: admin e colaborador podem ver e operar (é onde se atribui a
+  // camareira de cada apartamento). Insights e Configurações continuam só admin.
+  const podeVerQuartos = souAdmin || usuario?.papel === 'COLABORADOR';
 
   function mostrarAviso(texto) {
     setAviso(texto);
@@ -615,7 +618,7 @@ export default function Governanca() {
           onClick={() => setSubAba('camareira')}>
           Camareira
         </button>
-        {souAdmin && (
+        {podeVerQuartos && (
           <button type="button" className={subAba === 'quartos' ? 'gv-aba gv-aba-ativa' : 'gv-aba'}
             onClick={() => setSubAba('quartos')}>
             Quartos
@@ -686,9 +689,12 @@ export default function Governanca() {
         </section>
       )}
 
-      {/* ================= QUARTOS (admin) ================= */}
-      {!carregando && subAba === 'quartos' && souAdmin && (
+      {/* ================= QUARTOS (admin + colaborador) ================= */}
+      {!carregando && subAba === 'quartos' && podeVerQuartos && (
         <section>
+          {/* Vínculo com a Cloudbeds — só admin. É configuração técnica,
+              colaborador não precisa (e não deve) mexer nisso. */}
+          {souAdmin && (
           <div className="cartao" style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
               <div>
@@ -716,17 +722,20 @@ export default function Governanca() {
               </>
             )}
           </div>
+          )}
 
           <div className="gv-barra">
             <p className="texto-suave" style={{ fontSize: 13, margin: 0 }}>
               Um quarto sem camareira atribuída fica invisível na tela de arrumação de todo mundo.
             </p>
-            <button type="button" className="botao botao-principal" onClick={abrirNovoQuarto}>
-              + Novo Quarto
-            </button>
+            {souAdmin && (
+              <button type="button" className="botao botao-principal" onClick={abrirNovoQuarto}>
+                + Novo Quarto
+              </button>
+            )}
           </div>
 
-          {mostrarFormNovoQuarto && (
+          {mostrarFormNovoQuarto && souAdmin && (
             <form className="cartao" style={{ marginBottom: 16 }} onSubmit={salvarQuarto}>
               <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>Novo quarto</h2>
               <label className="rotulo">Número do apartamento *</label>
@@ -806,14 +815,16 @@ export default function Governanca() {
                           </button>
                         )}
                         <button type="button" className="botao botao-suave" onClick={() => abrirEdicaoQuarto(q)}>Editar</button>
-                        {excluindoQuartoId === q.id ? (
-                          <span className="gv-confirmar">
-                            Excluir?
-                            <button type="button" className="botao botao-perigo" onClick={() => excluirQuarto(q)}>Sim</button>
-                            <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(null)}>Não</button>
-                          </span>
-                        ) : (
-                          <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(q.id)}>Excluir</button>
+                        {souAdmin && (
+                          excluindoQuartoId === q.id ? (
+                            <span className="gv-confirmar">
+                              Excluir?
+                              <button type="button" className="botao botao-perigo" onClick={() => excluirQuarto(q)}>Sim</button>
+                              <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(null)}>Não</button>
+                            </span>
+                          ) : (
+                            <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(q.id)}>Excluir</button>
+                          )
                         )}
                       </div>
                     </>
