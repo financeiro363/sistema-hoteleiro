@@ -115,7 +115,7 @@ export default function Governanca() {
   const [erroPopup, setErroPopup] = useState('');
 
   // ---- Quartos (admin) ----
-  const [mostrarFormQuarto, setMostrarFormQuarto] = useState(false);
+  const [mostrarFormNovoQuarto, setMostrarFormNovoQuarto] = useState(false);
   const [editandoQuartoId, setEditandoQuartoId] = useState(null);
   const [qNumero, setQNumero] = useState('');
   const [qCamareira, setQCamareira] = useState('');
@@ -132,6 +132,10 @@ export default function Governanca() {
   const [erroCloudbeds, setErroCloudbeds] = useState('');
   const [salvandoVinculo, setSalvandoVinculo] = useState(null); // id do quarto sendo vinculado
   const [importandoCloudbeds, setImportandoCloudbeds] = useState(false);
+  const [sincronizandoStatus, setSincronizandoStatus] = useState(false);
+  const [configurandoWebhook, setConfigurandoWebhook] = useState(false);
+  const [erroWebhook, setErroWebhook] = useState('');
+  const [webhookAtivo, setWebhookAtivo] = useState(false);
 
   const souAdmin = usuario?.papel === 'ADMIN';
 
@@ -188,6 +192,10 @@ export default function Governanca() {
       const { data: cfg } = await supabase
         .from('governanca_config').select('*').eq('hotel_id', u.hotel_id).maybeSingle();
       setConfig(cfg);
+
+      const { data: hotelInfo } = await supabase
+        .from('hoteis').select('governanca_webhook_id').eq('id', u.hotel_id).maybeSingle();
+      setWebhookAtivo(!!hotelInfo?.governanca_webhook_id);
     }
 
     setCarregando(false);
@@ -369,14 +377,14 @@ export default function Governanca() {
   function abrirNovoQuarto() {
     setEditandoQuartoId(null);
     setQNumero(''); setQCamareira(''); setErroFormQuarto('');
-    setMostrarFormQuarto(true);
+    setMostrarFormNovoQuarto(true);
   }
 
   function abrirEdicaoQuarto(q) {
+    setMostrarFormNovoQuarto(false);
     setEditandoQuartoId(q.id);
     setQNumero(q.numero); setQCamareira(q.camareira_id ? String(q.camareira_id) : '');
     setErroFormQuarto('');
-    setMostrarFormQuarto(true);
   }
 
   async function salvarQuarto(evento) {
@@ -396,14 +404,15 @@ export default function Governanca() {
       setSalvando(false);
       if (error) { setErroFormQuarto('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
       mostrarAviso('Quarto atualizado!');
+      setEditandoQuartoId(null);
     } else {
       const { error } = await supabase.from('quartos')
         .insert({ ...dados, status: 'SUJO', hotel_id: usuario.hotel_id });
       setSalvando(false);
       if (error) { setErroFormQuarto('Não foi possível cadastrar. Detalhe técnico: ' + error.message); return; }
       mostrarAviso('Quarto cadastrado!');
+      setMostrarFormNovoQuarto(false);
     }
-    setMostrarFormQuarto(false);
     carregarTudo(usuario);
   }
 
@@ -491,6 +500,15 @@ export default function Governanca() {
   // Cloudbeds como número) já com o vínculo pronto. Quartos que já existirem
   // aqui (mesmo número, comparando sem diferenciar maiúsculas/espaços) só
   // recebem o vínculo, sem duplicar.
+  // Traduz o status real da Cloudbeds pro nosso — usado na importação e na
+  // sincronização manual. roomBlocked (fora de serviço) tem prioridade.
+  function mapearCondicaoParaStatus(rc) {
+    if (rc.roomBlocked) return 'MANUTENCAO';
+    if (rc.roomCondition === 'dirty') return 'SUJO';
+    if (rc.roomCondition === 'clean' || rc.roomCondition === 'inspected') return 'LIMPO';
+    return 'SUJO';
+  }
+
   async function importarQuartosDaCloudbeds() {
     if (!quartosCloudbeds || quartosCloudbeds.length === 0) return;
     setImportandoCloudbeds(true);
@@ -501,22 +519,73 @@ export default function Governanca() {
 
     let criados = 0, vinculados = 0, jaOk = 0;
     for (const rc of quartosCloudbeds) {
+      const statusReal = mapearCondicaoParaStatus(rc);
       const existente = porNumero[normalizar(rc.roomName)];
       if (existente) {
-        if (existente.cloudbeds_room_id === rc.roomID) { jaOk++; continue; }
-        const { error } = await supabase.from('quartos').update({ cloudbeds_room_id: rc.roomID }).eq('id', existente.id);
+        if (existente.cloudbeds_room_id === rc.roomID && existente.status === statusReal) { jaOk++; continue; }
+        const { error } = await supabase.from('quartos')
+          .update({ cloudbeds_room_id: rc.roomID, status: statusReal }).eq('id', existente.id);
         if (!error) vinculados++;
       } else {
         const { error } = await supabase.from('quartos').insert({
-          numero: rc.roomName, cloudbeds_room_id: rc.roomID, status: 'SUJO', hotel_id: usuario.hotel_id,
+          numero: rc.roomName, cloudbeds_room_id: rc.roomID, status: statusReal, hotel_id: usuario.hotel_id,
         });
         if (!error) criados++;
       }
     }
 
     setImportandoCloudbeds(false);
-    mostrarAviso(`Importação concluída: ${criados} apartamento(s) criado(s), ${vinculados} vinculado(s) a um já existente, ${jaOk} já estavam certos.`);
+    mostrarAviso(`Importação concluída: ${criados} apartamento(s) criado(s), ${vinculados} atualizado(s)/vinculado(s), ${jaOk} já estavam certos.`);
     carregarTudo(usuario);
+  }
+
+  // Corrige de uma vez o status de TODOS os quartos já vinculados, puxando
+  // o valor real da Cloudbeds agora — útil pra consertar quartos que foram
+  // importados errado antes dessa correção, ou sempre que desconfiar que
+  // algo está desatualizado.
+  async function sincronizarStatusComCloudbeds() {
+    if (!quartosCloudbeds || quartosCloudbeds.length === 0) {
+      mostrarAviso('Clique em "Carregar quartos da Cloudbeds" primeiro.');
+      return;
+    }
+    setSincronizandoStatus(true);
+    const porRoomId = Object.fromEntries(quartosCloudbeds.map((rc) => [rc.roomID, rc]));
+    let corrigidos = 0;
+    for (const q of quartos) {
+      if (!q.cloudbeds_room_id) continue;
+      const rc = porRoomId[q.cloudbeds_room_id];
+      if (!rc) continue;
+      const statusReal = mapearCondicaoParaStatus(rc);
+      if (statusReal !== q.status) {
+        const { error } = await supabase.from('quartos').update({ status: statusReal }).eq('id', q.id);
+        if (!error) corrigidos++;
+      }
+    }
+    setSincronizandoStatus(false);
+    mostrarAviso(`Sincronização concluída: ${corrigidos} apartamento(s) corrigido(s) a partir da Cloudbeds.`);
+    carregarTudo(usuario);
+  }
+
+  // ---- Webhook (notificações em tempo real da Cloudbeds) ----
+  async function configurarWebhook(ativar) {
+    setConfigurandoWebhook(true);
+    setErroWebhook('');
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/governanca-configurar-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ ativar }),
+      });
+      const resultado = await resposta.json();
+      setConfigurandoWebhook(false);
+      if (!resposta.ok || resultado.erro) { setErroWebhook(resultado.erro || 'Não foi possível concluir.'); return; }
+      mostrarAviso(ativar ? '🔔 Notificações da Cloudbeds ativadas!' : 'Notificações desativadas.');
+      carregarTudo(usuario);
+    } catch (e) {
+      setConfigurandoWebhook(false);
+      setErroWebhook('Falha de conexão.');
+    }
   }
 
   if (verificandoLogin) {
@@ -655,9 +724,9 @@ export default function Governanca() {
             </button>
           </div>
 
-          {mostrarFormQuarto && (
+          {mostrarFormNovoQuarto && (
             <form className="cartao" style={{ marginBottom: 16 }} onSubmit={salvarQuarto}>
-              <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>{editandoQuartoId ? 'Editar quarto' : 'Novo quarto'}</h2>
+              <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>Novo quarto</h2>
               <label className="rotulo">Número do apartamento *</label>
               <input className="campo" type="text" value={qNumero} onChange={(e) => setQNumero(e.target.value)} placeholder="Ex.: 204" />
               <label className="rotulo">Camareira responsável</label>
@@ -668,9 +737,9 @@ export default function Governanca() {
               {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
                 <button type="submit" className="botao botao-principal" disabled={salvando}>
-                  {salvando ? 'Salvando…' : editandoQuartoId ? 'Salvar alterações' : 'Cadastrar'}
+                  {salvando ? 'Salvando…' : 'Cadastrar'}
                 </button>
-                <button type="button" className="botao botao-suave" onClick={() => setMostrarFormQuarto(false)}>Cancelar</button>
+                <button type="button" className="botao botao-suave" onClick={() => setMostrarFormNovoQuarto(false)}>Cancelar</button>
               </div>
             </form>
           )}
@@ -683,49 +752,70 @@ export default function Governanca() {
             <div className="gv-lista">
               {quartos.map((q) => (
                 <div key={q.id} className="cartao gv-item-quarto">
-                  <div className="gv-item-quarto-esq">
-                    <div className="gv-item-quarto-topo">
-                      <strong>Apartamento {q.numero}</strong>
-                      <span className="gv-badge" style={{ background: STATUS_QUARTO_COR[q.status].fundo, color: STATUS_QUARTO_COR[q.status].texto }}>
-                        {STATUS_QUARTO_LABEL[q.status]}
-                      </span>
-                    </div>
-                    <div className="texto-suave" style={{ fontSize: 13 }}>
-                      {q.camareira_id ? `Camareira: ${nomeDe(q.camareira_id)}` : 'Sem camareira atribuída'}
-                      {q.ultima_limpeza ? ` · última limpeza em ${formatarDataHora(q.ultima_limpeza)}` : ''}
-                    </div>
-                    {quartosCloudbeds && (
-                      <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <select className="campo" style={{ fontSize: 12, padding: '4px 8px' }}
-                          value={q.cloudbeds_room_id || ''}
-                          onChange={(e) => salvarVinculoCloudbeds(q, e.target.value)}
-                          disabled={salvandoVinculo === q.id}>
-                          <option value="">— Não vinculado à Cloudbeds —</option>
-                          {quartosCloudbeds.map((rc) => (
-                            <option key={rc.roomID} value={rc.roomID}>{rc.roomName} ({rc.roomTypeName})</option>
-                          ))}
-                        </select>
-                        {salvandoVinculo === q.id && <span className="texto-suave" style={{ fontSize: 11 }}>salvando…</span>}
+                  {editandoQuartoId === q.id ? (
+                    <form onSubmit={salvarQuarto} style={{ width: '100%' }}>
+                      <label className="rotulo">Número do apartamento *</label>
+                      <input className="campo" type="text" value={qNumero} onChange={(e) => setQNumero(e.target.value)} placeholder="Ex.: 204" autoFocus />
+                      <label className="rotulo">Camareira responsável</label>
+                      <select className="campo" value={qCamareira} onChange={(e) => setQCamareira(e.target.value)}>
+                        <option value="">— Sem camareira atribuída —</option>
+                        {colegas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                      </select>
+                      {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+                        <button type="submit" className="botao botao-principal" disabled={salvando}>
+                          {salvando ? 'Salvando…' : 'Salvar alterações'}
+                        </button>
+                        <button type="button" className="botao botao-suave" onClick={() => setEditandoQuartoId(null)}>Cancelar</button>
                       </div>
-                    )}
-                  </div>
-                  <div className="gv-item-quarto-acoes">
-                    {q.status !== 'SUJO' && q.status !== 'EM_ARRUMACAO' && (
-                      <button type="button" className="botao botao-suave" onClick={() => marcarSujo(q)} disabled={salvando}>
-                        Marcar sujo
-                      </button>
-                    )}
-                    <button type="button" className="botao botao-suave" onClick={() => abrirEdicaoQuarto(q)}>Editar</button>
-                    {excluindoQuartoId === q.id ? (
-                      <span className="gv-confirmar">
-                        Excluir?
-                        <button type="button" className="botao botao-perigo" onClick={() => excluirQuarto(q)}>Sim</button>
-                        <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(null)}>Não</button>
-                      </span>
-                    ) : (
-                      <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(q.id)}>Excluir</button>
-                    )}
-                  </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div className="gv-item-quarto-esq">
+                        <div className="gv-item-quarto-topo">
+                          <strong>Apartamento {q.numero}</strong>
+                          <span className="gv-badge" style={{ background: STATUS_QUARTO_COR[q.status].fundo, color: STATUS_QUARTO_COR[q.status].texto }}>
+                            {STATUS_QUARTO_LABEL[q.status]}
+                          </span>
+                        </div>
+                        <div className="texto-suave" style={{ fontSize: 13 }}>
+                          {q.camareira_id ? `Camareira: ${nomeDe(q.camareira_id)}` : 'Sem camareira atribuída'}
+                          {q.ultima_limpeza ? ` · última limpeza em ${formatarDataHora(q.ultima_limpeza)}` : ''}
+                        </div>
+                        {quartosCloudbeds && (
+                          <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <select className="campo" style={{ fontSize: 12, padding: '4px 8px' }}
+                              value={q.cloudbeds_room_id || ''}
+                              onChange={(e) => salvarVinculoCloudbeds(q, e.target.value)}
+                              disabled={salvandoVinculo === q.id}>
+                              <option value="">— Não vinculado à Cloudbeds —</option>
+                              {quartosCloudbeds.map((rc) => (
+                                <option key={rc.roomID} value={rc.roomID}>{rc.roomName} ({rc.roomTypeName})</option>
+                              ))}
+                            </select>
+                            {salvandoVinculo === q.id && <span className="texto-suave" style={{ fontSize: 11 }}>salvando…</span>}
+                          </div>
+                        )}
+                      </div>
+                      <div className="gv-item-quarto-acoes">
+                        {q.status !== 'SUJO' && q.status !== 'EM_ARRUMACAO' && (
+                          <button type="button" className="botao botao-suave" onClick={() => marcarSujo(q)} disabled={salvando}>
+                            Marcar sujo
+                          </button>
+                        )}
+                        <button type="button" className="botao botao-suave" onClick={() => abrirEdicaoQuarto(q)}>Editar</button>
+                        {excluindoQuartoId === q.id ? (
+                          <span className="gv-confirmar">
+                            Excluir?
+                            <button type="button" className="botao botao-perigo" onClick={() => excluirQuarto(q)}>Sim</button>
+                            <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(null)}>Não</button>
+                          </span>
+                        ) : (
+                          <button type="button" className="botao botao-suave" onClick={() => setExcluindoQuartoId(q.id)}>Excluir</button>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -825,6 +915,36 @@ export default function Governanca() {
                 Agora vá na aba "Quartos" pra vincular cada apartamento ao quarto correspondente.
               </div>
             )}
+          </div>
+
+          <div className="cartao" style={{ maxWidth: 560, marginTop: 14 }}>
+            <h2 style={{ fontSize: '1.1rem', marginTop: 0 }}>🔄 Corrigir status agora</h2>
+            <p className="texto-suave" style={{ fontSize: 13 }}>
+              Puxa o status real de todos os apartamentos já vinculados direto da Cloudbeds e corrige aqui na hora — útil se algum apartamento estiver mostrando "Sujo", "Limpo" ou "Manutenção" errado.
+            </p>
+            <button type="button" className="botao botao-principal" onClick={sincronizarStatusComCloudbeds} disabled={sincronizandoStatus}>
+              {sincronizandoStatus ? 'Corrigindo…' : '🔄 Corrigir status de todos os quartos agora'}
+            </button>
+          </div>
+
+          <div className="cartao" style={{ maxWidth: 560, marginTop: 14 }}>
+            <h2 style={{ fontSize: '1.1rem', marginTop: 0 }}>🔔 Notificações em tempo real</h2>
+            <p className="texto-suave" style={{ fontSize: 13 }}>
+              Quando ativado, a própria Cloudbeds avisa nosso sistema instantaneamente toda vez que o status de limpeza de um quarto mudar por lá (inclusive quando ela marca "sujo" sozinha após um check-out) — sem precisar de nenhuma ação manual ou de ficar clicando em "Corrigir status".
+            </p>
+            {webhookAtivo ? (
+              <>
+                <p style={{ color: 'var(--sucesso-texto, #1E6B3C)', fontWeight: 700, fontSize: 14 }}>✅ Ativado</p>
+                <button type="button" className="botao botao-suave" onClick={() => configurarWebhook(false)} disabled={configurandoWebhook}>
+                  {configurandoWebhook ? 'Desativando…' : 'Desativar notificações'}
+                </button>
+              </>
+            ) : (
+              <button type="button" className="botao botao-principal" onClick={() => configurarWebhook(true)} disabled={configurandoWebhook}>
+                {configurandoWebhook ? 'Ativando…' : '🔔 Ativar notificações da Cloudbeds'}
+              </button>
+            )}
+            {erroWebhook && <div className="aviso-erro" style={{ marginTop: 10 }}>{erroWebhook}</div>}
           </div>
         </section>
       )}
