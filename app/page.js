@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../lib/supabaseClient';
+import { bloquearSeNaoPermitido } from '../lib/restricaoAcesso';
 
 // ============================================================================
 // PÁGINA INICIAL
@@ -149,6 +150,7 @@ export default function PaginaInicial() {
         .from('usuarios').select('papel').eq('auth_id', sessao.session.user.id).single();
       if (!ativo) return;
       if (perfil?.papel === 'CONTADOR') { router.push('/contabilidade'); return; }
+      if (bloquearSeNaoPermitido(perfil?.papel, router)) return;
       setVerificando(false);
     }
     verificar();
