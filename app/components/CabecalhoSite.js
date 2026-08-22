@@ -160,7 +160,9 @@ export default function CabecalhoSite() {
           </span>
         </Link>
 
-        {/* Menu de navegação */}
+        {/* Menu de navegação — escondido na página inicial, pra deixar a
+            primeira tela mais limpa (só logo + entrar/sair aparecem ali) */}
+        {caminhoAtual !== '/' && (
         <nav
           id="menu-principal"
           className={menuAberto ? 'navegacao aberta' : 'navegacao'}
@@ -241,6 +243,7 @@ export default function CabecalhoSite() {
             </>
           )}
         </nav>
+        )}
 
         {/* Ações do lado direito */}
         <div className="cabecalho-acoes">
@@ -261,16 +264,18 @@ export default function CabecalhoSite() {
               Entrar
             </Link>
           )}
-          <button
-            type="button"
-            className="botao-menu"
-            aria-label={menuAberto ? 'Fechar menu' : 'Abrir menu'}
-            aria-expanded={menuAberto}
-            aria-controls="menu-principal"
-            onClick={() => setMenuAberto(!menuAberto)}
-          >
-            {menuAberto ? '✕' : '☰'}
-          </button>
+          {caminhoAtual !== '/' && (
+            <button
+              type="button"
+              className="botao-menu"
+              aria-label={menuAberto ? 'Fechar menu' : 'Abrir menu'}
+              aria-expanded={menuAberto}
+              aria-controls="menu-principal"
+              onClick={() => setMenuAberto(!menuAberto)}
+            >
+              {menuAberto ? '✕' : '☰'}
+            </button>
+          )}
         </div>
       </div>
     </header>
