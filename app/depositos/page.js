@@ -219,6 +219,12 @@ export default function DepositosBancarios() {
       if (!ativo) return;
       setUsuario(dadosUsuario);
       if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
+      // Colaborador só acessa Depósitos Bancários com a permissão marcada
+      // pelo admin — Admin sempre tem acesso, sem exceção.
+      if (dadosUsuario.papel === 'COLABORADOR' && !dadosUsuario.pode_acessar_depositos) {
+        router.push('/');
+        return;
+      }
       setVerificandoLogin(false);
     }
     verificar();
