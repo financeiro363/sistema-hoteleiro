@@ -146,7 +146,7 @@ export default function Lavanderia() {
       if (error || !dadosUsuario) { router.push('/login'); return; }
       if (!ativo) return;
       setUsuario(dadosUsuario);
-      if (bloquearSeNaoPermitido(dadosUsuario.papel, router)) return;
+      if (bloquearSeNaoPermitido(dadosUsuario.papel, router, '/lavanderia')) return;
       setVerificandoLogin(false);
 
       const { data: h } = await supabase
