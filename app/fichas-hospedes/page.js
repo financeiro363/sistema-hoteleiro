@@ -101,6 +101,7 @@ export default function FichasHospedes() {
 // ============================================================================
 
 function PainelFichas({ usuario, nomeHotel }) {
+  const souAdmin = usuario.papel === 'ADMIN';
   const [fichas, setFichas] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
@@ -111,14 +112,66 @@ function PainelFichas({ usuario, nomeHotel }) {
   const [exportando, setExportando] = useState(null);
   const [fichaAberta, setFichaAberta] = useState(null);
   const [fichaImprimindo, setFichaImprimindo] = useState(null);
+  const [imprimindoDireto, setImprimindoDireto] = useState(null);
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 6000); }
 
+  // Abre a janela isolada de impressão com os dados completos da ficha —
+  // reaproveitada tanto pelo modal de prévia (admin) quanto pelo fluxo
+  // direto (colaborador, sem prévia na tela).
+  function abrirJanelaImpressao(ficha) {
+    const janela = window.open('', '_blank', 'width=900,height=1000');
+    if (!janela) {
+      alert('Não foi possível abrir a janela de impressão. Confira se o navegador não bloqueou pop-ups para este site.');
+      return;
+    }
+    janela.document.open();
+    janela.document.write(montarHtmlFicha(ficha, nomeHotel));
+    janela.document.close();
+    janela.onload = () => { janela.focus(); janela.print(); };
+    setTimeout(() => { try { janela.focus(); janela.print(); } catch (e) {} }, 400);
+  }
+
+  // Admin: abre o modal com prévia na tela antes de imprimir (fluxo de sempre).
+  // Colaborador: não vê os campos sensíveis na listagem, então também não
+  // faz sentido mostrar uma prévia deles na tela aqui — busca os dados
+  // completos só neste instante (via rota própria) e vai direto pra
+  // impressão, sem deixar esses dados visíveis na tela por mais tempo que
+  // o necessário.
+  async function clicarImprimir(ficha) {
+    if (souAdmin) { setFichaImprimindo(ficha); return; }
+
+    setImprimindoDireto(ficha.id);
+    setErro('');
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch(`/api/fichas-imprimir?fichaId=${ficha.id}`, {
+        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
+      });
+      const resultado = await resposta.json();
+      setImprimindoDireto(null);
+      if (!resposta.ok || resultado.erro) { setErro(resultado.erro || 'Não foi possível preparar a impressão.'); return; }
+      abrirJanelaImpressao(resultado.ficha);
+    } catch (e) {
+      setImprimindoDireto(null);
+      setErro('Falha de conexão ao preparar a impressão.');
+    }
+  }
+
   const carregar = useCallback(async () => {
     setCarregando(true);
-    const { data, error } = await supabase.from('fichas_fnrh').select('*').order('criado_em', { ascending: false });
-    if (error) setErro('Não foi possível carregar. Detalhe técnico: ' + error.message);
-    setFichas(data || []);
+    setErro('');
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/fichas-listar', {
+        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
+      });
+      const resultado = await resposta.json();
+      if (!resposta.ok || resultado.erro) { setErro(resultado.erro || 'Não foi possível carregar.'); setCarregando(false); return; }
+      setFichas(resultado.fichas || []);
+    } catch (e) {
+      setErro('Falha de conexão ao carregar as fichas.');
+    }
     setCarregando(false);
   }, []);
 
@@ -194,7 +247,8 @@ function PainelFichas({ usuario, nomeHotel }) {
                   </span>
                 </div>
                 <div className="texto-suave" style={{ fontSize: 13 }}>
-                  {f.tipo_documento} {f.numero_documento} · {f.email} · {f.telefone}
+                  {f.tipo_documento} {f.numero_documento}
+                  {souAdmin && ` · ${f.email} · ${f.telefone}`}
                 </div>
                 {(f.data_checkin || f.data_checkout) && (
                   <div className="fh-badge-estadia">
@@ -205,14 +259,16 @@ function PainelFichas({ usuario, nomeHotel }) {
                   Enviada em {formatarDataHora(f.criado_em)}
                   {f.status === 'EXPORTADO' && ` · Exportada para a reserva ${f.cloudbeds_reservation_id} em ${formatarDataHora(f.exportado_em)}`}
                 </div>
-                <button type="button" className="fh-ver-mais" onClick={() => verDetalhes(f)}>
-                  {fichaAberta === f.id ? 'Ver menos ▲' : 'Ver todos os dados ▼'}
-                </button>
-                {fichaAberta === f.id && <DetalhesFicha ficha={f} />}
+                {souAdmin && (
+                  <button type="button" className="fh-ver-mais" onClick={() => verDetalhes(f)}>
+                    {fichaAberta === f.id ? 'Ver menos ▲' : 'Ver todos os dados ▼'}
+                  </button>
+                )}
+                {souAdmin && fichaAberta === f.id && <DetalhesFicha ficha={f} />}
               </div>
               <div className="fh-item-dir">
-                <button type="button" className="botao botao-contorno" onClick={() => setFichaImprimindo(f)}>
-                  🖨️ Imprimir ficha
+                <button type="button" className="botao botao-contorno" onClick={() => clicarImprimir(f)} disabled={imprimindoDireto === f.id}>
+                  {imprimindoDireto === f.id ? 'Preparando…' : '🖨️ Imprimir ficha'}
                 </button>
                 {f.status === 'PENDENTE' ? (
                   <>
