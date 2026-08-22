@@ -160,9 +160,11 @@ export default function CabecalhoSite() {
           </span>
         </Link>
 
-        {/* Menu de navegação — escondido na página inicial, pra deixar a
-            primeira tela mais limpa (só logo + entrar/sair aparecem ali) */}
-        {caminhoAtual !== '/' && (
+        {/* Menu de navegação — escondido só na Home pra visitante (ainda
+            não logado, vendo a página de apresentação). Quem já está
+            logado sempre vê o menu, mesmo na Home, senão fica sem jeito
+            de navegar pra lugar nenhum depois de entrar. */}
+        {(caminhoAtual !== '/' || logado) && (
         <nav
           id="menu-principal"
           className={menuAberto ? 'navegacao aberta' : 'navegacao'}
@@ -264,7 +266,7 @@ export default function CabecalhoSite() {
               Entrar
             </Link>
           )}
-          {caminhoAtual !== '/' && (
+          {(caminhoAtual !== '/' || logado) && (
             <button
               type="button"
               className="botao-menu"
