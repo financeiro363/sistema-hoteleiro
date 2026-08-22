@@ -161,6 +161,17 @@ export default function ControleUsuarios() {
     carregarTudo(usuario);
   }
 
+  async function alternarPermissaoDepositos(pessoa) {
+    setSalvandoId(pessoa.id);
+    const { error } = await supabase.from('usuarios').update({ pode_acessar_depositos: !pessoa.pode_acessar_depositos }).eq('id', pessoa.id);
+    setSalvandoId(null);
+    if (error) { setErro('Não foi possível atualizar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso(pessoa.pode_acessar_depositos
+      ? `${pessoa.nome} não pode mais acessar Depósitos Bancários.`
+      : `${pessoa.nome} agora pode acessar a página de Depósitos Bancários.`);
+    carregarTudo(usuario);
+  }
+
   const termo = busca.trim().toLowerCase();
   const filtrados = usuarios.filter((u) =>
     !termo || u.nome.toLowerCase().includes(termo) || (u.email || '').toLowerCase().includes(termo)
@@ -242,6 +253,13 @@ export default function ControleUsuarios() {
                       <input type="checkbox" checked={!!u.pode_incluir_atestado} disabled={salvandoId === u.id}
                         onChange={() => alternarPermissaoAtestado(u)} />
                       Pode registrar atestados médicos/odontológicos
+                    </label>
+                  )}
+                  {u.papel === 'COLABORADOR' && (
+                    <label className="us-checkbox-atestado">
+                      <input type="checkbox" checked={!!u.pode_acessar_depositos} disabled={salvandoId === u.id}
+                        onChange={() => alternarPermissaoDepositos(u)} />
+                      Pode acessar a página de Depósitos Bancários
                     </label>
                   )}
                   {souEu ? (
