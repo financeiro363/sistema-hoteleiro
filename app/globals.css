@@ -336,6 +336,16 @@ textarea.campo { resize: vertical; }
 }
 .hero-botoes { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
 
+.home-imagem-destaque {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  margin-top: 36px;
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+}
+
 .categoria-modulos { margin-top: 36px; padding-top: 32px; border-top: 1px solid var(--borda); }
 .categoria-modulos:first-of-type { margin-top: 24px; padding-top: 0; border-top: none; }
 .categoria-modulos-desc {
