@@ -55,10 +55,11 @@ const CATEGORIAS_MENU = [
 ];
 
 // Decide se um link específico pode aparecer para o papel atual
-function linkVisivelPara(link, papelUsuario) {
+function linkVisivelPara(link, papelUsuario, podeAcessarDepositos) {
   if (papelUsuario === 'CONTADOR') return !!link.contadorVe;
   if (link.soAdmin) return papelUsuario === 'ADMIN';
   if (link.soAdminOuContador) return papelUsuario === 'ADMIN';
+  if (link.href === '/depositos' && papelUsuario === 'COLABORADOR') return !!podeAcessarDepositos;
   return true;
 }
 
@@ -67,6 +68,7 @@ function linkVisivelPara(link, papelUsuario) {
 const ROTULO_PAGINA_RESTRITA = {
   '/manutencao': '🔧 Manutenção',
   '/governanca': '🧹 Governança',
+  '/lavanderia': '🧺 Lavanderia',
 };
 
 export default function CabecalhoSite() {
@@ -81,6 +83,7 @@ export default function CabecalhoSite() {
   const [nomeHotel, setNomeHotel] = useState('');
   const [souSuperAdmin, setSouSuperAdmin] = useState(false);
   const [podeIncluirAtestado, setPodeIncluirAtestado] = useState(false);
+  const [podeAcessarDepositos, setPodeAcessarDepositos] = useState(false);
 
   // Observa o login: mostra "Entrar" ou "Sair" conforme a sessão
   useEffect(() => {
@@ -93,13 +96,14 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('nome, papel, super_admin, pode_incluir_atestado, hotel_id')
+          .select('nome, papel, super_admin, pode_incluir_atestado, pode_acessar_depositos, hotel_id')
           .eq('auth_id', data.session.user.id)
           .single();
         if (ativo && perfil?.nome) setNomeUsuario(perfil.nome.split(' ')[0]);
         if (ativo) setPapelUsuario(perfil?.papel || '');
         if (ativo) setSouSuperAdmin(perfil?.super_admin === true);
         if (ativo) setPodeIncluirAtestado(perfil?.pode_incluir_atestado === true);
+        if (ativo) setPodeAcessarDepositos(perfil?.pode_acessar_depositos === true);
         if (perfil?.hotel_id) {
           const { data: hotel } = await supabase.from('hoteis').select('nome_fantasia').eq('id', perfil.hotel_id).single();
           if (ativo && hotel?.nome_fantasia) setNomeHotel(hotel.nome_fantasia);
@@ -110,7 +114,7 @@ export default function CabecalhoSite() {
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setNomeHotel(''); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setNomeHotel(''); }
       else carregarSessao();
     });
 
@@ -208,7 +212,7 @@ export default function CabecalhoSite() {
           ) : (
             <>
               {CATEGORIAS_MENU.map((categoria) => {
-                const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario));
+                const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario, podeAcessarDepositos));
                 if (linksVisiveis.length === 0) return null; // esconde a categoria inteira se ninguém dentro dela é visível
                 const temPaginaAtiva = linksVisiveis.some((link) => link.href === caminhoAtual);
                 return (
