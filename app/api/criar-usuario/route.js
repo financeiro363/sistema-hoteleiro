@@ -100,6 +100,12 @@ export async function POST(request) {
       }, { status: 500 });
     }
 
+    // Registra também o vínculo com este hotel — é o que permite, no
+    // futuro, vincular essa mesma pessoa a outro hotel sem perder o acesso
+    // a este aqui (ver /api/vincular-hotel-existente).
+    await supabaseAdmin.from('vinculos_usuario_hotel')
+      .upsert({ auth_id: convite.user.id, hotel_id: chamador.hotel_id, papel, ativo: true }, { onConflict: 'auth_id,hotel_id' });
+
     return Response.json({ sucesso: true });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
