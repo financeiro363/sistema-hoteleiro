@@ -22,7 +22,7 @@ import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 const PAPEL_LABEL = {
   ADMIN: 'Administrador', COLABORADOR: 'Colaborador', CONTADOR: 'Contador (só vê Contabilidade)',
-  MANUTENCAO: 'Manutenção (só Minhas Tarefas + Manutenção)', CAMAREIRA: 'Camareira (só Minhas Tarefas + Governança)',
+  MANUTENCAO: 'Manutenção (só Minhas Tarefas + Manutenção)', CAMAREIRA: 'Camareira (só Minhas Tarefas + Governança + Lavanderia)',
 };
 
 function formatarDataHora(valor) {
@@ -55,6 +55,11 @@ export default function ControleUsuarios() {
   const [novoPapel, setNovoPapel] = useState('COLABORADOR');
   const [criandoUsuario, setCriandoUsuario] = useState(false);
   const [erroNovoUsuario, setErroNovoUsuario] = useState('');
+  const [mostrarFormVincular, setMostrarFormVincular] = useState(false);
+  const [emailVincular, setEmailVincular] = useState('');
+  const [papelVincular, setPapelVincular] = useState('COLABORADOR');
+  const [vinculando, setVinculando] = useState(false);
+  const [erroVincular, setErroVincular] = useState('');
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 5000); }
 
@@ -136,6 +141,33 @@ export default function ControleUsuarios() {
     carregarTudo(usuario);
   }
 
+  async function vincularExistente(evento) {
+    evento.preventDefault();
+    if (vinculando) return;
+    setErroVincular('');
+    if (!emailVincular.trim()) { setErroVincular('Informe o e-mail da pessoa.'); return; }
+
+    setVinculando(true);
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/vincular-hotel-existente', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ email: emailVincular.trim(), papel: papelVincular }),
+      });
+      const resultado = await resposta.json();
+      setVinculando(false);
+      if (!resposta.ok || resultado.erro) { setErroVincular(resultado.erro || 'Não foi possível vincular.'); return; }
+
+      setEmailVincular(''); setPapelVincular('COLABORADOR');
+      setMostrarFormVincular(false);
+      mostrarAviso(`${resultado.nome || 'A pessoa'} agora pode acessar este hotel! Ela vai ver a opção de trocar de hotel no menu, da próxima vez que entrar.`);
+    } catch (e) {
+      setVinculando(false);
+      setErroVincular('Falha de conexão com o servidor. Tente novamente.');
+    }
+  }
+
   async function trocarPapel(pessoa, novoPapel) {
     if (novoPapel === pessoa.papel) return;
     if (pessoa.id === usuario.id) {
@@ -144,6 +176,12 @@ export default function ControleUsuarios() {
     }
     setSalvandoId(pessoa.id);
     const { error } = await supabase.from('usuarios').update({ papel: novoPapel }).eq('id', pessoa.id);
+    // Mantém o vínculo deste hotel em dia — assim, se a pessoa trocar de
+    // hotel e voltar depois, o papel novo continua valendo (não "volta" pro antigo).
+    if (!error) {
+      await supabase.from('vinculos_usuario_hotel')
+        .update({ papel: novoPapel }).eq('auth_id', pessoa.auth_id).eq('hotel_id', usuario.hotel_id);
+    }
     setSalvandoId(null);
     if (error) { setErro('Não foi possível atualizar o papel. Detalhe técnico: ' + error.message); return; }
     mostrarAviso(`${pessoa.nome} agora é ${PAPEL_LABEL[novoPapel]}.`);
@@ -197,10 +235,34 @@ export default function ControleUsuarios() {
       <div className="us-barra">
         <input className="campo" type="search" value={busca} onChange={(e) => setBusca(e.target.value)}
           placeholder="Buscar por nome ou e-mail…" />
+        <button type="button" className="botao botao-suave" onClick={() => { setMostrarFormVincular(!mostrarFormVincular); setErroVincular(''); }}>
+          {mostrarFormVincular ? 'Fechar' : '🔗 Vincular usuário de outro hotel'}
+        </button>
         <button type="button" className="botao botao-principal" onClick={() => { setMostrarFormNovo(!mostrarFormNovo); setErroNovoUsuario(''); }}>
           {mostrarFormNovo ? 'Fechar' : '+ Novo Usuário'}
         </button>
       </div>
+
+      {mostrarFormVincular && (
+        <form className="cartao" style={{ marginBottom: 16 }} onSubmit={vincularExistente}>
+          <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>Vincular usuário de outro hotel</h2>
+          <p className="texto-suave" style={{ fontSize: 13 }}>
+            Pra quem já tem login em outro hotel do sistema (mesmo e-mail) e agora também vai
+            trabalhar neste hotel. Não cria uma conta nova, nem manda convite — a pessoa passa a
+            ver este hotel como opção pra trocar, no menu dela.
+          </p>
+          <label className="rotulo">E-mail da pessoa *</label>
+          <input className="campo" type="email" value={emailVincular} onChange={(e) => setEmailVincular(e.target.value)} placeholder="pessoa@outrohotel.com.br" />
+          <label className="rotulo">Papel neste hotel</label>
+          <select className="campo" value={papelVincular} onChange={(e) => setPapelVincular(e.target.value)}>
+            {Object.entries(PAPEL_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
+          </select>
+          {erroVincular && <div className="aviso-erro">{erroVincular}</div>}
+          <button type="submit" className="botao botao-principal" disabled={vinculando} style={{ marginTop: 12 }}>
+            {vinculando ? 'Vinculando…' : 'Vincular a este hotel'}
+          </button>
+        </form>
+      )}
 
       {mostrarFormNovo && (
         <form className="cartao" style={{ marginBottom: 16 }} onSubmit={criarUsuario}>
