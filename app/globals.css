@@ -232,6 +232,22 @@ textarea.campo { resize: vertical; }
   text-transform: uppercase;
   margin-top: 1px;
 }
+.cabecalho-seletor-hotel {
+  display: block;
+  font-family: var(--fonte-corpo, inherit);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--marca);
+  text-transform: uppercase;
+  margin-top: 1px;
+  background: var(--marca-clara);
+  border: 1px solid var(--marca);
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  max-width: 180px;
+}
 .logo-simbolo {
   display: inline-flex;
   align-items: center;
