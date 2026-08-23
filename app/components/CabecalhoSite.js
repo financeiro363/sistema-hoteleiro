@@ -84,6 +84,9 @@ export default function CabecalhoSite() {
   const [souSuperAdmin, setSouSuperAdmin] = useState(false);
   const [podeIncluirAtestado, setPodeIncluirAtestado] = useState(false);
   const [podeAcessarDepositos, setPodeAcessarDepositos] = useState(false);
+  const [meusHoteis, setMeusHoteis] = useState([]); // [{hotel_id, papel, nome}]
+  const [hotelIdAtual, setHotelIdAtual] = useState(null);
+  const [trocandoHotel, setTrocandoHotel] = useState(false);
 
   // Observa o login: mostra "Entrar" ou "Sair" conforme a sessão
   useEffect(() => {
@@ -104,17 +107,25 @@ export default function CabecalhoSite() {
         if (ativo) setSouSuperAdmin(perfil?.super_admin === true);
         if (ativo) setPodeIncluirAtestado(perfil?.pode_incluir_atestado === true);
         if (ativo) setPodeAcessarDepositos(perfil?.pode_acessar_depositos === true);
+        if (ativo) setHotelIdAtual(perfil?.hotel_id || null);
         if (perfil?.hotel_id) {
           const { data: hotel } = await supabase.from('hoteis').select('nome_fantasia').eq('id', perfil.hotel_id).single();
           if (ativo && hotel?.nome_fantasia) setNomeHotel(hotel.nome_fantasia);
         }
+        // Só busca a lista de vínculos se realmente puder ter mais de um —
+        // é uma consulta a mais, então evita rodar à toa pra quem só tem 1 hotel.
+        const { data: vinculos } = await supabase
+          .from('vinculos_usuario_hotel')
+          .select('hotel_id, papel, hoteis(nome_fantasia)')
+          .eq('ativo', true);
+        if (ativo) setMeusHoteis((vinculos || []).map((v) => ({ hotel_id: v.hotel_id, papel: v.papel, nome: v.hoteis?.nome_fantasia || `Hotel #${v.hotel_id}` })));
       }
     }
     carregarSessao();
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setNomeHotel(''); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); }
       else carregarSessao();
     });
 
@@ -123,6 +134,31 @@ export default function CabecalhoSite() {
       escuta?.subscription?.unsubscribe();
     };
   }, []);
+
+  async function trocarHotel(novoHotelId) {
+    if (!novoHotelId || Number(novoHotelId) === hotelIdAtual || trocandoHotel) return;
+    setTrocandoHotel(true);
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/hotel-trocar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ hotelId: Number(novoHotelId) }),
+      });
+      const resultado = await resposta.json();
+      if (!resposta.ok || resultado.erro) {
+        alert(resultado.erro || 'Não foi possível trocar de hotel.');
+        setTrocandoHotel(false);
+        return;
+      }
+      // Recarrega a página inteira — garante que toda tela (e não só o
+      // cabeçalho) volte a buscar os dados já com o hotel novo.
+      window.location.href = '/';
+    } catch (e) {
+      alert('Falha de conexão ao trocar de hotel.');
+      setTrocandoHotel(false);
+    }
+  }
 
   // Fecha o menu hambúrguer e o dropdown de categoria sempre que muda de página
   useEffect(() => {
@@ -160,7 +196,14 @@ export default function CabecalhoSite() {
           <span className="logo-simbolo" aria-hidden="true">⌂</span>
           <span>
             Sistema Hoteleiro
-            {nomeHotel && <span className="cabecalho-nome-hotel">{nomeHotel}</span>}
+            {meusHoteis.length > 1 ? (
+              <select className="cabecalho-seletor-hotel" value={hotelIdAtual || ''} disabled={trocandoHotel}
+                onChange={(e) => trocarHotel(e.target.value)} aria-label="Trocar de hotel">
+                {meusHoteis.map((h) => <option key={h.hotel_id} value={h.hotel_id}>{h.nome}</option>)}
+              </select>
+            ) : (
+              nomeHotel && <span className="cabecalho-nome-hotel">{nomeHotel}</span>
+            )}
           </span>
         </Link>
 
