@@ -98,6 +98,10 @@ export default function CreditosDevolucoes() {
   const [usuario, setUsuario] = useState(null);
   const [nomesUsuarios, setNomesUsuarios] = useState({}); // id -> nome
   const [adminHotel, setAdminHotel] = useState(null);     // { nome, email }
+  const [emailNotificacao, setEmailNotificacao] = useState('');
+  const [salvandoConfig, setSalvandoConfig] = useState(false);
+  const [erroConfig, setErroConfig] = useState('');
+  const [reenviandoId, setReenviandoId] = useState(null);
 
   const [subAba, setSubAba] = useState('creditos');
   const [creditos, setCreditos] = useState([]);
@@ -215,6 +219,10 @@ export default function CreditosDevolucoes() {
         .order('data_hora', { ascending: false })
         .limit(300);
       setLogs(ls || []);
+
+      const { data: hotelInfo } = await supabase
+        .from('hoteis').select('email_notificacao_devolucoes').eq('id', u.hotel_id).maybeSingle();
+      setEmailNotificacao(hotelInfo?.email_notificacao_devolucoes || '');
     }
 
     setCarregando(false);
@@ -300,6 +308,17 @@ export default function CreditosDevolucoes() {
     carregarTudo(usuario);
   }
 
+  async function salvarEmailNotificacao() {
+    if (salvandoConfig) return;
+    setErroConfig('');
+    setSalvandoConfig(true);
+    const { error } = await supabase.from('hoteis')
+      .update({ email_notificacao_devolucoes: emailNotificacao.trim() || null }).eq('id', usuario.hotel_id);
+    setSalvandoConfig(false);
+    if (error) { setErroConfig('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso('E-mail de notificação salvo!');
+  }
+
   // ---- DEVOLUÇÕES: cadastrar solicitação ----
   function validarDevolucao() {
     if (!dev.nomePax.trim()) return 'Preencha o nome do pax (hóspede).';
@@ -334,7 +353,7 @@ export default function CreditosDevolucoes() {
       data_checkout: dev.dataCheckout || null,
       fatura_reserva: dev.faturaReserva.trim() || null,
       nome_empresa: dev.nomeEmpresa.trim() || 'Particular',
-      forma_pagamento: tipoForm === 'DEPOSITO' ? dev.formaPagamento : null,
+      forma_pagamento: (tipoForm === 'DEPOSITO' || tipoForm === 'CARTAO') ? dev.formaPagamento : null,
       nome_banco: tipoForm === 'DEPOSITO' ? dev.nomeBanco.trim() : null,
       tipo_conta: tipoForm === 'DEPOSITO' ? dev.tipoConta : null,
       agencia: tipoForm === 'DEPOSITO' ? dev.agencia.trim() || null : null,
@@ -353,7 +372,7 @@ export default function CreditosDevolucoes() {
     };
 
     setSalvando(true);
-    const { error } = await supabase.from('devolucoes').insert(registro);
+    const { data: salvo, error } = await supabase.from('devolucoes').insert(registro).select().single();
     setSalvando(false);
     if (error) {
       setErroModal('Não foi possível cadastrar. Detalhe técnico: ' + error.message);
@@ -366,13 +385,42 @@ export default function CreditosDevolucoes() {
       `Pax: ${registro.nome_pax}. Fatura/reserva: ${registro.fatura_reserva || '—'}. Valor: ${dinheiro(valorPrincipal)}.`
     );
 
-    enviarEmailAdmin(registro);
-
     setTipoForm(null);
     setEscolhendoTipo(false);
     setDevEstado(DEV_VAZIO);
-    mostrarAviso('Solicitação cadastrada! O e-mail para o administrador foi aberto — é só enviar.');
+    mostrarAviso('Solicitação cadastrada! Enviando e-mail de notificação…');
     carregarTudo(usuario);
+
+    // Dispara o e-mail automático — não trava a tela esperando, a
+    // solicitação já está salva de qualquer forma.
+    notificarDevolucao(salvo.id);
+  }
+
+  async function reenviarNotificacao(devolucaoId) {
+    setReenviandoId(devolucaoId);
+    await notificarDevolucao(devolucaoId);
+    setReenviandoId(null);
+  }
+
+  async function notificarDevolucao(devolucaoId) {
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/devolucao-notificar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ devolucaoId }),
+      });
+      const resultado = await resposta.json();
+      if (!resposta.ok || resultado.erro) {
+        mostrarAviso(`⚠️ Solicitação salva, mas o e-mail não foi enviado: ${resultado.erro || 'erro desconhecido'}`);
+        return;
+      }
+      if (resultado.semEmailConfigurado) {
+        mostrarAviso('Solicitação salva. (Nenhum e-mail de notificação configurado ainda — veja em ⚙️ Configurações.)');
+      }
+    } catch (e) {
+      mostrarAviso('⚠️ Solicitação salva, mas houve falha de conexão ao enviar o e-mail de notificação.');
+    }
   }
 
   // Abre o e-mail para o administrador com todos os dados (mesmo texto do protótipo)
@@ -563,6 +611,15 @@ export default function CreditosDevolucoes() {
             onClick={() => setSubAba('log')}
           >
             Log de Auditoria
+          </button>
+        )}
+        {souAdmin && (
+          <button
+            type="button"
+            className={subAba === 'config' ? 'cd-aba cd-aba-ativa' : 'cd-aba'}
+            onClick={() => setSubAba('config')}
+          >
+            ⚙️ Configurações
           </button>
         )}
       </nav>
@@ -782,6 +839,12 @@ export default function CreditosDevolucoes() {
                       onClick={() => setModalHistorico({ tipo: 'DEVOLUCAO', item: d })}>
                       Ver histórico
                     </button>
+                    {souAdmin && (
+                      <button type="button" className="botao botao-suave" disabled={reenviandoId === d.id}
+                        onClick={() => reenviarNotificacao(d.id)}>
+                        {reenviandoId === d.id ? 'Enviando…' : '📧 Reenviar e-mail'}
+                      </button>
+                    )}
                     {d.link_comprovante ? (
                       <>
                         <a className="botao botao-contorno" href={d.link_comprovante} target="_blank" rel="noopener noreferrer">
@@ -838,7 +901,26 @@ export default function CreditosDevolucoes() {
         </section>
       )}
 
-      {/* ================= MODAIS ================= */}
+      {/* ================= CONFIGURAÇÕES (admin) ================= */}
+      {subAba === 'config' && souAdmin && (
+        <section>
+          <div className="cartao" style={{ maxWidth: 520 }}>
+            <h2 style={{ fontSize: '1.1rem', marginTop: 0 }}>Notificação por e-mail</h2>
+            <p className="texto-suave" style={{ fontSize: 13 }}>
+              Sempre que uma solicitação de devolução for cadastrada, um e-mail com os detalhes é
+              enviado automaticamente para este endereço.
+            </p>
+            <label className="rotulo">E-mail para receber devoluções</label>
+            <input className="campo" type="email" value={emailNotificacao}
+              onChange={(e) => setEmailNotificacao(e.target.value)} placeholder="financeiro@seuhotel.com.br" />
+            {erroConfig && <div className="aviso-erro">{erroConfig}</div>}
+            <button type="button" className="botao botao-principal" onClick={salvarEmailNotificacao}
+              disabled={salvandoConfig} style={{ marginTop: 12 }}>
+              {salvandoConfig ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Escolher tipo de devolução */}
       {escolhendoTipo && !tipoForm && (
@@ -939,6 +1021,12 @@ export default function CreditosDevolucoes() {
 
             {tipoForm === 'CARTAO' && (
               <>
+                <label className="rotulo">Qual a forma que foi feita o pagamento ao hotel?</label>
+                <select className="campo" value={dev.formaPagamento}
+                  onChange={(e) => setDev('formaPagamento', e.target.value)}>
+                  {FORMAS_PAGAMENTO_HOTEL.map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+
                 <div className="cd-secao">Dados do cartão de crédito</div>
                 <div className="cd-duas">
                   <div>
