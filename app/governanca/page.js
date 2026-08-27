@@ -42,6 +42,30 @@ const STATUS_QUARTO_COR = {
   MANUTENCAO: { fundo: '#EFEFEF', texto: '#666666' },
 };
 
+// Estado interno detalhado — 8 situações operacionais. Separado do
+// STATUS_QUARTO_LABEL acima: aquele controla o fluxo de trabalho da
+// camareira (sujo → em arrumação → limpo); este classifica a SITUAÇÃO do
+// quarto (é uma saída? tem hóspede ainda? tá interditado?) e é o que
+// decide o que mandar pra Cloudbeds quando a arrumação termina.
+const ESTADO_APARTAMENTO_LABEL = {
+  SAIDA_SUJO: 'Saída / Apt Sujo',
+  ARRUMACAO_OCUPADO: 'Arrumação / Apt ocupado',
+  VIROU_ARRUMACAO_OCUPADO: 'Virou arrumação / Apt ocupado',
+  NAO_DESEJA_ARRUMACAO_OCUPADO: 'Não deseja arrumação / Apt ocupado',
+  PREVISAO_SAIDA_OCUPADO: 'Previsão de saída / Apt ocupado',
+  LIMPO: 'Limpo / Apt limpo',
+  SERVICOS_GERAIS: 'Serviços gerais',
+  INTERDITADO: 'Interditado',
+};
+
+// Só "Limpo / Apt limpo" libera o quarto na Cloudbeds (manda "clean").
+// Todos os outros 7 estados mantêm "dirty" lá — mesmo que a camareira já
+// tenha arrumado aqui no nosso sistema — porque ou ainda tem hóspede no
+// quarto (não pode vender), ou o quarto está em manutenção/interditado.
+function condicaoCloudbedsParaEstado(estado) {
+  return estado === 'LIMPO' ? 'clean' : 'dirty';
+}
+
 const CHECKLIST_ITENS = [
   { chave: 'trocaEnxoval', rotulo: 'Troca de enxoval' },
   { chave: 'limpezaApartamento', rotulo: 'Limpeza do apartamento' },
@@ -121,6 +145,7 @@ export default function Governanca() {
   const [editandoQuartoId, setEditandoQuartoId] = useState(null);
   const [qNumero, setQNumero] = useState('');
   const [qCamareira, setQCamareira] = useState('');
+  const [qEstadoApartamento, setQEstadoApartamento] = useState('SAIDA_SUJO');
   const [erroFormQuarto, setErroFormQuarto] = useState('');
   const [excluindoQuartoId, setExcluindoQuartoId] = useState(null);
 
@@ -299,13 +324,23 @@ export default function Governanca() {
       .eq('id', sessaoAtiva.id);
     if (error) { setSalvando(false); setErro('Não foi possível finalizar. Detalhe técnico: ' + error.message); return; }
 
+    // Se era uma saída (checkout), a arrumação terminando já deixa o
+    // quarto pronto pra vender — o estado interno também vira "Limpo". Se
+    // era um quarto ocupado (pernoite), o estado interno continua o mesmo
+    // (o hóspede segue lá) — só marcamos aqui, localmente, que a arrumação
+    // de hoje já foi feita.
+    const eraSaidaSuja = sessaoAtiva.quarto.estado_apartamento === 'SAIDA_SUJO';
+    const novoEstadoApartamento = eraSaidaSuja ? 'LIMPO' : (sessaoAtiva.quarto.estado_apartamento || 'LIMPO');
+    const condicaoCloudbeds = condicaoCloudbedsParaEstado(novoEstadoApartamento);
+
     await supabase.from('quartos')
-      .update({ status: 'LIMPO', ultima_limpeza: fimEm }).eq('id', sessaoAtiva.quarto.id);
+      .update({ status: 'LIMPO', estado_apartamento: novoEstadoApartamento, ultima_limpeza: fimEm })
+      .eq('id', sessaoAtiva.quarto.id);
 
     setSalvando(false);
     const numero = sessaoAtiva.quarto.numero;
-    setQuartos(quartos.map((q) => (q.id === sessaoAtiva.quarto.id ? { ...q, status: 'LIMPO', ultima_limpeza: fimEm } : q)));
-    sincronizarComCloudbeds(sessaoAtiva.quarto, 'clean');
+    setQuartos(quartos.map((q) => (q.id === sessaoAtiva.quarto.id ? { ...q, status: 'LIMPO', estado_apartamento: novoEstadoApartamento, ultima_limpeza: fimEm } : q)));
+    sincronizarComCloudbeds(sessaoAtiva.quarto, condicaoCloudbeds);
 
     setPopupManutencao({ quartoNumero: numero });
     setManutTemProblema(null); setManutDescricao(''); setManutPrioridade('MEDIA'); setErroPopup('');
@@ -383,7 +418,7 @@ export default function Governanca() {
 
   function abrirNovoQuarto() {
     setEditandoQuartoId(null);
-    setQNumero(''); setQCamareira(''); setErroFormQuarto('');
+    setQNumero(''); setQCamareira(''); setQEstadoApartamento('SAIDA_SUJO'); setErroFormQuarto('');
     setMostrarFormNovoQuarto(true);
   }
 
@@ -391,6 +426,7 @@ export default function Governanca() {
     setMostrarFormNovoQuarto(false);
     setEditandoQuartoId(q.id);
     setQNumero(q.numero); setQCamareira(q.camareira_id ? String(q.camareira_id) : '');
+    setQEstadoApartamento(q.estado_apartamento || 'SAIDA_SUJO');
     setErroFormQuarto('');
   }
 
@@ -403,15 +439,24 @@ export default function Governanca() {
     const dados = {
       numero: qNumero.trim(),
       camareira_id: qCamareira ? Number(qCamareira) : null,
+      estado_apartamento: qEstadoApartamento,
     };
 
     setSalvando(true);
     if (editandoQuartoId) {
+      const quartoAntes = quartos.find((q) => q.id === editandoQuartoId);
+      const estadoMudou = quartoAntes && quartoAntes.estado_apartamento !== qEstadoApartamento;
       const { error } = await supabase.from('quartos').update(dados).eq('id', editandoQuartoId);
       setSalvando(false);
       if (error) { setErroFormQuarto('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
       mostrarAviso('Quarto atualizado!');
       setEditandoQuartoId(null);
+      // Mudou a classificação do apartamento (ex.: virou "Interditado" ou
+      // "Não deseja arrumação")? Manda a atualização pra Cloudbeds na
+      // hora, sem esperar a próxima arrumação terminar.
+      if (estadoMudou && quartoAntes.cloudbeds_room_id) {
+        sincronizarComCloudbeds({ ...quartoAntes, ...dados }, condicaoCloudbedsParaEstado(qEstadoApartamento));
+      }
     } else {
       const { error } = await supabase.from('quartos')
         .insert({ ...dados, status: 'SUJO', hotel_id: usuario.hotel_id });
@@ -426,10 +471,11 @@ export default function Governanca() {
   async function marcarSujo(quarto) {
     if (salvando) return;
     setSalvando(true);
-    const { error } = await supabase.from('quartos').update({ status: 'SUJO' }).eq('id', quarto.id);
+    const { error } = await supabase.from('quartos')
+      .update({ status: 'SUJO', estado_apartamento: 'SAIDA_SUJO' }).eq('id', quarto.id);
     setSalvando(false);
     if (error) { setErro('Não foi possível atualizar. Detalhe técnico: ' + error.message); return; }
-    setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, status: 'SUJO' } : q)));
+    setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, status: 'SUJO', estado_apartamento: 'SAIDA_SUJO' } : q)));
     mostrarAviso(`Quarto ${quarto.numero} marcado como sujo (check-out simulado).`);
     sincronizarComCloudbeds(quarto, 'dirty');
   }
@@ -660,7 +706,12 @@ export default function Governanca() {
                   {meusQuartos.map((q) => (
                     <button key={q.id} type="button" className="cartao gv-quarto-botao"
                       onClick={() => iniciarArrumacao(q)} disabled={salvando}>
-                      <span className="gv-quarto-numero">Apartamento {q.numero}</span>
+                      <span className="gv-quarto-numero">
+                        Apartamento {q.numero}
+                        <span className="texto-suave" style={{ display: 'block', fontSize: 12, fontWeight: 400 }}>
+                          {ESTADO_APARTAMENTO_LABEL[q.estado_apartamento] || ESTADO_APARTAMENTO_LABEL.SAIDA_SUJO}
+                        </span>
+                      </span>
                       <span className="gv-quarto-seta">→</span>
                     </button>
                   ))}
@@ -670,7 +721,10 @@ export default function Governanca() {
           ) : (
             <div className="cartao">
               <h2 style={{ fontSize: '1.2rem', marginTop: 0 }}>Apartamento {sessaoAtiva.quarto.numero}</h2>
-              <p className="texto-suave" style={{ fontSize: 13 }}>Marque cada item conforme for concluindo:</p>
+              <p className="texto-suave" style={{ fontSize: 13 }}>
+                {ESTADO_APARTAMENTO_LABEL[sessaoAtiva.quarto.estado_apartamento] || ESTADO_APARTAMENTO_LABEL.SAIDA_SUJO}
+                {' · '}Marque cada item conforme for concluindo:
+              </p>
 
               <div className="gv-checklist">
                 {CHECKLIST_ITENS.map((item) => (
@@ -752,6 +806,10 @@ export default function Governanca() {
                   Nenhum usuário com o perfil "Camareira" cadastrado ainda — crie um em Administração → Usuários.
                 </p>
               )}
+              <label className="rotulo">Estado do Apartamento</label>
+              <select className="campo" value={qEstadoApartamento} onChange={(e) => setQEstadoApartamento(e.target.value)}>
+                {Object.entries(ESTADO_APARTAMENTO_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
+              </select>
               {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
                 <button type="submit" className="botao botao-principal" disabled={salvando}>
@@ -784,6 +842,10 @@ export default function Governanca() {
                           Nenhum usuário com o perfil "Camareira" cadastrado ainda.
                         </p>
                       )}
+                      <label className="rotulo">Estado do Apartamento</label>
+                      <select className="campo" value={qEstadoApartamento} onChange={(e) => setQEstadoApartamento(e.target.value)}>
+                        {Object.entries(ESTADO_APARTAMENTO_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
+                      </select>
                       {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
                         <button type="submit" className="botao botao-principal" disabled={salvando}>
@@ -799,6 +861,9 @@ export default function Governanca() {
                           <strong>Apartamento {q.numero}</strong>
                           <span className="gv-badge" style={{ background: STATUS_QUARTO_COR[q.status].fundo, color: STATUS_QUARTO_COR[q.status].texto }}>
                             {STATUS_QUARTO_LABEL[q.status]}
+                          </span>
+                          <span className="gv-badge" style={{ background: '#EAF0FB', color: '#2C4C7C' }}>
+                            {ESTADO_APARTAMENTO_LABEL[q.estado_apartamento] || ESTADO_APARTAMENTO_LABEL.SAIDA_SUJO}
                           </span>
                         </div>
                         <div className="texto-suave" style={{ fontSize: 13 }}>
