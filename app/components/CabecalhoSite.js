@@ -114,9 +114,14 @@ export default function CabecalhoSite() {
         }
         // Só busca a lista de vínculos se realmente puder ter mais de um —
         // é uma consulta a mais, então evita rodar à toa pra quem só tem 1 hotel.
+        // Filtra explicitamente pelo próprio auth_id — não depende só da
+        // regra do banco pra isso, já que agora outras pessoas do mesmo
+        // hotel também podem aparecer nessa tabela pra outros fins (lista
+        // de destinatários em Solicitações).
         const { data: vinculos } = await supabase
           .from('vinculos_usuario_hotel')
           .select('hotel_id, papel')
+          .eq('auth_id', data.session.user.id)
           .eq('ativo', true);
 
         if (vinculos && vinculos.length > 0) {
