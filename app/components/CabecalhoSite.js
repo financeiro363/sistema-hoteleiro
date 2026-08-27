@@ -116,9 +116,20 @@ export default function CabecalhoSite() {
         // é uma consulta a mais, então evita rodar à toa pra quem só tem 1 hotel.
         const { data: vinculos } = await supabase
           .from('vinculos_usuario_hotel')
-          .select('hotel_id, papel, hoteis(nome_fantasia)')
+          .select('hotel_id, papel')
           .eq('ativo', true);
-        if (ativo) setMeusHoteis((vinculos || []).map((v) => ({ hotel_id: v.hotel_id, papel: v.papel, nome: v.hoteis?.nome_fantasia || `Hotel #${v.hotel_id}` })));
+
+        if (vinculos && vinculos.length > 0) {
+          const idsHoteis = vinculos.map((v) => v.hotel_id);
+          const { data: hoteisEncontrados } = await supabase
+            .from('hoteis').select('id, nome_fantasia').in('id', idsHoteis);
+          const mapaNomeHotel = Object.fromEntries((hoteisEncontrados || []).map((h) => [h.id, h.nome_fantasia]));
+          if (ativo) setMeusHoteis(vinculos.map((v) => ({
+            hotel_id: v.hotel_id, papel: v.papel, nome: mapaNomeHotel[v.hotel_id] || `Hotel #${v.hotel_id}`,
+          })));
+        } else if (ativo) {
+          setMeusHoteis([]);
+        }
       }
     }
     carregarSessao();
