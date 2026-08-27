@@ -87,6 +87,9 @@ export default function CabecalhoSite() {
   const [meusHoteis, setMeusHoteis] = useState([]); // [{hotel_id, papel, nome}]
   const [hotelIdAtual, setHotelIdAtual] = useState(null);
   const [trocandoHotel, setTrocandoHotel] = useState(false);
+  const [usuarioIdAtual, setUsuarioIdAtual] = useState(null);
+  const [contadorSolicitacoes, setContadorSolicitacoes] = useState(0);
+  const [contadorFichasPendentes, setContadorFichasPendentes] = useState(0);
 
   // Observa o login: mostra "Entrar" ou "Sair" conforme a sessão
   useEffect(() => {
@@ -99,9 +102,10 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('nome, papel, super_admin, pode_incluir_atestado, pode_acessar_depositos, hotel_id')
+          .select('id, nome, papel, super_admin, pode_incluir_atestado, pode_acessar_depositos, hotel_id')
           .eq('auth_id', data.session.user.id)
           .single();
+        if (ativo) setUsuarioIdAtual(perfil?.id || null);
         if (ativo && perfil?.nome) setNomeUsuario(perfil.nome.split(' ')[0]);
         if (ativo) setPapelUsuario(perfil?.papel || '');
         if (ativo) setSouSuperAdmin(perfil?.super_admin === true);
@@ -135,13 +139,23 @@ export default function CabecalhoSite() {
         } else if (ativo) {
           setMeusHoteis([]);
         }
+
+        // Contadores só fazem sentido pra quem realmente vê essas duas
+        // páginas no menu (Admin/Colaborador) — evita gastar consulta à toa
+        // pros papéis restritos ou pro Contador, que nem veem esses links.
+        if (perfil?.id && (perfil.papel === 'ADMIN' || perfil.papel === 'COLABORADOR')) {
+          atualizarContadores(perfil.id, perfil.hotel_id, perfil.papel);
+        } else if (ativo) {
+          setContadorSolicitacoes(0);
+          setContadorFichasPendentes(0);
+        }
       }
     }
     carregarSessao();
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); setContadorSolicitacoes(0); setContadorFichasPendentes(0); }
       else carregarSessao();
     });
 
@@ -176,10 +190,59 @@ export default function CabecalhoSite() {
     }
   }
 
-  // Fecha o menu hambúrguer e o dropdown de categoria sempre que muda de página
+  // Solicitações pendentes destinadas a mim + fichas aguardando exportação
+  // (contagem do hotel inteiro, não só minha) — reutilizada na carga
+  // inicial, no polling periódico e sempre que a pessoa navega de página.
+  async function atualizarContadores(usuarioId, hotelId, papel) {
+    if (!usuarioId || !hotelId || (papel !== 'ADMIN' && papel !== 'COLABORADOR')) {
+      setContadorSolicitacoes(0);
+      setContadorFichasPendentes(0);
+      return;
+    }
+    const { count } = await supabase
+      .from('tarefas')
+      .select('id', { count: 'exact', head: true })
+      .eq('responsavel_atual_id', usuarioId)
+      .eq('hotel_id', hotelId)
+      .neq('status', 'Concluído')
+      .neq('status', 'Cancelado');
+    setContadorSolicitacoes(count || 0);
+
+    try {
+      const { data: sessaoAtual } = await supabase.auth.getSession();
+      if (!sessaoAtual?.session) return;
+      const resposta = await fetch('/api/fichas-listar', {
+        headers: { Authorization: `Bearer ${sessaoAtual.session.access_token}` },
+      });
+      const resultado = await resposta.json();
+      const pendentes = (resultado.fichas || []).filter((f) => f.status === 'PENDENTE').length;
+      setContadorFichasPendentes(pendentes);
+    } catch (e) {
+      setContadorFichasPendentes(0);
+    }
+  }
+
+  // Atualiza os contadores periodicamente (a cada 60s) — como o menu não
+  // sabe quando algo muda em outra tela, é o jeito mais simples de manter
+  // os números razoavelmente em dia sem precisar mexer em cada página.
+  useEffect(() => {
+    if (!usuarioIdAtual || !hotelIdAtual) return;
+    const id = setInterval(() => {
+      atualizarContadores(usuarioIdAtual, hotelIdAtual, papelUsuario);
+    }, 60000);
+    return () => clearInterval(id);
+  }, [usuarioIdAtual, hotelIdAtual, papelUsuario]);
+
+  // Fecha o menu hambúrguer e o dropdown de categoria sempre que muda de
+  // página — e aproveita pra atualizar os contadores também, já que trocar
+  // de página é o momento mais comum de algo ter mudado (ex.: acabou de
+  // resolver uma solicitação).
   useEffect(() => {
     setMenuAberto(false);
     setCategoriaAberta(null);
+    if (usuarioIdAtual && hotelIdAtual) {
+      atualizarContadores(usuarioIdAtual, hotelIdAtual, papelUsuario);
+    }
   }, [caminhoAtual]);
 
   // Fecha o dropdown de categoria se a pessoa clicar fora dele
@@ -287,11 +350,16 @@ export default function CabecalhoSite() {
                     </button>
                     {categoriaAberta === categoria.chave && (
                       <div className="menu-dropdown">
-                        {linksVisiveis.map((link) => (
-                          <Link key={link.href} href={link.href} className={caminhoAtual === link.href ? 'ativa' : ''}>
-                            {link.rotulo}
-                          </Link>
-                        ))}
+                        {linksVisiveis.map((link) => {
+                          const contador = link.href === '/solicitacoes' ? contadorSolicitacoes
+                            : link.href === '/fichas-hospedes' ? contadorFichasPendentes : 0;
+                          return (
+                            <Link key={link.href} href={link.href} className={caminhoAtual === link.href ? 'ativa' : ''}>
+                              {link.rotulo}
+                              {contador > 0 && <span className="cabecalho-badge">{contador > 99 ? '99+' : contador}</span>}
+                            </Link>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
