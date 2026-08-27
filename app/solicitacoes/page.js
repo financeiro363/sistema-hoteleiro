@@ -175,17 +175,35 @@ export default function PaginaSolicitacoes() {
       if (!ativo) return;
       setUsuario(perfil);
 
-      // 3) Busca os colegas do mesmo hotel (para escolher destinatários)
-      //    Filtra hotel_id explicitamente aqui — o banco pode permitir ver
-      //    mais gente (ex.: quem tem o "chapéu" de administrador geral),
-      //    mas essa lista específica é só para escolher gente do PRÓPRIO
-      //    hotel, mesmo que a pessoa logada também administre outros.
-      const { data: listaColegas } = await supabase
-        .from('usuarios')
-        .select('id, nome, email, papel')
+      // 3) Busca quem pode ser destinatário: Admin/Colaborador com vínculo
+      // ATIVO neste hotel — usa a tabela de vínculos (não só o hotel_id
+      // atual da pessoa), porque quem trabalha em mais de um hotel pode
+      // estar "com o chapéu" de outro hotel agora mesmo. Depois, confirma
+      // que a conta como um todo também está ativa (não foi desativada
+      // pelo admin).
+      const { data: vinculos } = await supabase
+        .from('vinculos_usuario_hotel')
+        .select('auth_id, papel')
         .eq('hotel_id', perfil.hotel_id)
-        .order('nome', { ascending: true });
-      if (ativo) setColegas(listaColegas || []);
+        .eq('ativo', true)
+        .in('papel', ['ADMIN', 'COLABORADOR']);
+
+      const authIdsPermitidos = (vinculos || []).map((v) => v.auth_id);
+      const mapaPapelNesteHotel = Object.fromEntries((vinculos || []).map((v) => [v.auth_id, v.papel]));
+
+      let listaColegas = [];
+      if (authIdsPermitidos.length > 0) {
+        const { data: pessoas } = await supabase
+          .from('usuarios')
+          .select('id, nome, email, papel, auth_id, ativo')
+          .in('auth_id', authIdsPermitidos)
+          .eq('ativo', true)
+          .order('nome', { ascending: true });
+        // O papel exibido é o papel DESTE hotel (vindo do vínculo), não o
+        // papel atual dela em outro hotel que ela possa estar "vestindo" agora.
+        listaColegas = (pessoas || []).map((p) => ({ ...p, papel: mapaPapelNesteHotel[p.auth_id] || p.papel }));
+      }
+      if (ativo) setColegas(listaColegas);
 
       // 4) Carrega as tarefas
       await carregarTarefas();
