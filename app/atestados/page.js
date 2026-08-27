@@ -176,27 +176,43 @@ function VisaoAdmin({ usuario, nomeHotel }) {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
   const [aviso, setAviso] = useState('');
+  const [emailNotificacao, setEmailNotificacao] = useState('');
+  const [salvandoConfig, setSalvandoConfig] = useState(false);
+  const [erroConfig, setErroConfig] = useState('');
 
   function mostrarAviso(texto) { setAviso(texto); setTimeout(() => setAviso(''), 5000); }
 
   const carregarTudo = useCallback(async (mostrarCarregando = true) => {
     if (mostrarCarregando) setCarregando(true);
     setErro('');
-    const [a, f, u, l] = await Promise.all([
+    const [a, f, u, l, h] = await Promise.all([
       supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
       supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id),
       supabase.from('atestados_log').select('*').order('data_hora', { ascending: false }).limit(300),
+      supabase.from('hoteis').select('email_notificacao_atestados').eq('id', usuario.hotel_id).maybeSingle(),
     ]);
     if (a.error) setErro('Não foi possível carregar. Detalhe técnico: ' + a.error.message);
     setAtestados(a.data || []);
     setFuncionarios(f.data || []);
     setUsuarios(u.data || []);
     setLogs(l.data || []);
+    setEmailNotificacao(h.data?.email_notificacao_atestados || '');
     if (mostrarCarregando) setCarregando(false);
   }, [usuario]);
 
   useEffect(() => { carregarTudo(true); }, [carregarTudo]);
+
+  async function salvarEmailNotificacao() {
+    if (salvandoConfig) return;
+    setErroConfig('');
+    setSalvandoConfig(true);
+    const { error } = await supabase.from('hoteis')
+      .update({ email_notificacao_atestados: emailNotificacao.trim() || null }).eq('id', usuario.hotel_id);
+    setSalvandoConfig(false);
+    if (error) { setErroConfig('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso('E-mail de notificação salvo!');
+  }
 
   // Usado depois de salvar/editar algo: atualiza os dados por baixo dos
   // panos, SEM mostrar "Carregando…" — isso evita que a tela pisque e
@@ -215,6 +231,7 @@ function VisaoAdmin({ usuario, nomeHotel }) {
         <button type="button" className={subAba === 'novo' ? 'at-aba at-aba-ativa' : 'at-aba'} onClick={() => setSubAba('novo')}>+ Novo Atestado</button>
         <button type="button" className={subAba === 'listagem' ? 'at-aba at-aba-ativa' : 'at-aba'} onClick={() => setSubAba('listagem')}>Listagem</button>
         <button type="button" className={subAba === 'log' ? 'at-aba at-aba-ativa' : 'at-aba'} onClick={() => setSubAba('log')}>Log de Auditoria</button>
+        <button type="button" className={subAba === 'config' ? 'at-aba at-aba-ativa' : 'at-aba'} onClick={() => setSubAba('config')}>⚙️ Configurações</button>
       </nav>
 
       {carregando ? <p className="texto-suave">Carregando…</p> : (
@@ -228,6 +245,25 @@ function VisaoAdmin({ usuario, nomeHotel }) {
               nomeUsuario={nomeUsuario} mostrarAviso={mostrarAviso} setErro={setErro} recarregar={recarregarEmSilencio} souAdmin />
           )}
           {subAba === 'log' && <LogAuditoria logs={logs} nomeUsuario={nomeUsuario} />}
+          {subAba === 'config' && (
+            <section>
+              <div className="cartao" style={{ maxWidth: 520 }}>
+                <h2 style={{ fontSize: '1.1rem', marginTop: 0 }}>Notificação por e-mail</h2>
+                <p className="texto-suave" style={{ fontSize: 13 }}>
+                  Sempre que um novo atestado for cadastrado, um e-mail com os dados básicos é
+                  enviado automaticamente para este endereço.
+                </p>
+                <label className="rotulo">E-mail para receber avisos de atestados</label>
+                <input className="campo" type="email" value={emailNotificacao}
+                  onChange={(e) => setEmailNotificacao(e.target.value)} placeholder="rh@seuhotel.com.br" />
+                {erroConfig && <div className="aviso-erro">{erroConfig}</div>}
+                <button type="button" className="botao botao-principal" onClick={salvarEmailNotificacao}
+                  disabled={salvandoConfig} style={{ marginTop: 12 }}>
+                  {salvandoConfig ? 'Salvando…' : 'Salvar'}
+                </button>
+              </div>
+            </section>
+          )}
         </>
       )}
     </>
@@ -391,6 +427,19 @@ function FormularioNovoAtestado({ usuario, nomeHotel, atestadosExistentes, funci
     setReciboAberto({ ...salvo, _fotoPreview: fotoPreview, _nomeColaborador: nomeColaborador });
     if (mostrarAviso) mostrarAviso(`Atestado ${salvo.protocolo} registrado!`);
     if (recarregar) recarregar();
+
+    // Dispara o e-mail de notificação — também isolado, não trava nem
+    // atrasa o recibo aparecendo na tela.
+    (async () => {
+      const { data: sessao } = await supabase.auth.getSession();
+      try {
+        await fetch('/api/atestado-notificar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+          body: JSON.stringify({ atestadoId: salvo.id }),
+        });
+      } catch (e) { /* melhor esforço — o atestado já foi registrado de qualquer forma */ }
+    })();
 
     // Limpa o formulário (guarda o valor da foto antes de limpar, para não
     // afetar o recibo que já está com sua própria cópia)
