@@ -3,3 +3,16 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+# Cabeçalhos de segurança configurados aqui também (além do next.config.js)
+# porque o adaptador da Netlify pro Next.js já teve bugs conhecidos
+# ignorando o headers() do next.config.js em produção — configurar direto
+# aqui, no mecanismo nativo da própria Netlify, garante que funcione mesmo
+# que isso aconteça de novo.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://viacep.com.br; worker-src 'self' blob: https://cdnjs.cloudflare.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(self), microphone=(), geolocation=(), interest-cohort=()"
