@@ -210,6 +210,17 @@ export default function ControleUsuarios() {
     carregarTudo(usuario);
   }
 
+  async function alternarPermissaoTarefasDoDia(pessoa) {
+    setSalvandoId(pessoa.id);
+    const { error } = await supabase.from('usuarios').update({ pode_ver_tarefas_do_dia: !pessoa.pode_ver_tarefas_do_dia }).eq('id', pessoa.id);
+    setSalvandoId(null);
+    if (error) { setErro('Não foi possível atualizar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso(pessoa.pode_ver_tarefas_do_dia
+      ? `${pessoa.nome} não vê mais as tarefas agendadas para o dia.`
+      : `${pessoa.nome} agora pode visualizar as tarefas agendadas para o dia.`);
+    carregarTudo(usuario);
+  }
+
   const termo = busca.trim().toLowerCase();
   const filtrados = usuarios.filter((u) =>
     !termo || u.nome.toLowerCase().includes(termo) || (u.email || '').toLowerCase().includes(termo)
@@ -322,6 +333,13 @@ export default function ControleUsuarios() {
                       <input type="checkbox" checked={!!u.pode_acessar_depositos} disabled={salvandoId === u.id}
                         onChange={() => alternarPermissaoDepositos(u)} />
                       Pode acessar a página de Depósitos Bancários
+                    </label>
+                  )}
+                  {u.papel === 'COLABORADOR' && (
+                    <label className="us-checkbox-atestado" title="Permitir visualizar tarefas agendadas para o dia">
+                      <input type="checkbox" checked={!!u.pode_ver_tarefas_do_dia} disabled={salvandoId === u.id}
+                        onChange={() => alternarPermissaoTarefasDoDia(u)} />
+                      Permitir visualizar tarefas agendadas para o dia
                     </label>
                   )}
                   {souEu ? (
