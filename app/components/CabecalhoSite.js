@@ -32,6 +32,7 @@ const CATEGORIAS_MENU = [
     nome: 'Operações',
     links: [
       { href: '/depositos', rotulo: 'Depósitos Bancários' },
+      { href: '/planejador-arrumacao', rotulo: 'Gerenciador de Tarefas' },
       { href: '/sala-reuniao', rotulo: 'Sala de Reunião' },
       { href: '/lavanderia', rotulo: 'Lavanderia' },
       { href: '/ocorrencias', rotulo: 'Ocorrências' },
@@ -55,11 +56,12 @@ const CATEGORIAS_MENU = [
 ];
 
 // Decide se um link específico pode aparecer para o papel atual
-function linkVisivelPara(link, papelUsuario, podeAcessarDepositos) {
+function linkVisivelPara(link, papelUsuario, podeAcessarDepositos, podeVerTarefasDoDia) {
   if (papelUsuario === 'CONTADOR') return !!link.contadorVe;
   if (link.soAdmin) return papelUsuario === 'ADMIN';
   if (link.soAdminOuContador) return papelUsuario === 'ADMIN';
   if (link.href === '/depositos' && papelUsuario === 'COLABORADOR') return !!podeAcessarDepositos;
+  if (link.href === '/planejador-arrumacao' && papelUsuario === 'COLABORADOR') return !!podeVerTarefasDoDia;
   return true;
 }
 
@@ -84,6 +86,7 @@ export default function CabecalhoSite() {
   const [souSuperAdmin, setSouSuperAdmin] = useState(false);
   const [podeIncluirAtestado, setPodeIncluirAtestado] = useState(false);
   const [podeAcessarDepositos, setPodeAcessarDepositos] = useState(false);
+  const [podeVerTarefasDoDia, setPodeVerTarefasDoDia] = useState(false);
   const [meusHoteis, setMeusHoteis] = useState([]); // [{hotel_id, papel, nome}]
   const [hotelIdAtual, setHotelIdAtual] = useState(null);
   const [trocandoHotel, setTrocandoHotel] = useState(false);
@@ -102,7 +105,7 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('id, nome, papel, super_admin, pode_incluir_atestado, pode_acessar_depositos, hotel_id')
+          .select('id, nome, papel, super_admin, pode_incluir_atestado, pode_acessar_depositos, pode_ver_tarefas_do_dia, hotel_id')
           .eq('auth_id', data.session.user.id)
           .single();
         if (ativo) setUsuarioIdAtual(perfil?.id || null);
@@ -111,6 +114,7 @@ export default function CabecalhoSite() {
         if (ativo) setSouSuperAdmin(perfil?.super_admin === true);
         if (ativo) setPodeIncluirAtestado(perfil?.pode_incluir_atestado === true);
         if (ativo) setPodeAcessarDepositos(perfil?.pode_acessar_depositos === true);
+        if (ativo) setPodeVerTarefasDoDia(perfil?.pode_ver_tarefas_do_dia === true);
         if (ativo) setHotelIdAtual(perfil?.hotel_id || null);
         if (perfil?.hotel_id) {
           const { data: hotel } = await supabase.from('hoteis').select('nome_fantasia').eq('id', perfil.hotel_id).single();
@@ -155,7 +159,7 @@ export default function CabecalhoSite() {
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); setContadorSolicitacoes(0); setContadorFichasPendentes(0); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setPodeVerTarefasDoDia(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); setContadorSolicitacoes(0); setContadorFichasPendentes(0); }
       else carregarSessao();
     });
 
@@ -334,7 +338,7 @@ export default function CabecalhoSite() {
           ) : (
             <>
               {CATEGORIAS_MENU.map((categoria) => {
-                const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario, podeAcessarDepositos));
+                const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario, podeAcessarDepositos, podeVerTarefasDoDia));
                 if (linksVisiveis.length === 0) return null; // esconde a categoria inteira se ninguém dentro dela é visível
                 const temPaginaAtiva = linksVisiveis.some((link) => link.href === caminhoAtual);
                 return (
