@@ -207,6 +207,17 @@ export default function FechamentoCaixa() {
             <div className="fc-linha-assinatura">Assinatura de quem está passando o caixa</div>
             <div className="fc-linha-assinatura">Assinatura de quem está recebendo o caixa</div>
           </div>
+
+          {resultado._diagnostico && (
+            <details className="fc-somente-tela" style={{ marginTop: 20 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                🧪 Diagnóstico temporário (nome/apartamento) — clique pra ver
+              </summary>
+              <pre style={{ fontSize: 11, overflowX: 'auto', background: '#F7F8F6', padding: 10, borderRadius: 8 }}>
+                {JSON.stringify(resultado._diagnostico, null, 2)}
+              </pre>
+            </details>
+          )}
         </div>
       )}
     </main>
@@ -235,6 +246,7 @@ function EstilosFechamento() {
       @media print {
         .fc-somente-tela { display: none !important; }
         .fc-somente-impressao { display: block !important; }
+        .fc-assinatura.fc-somente-impressao { display: flex !important; }
         .fc-cabecalho-impressao { display: block !important; margin-bottom: 14px; }
         nav, header, .cabecalho, .menu-principal { display: none !important; }
         .fc-conteudo { max-width: 100% !important; }
