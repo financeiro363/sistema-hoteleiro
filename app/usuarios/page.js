@@ -221,6 +221,17 @@ export default function ControleUsuarios() {
     carregarTudo(usuario);
   }
 
+  async function alternarPermissaoFechamentoCaixa(pessoa) {
+    setSalvandoId(pessoa.id);
+    const { error } = await supabase.from('usuarios').update({ pode_acessar_fechamento_caixa: !pessoa.pode_acessar_fechamento_caixa }).eq('id', pessoa.id);
+    setSalvandoId(null);
+    if (error) { setErro('Não foi possível atualizar. Detalhe técnico: ' + error.message); return; }
+    mostrarAviso(pessoa.pode_acessar_fechamento_caixa
+      ? `${pessoa.nome} não pode mais acessar o Fechamento de Caixa.`
+      : `${pessoa.nome} agora pode acessar o Fechamento de Caixa.`);
+    carregarTudo(usuario);
+  }
+
   const termo = busca.trim().toLowerCase();
   const filtrados = usuarios.filter((u) =>
     !termo || u.nome.toLowerCase().includes(termo) || (u.email || '').toLowerCase().includes(termo)
@@ -340,6 +351,13 @@ export default function ControleUsuarios() {
                       <input type="checkbox" checked={!!u.pode_ver_tarefas_do_dia} disabled={salvandoId === u.id}
                         onChange={() => alternarPermissaoTarefasDoDia(u)} />
                       Permitir visualizar tarefas agendadas para o dia
+                    </label>
+                  )}
+                  {u.papel === 'COLABORADOR' && (
+                    <label className="us-checkbox-atestado">
+                      <input type="checkbox" checked={!!u.pode_acessar_fechamento_caixa} disabled={salvandoId === u.id}
+                        onChange={() => alternarPermissaoFechamentoCaixa(u)} />
+                      Pode acessar a página de Fechamento de Caixa
                     </label>
                   )}
                   {souEu ? (
