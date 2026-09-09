@@ -478,7 +478,7 @@ function montarHtmlFicha(f, nomeHotel) {
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; font-size: 12px; line-height: 1.4; margin: 0; padding: 0; }
   h1.hotel { font-size: 18px; text-align: center; margin: 0 0 18px; }
-  .assinatura { margin-bottom: 18px; }
+  .assinatura { margin-top: 24px; }
   .linha-assinatura { display: flex; align-items: flex-end; gap: 10px; }
   .linha { flex: 1; border-bottom: 1px solid #333; height: 1px; }
   .data-linha { white-space: nowrap; font-size: 12px; }
@@ -493,17 +493,6 @@ function montarHtmlFicha(f, nomeHotel) {
 </head>
 <body>
   <h1 class="hotel">${escapar(nomeHotel)}</h1>
-
-  <div class="assinatura">
-    <div class="linha-assinatura">
-      <span class="linha"></span>
-      <span class="data-linha">____/____/_____</span>
-    </div>
-    <div class="legenda-assinatura">
-      <span>Assinatura (De acordo com o documento)</span>
-      <span>Data</span>
-    </div>
-  </div>
 
   <div class="campos">
     <div class="campo"><label>Nome</label><div class="valor">${escapar(f.nome_completo)}</div></div>
@@ -546,6 +535,17 @@ function montarHtmlFicha(f, nomeHotel) {
   <div class="secao">
     <h3>5. HOSPEDAGEM DE MENORES DE IDADE</h3>
     <p>Exige-se documento original e, se desacompanhado, autorização dos pais com firma reconhecida (Art. 82 do ECA).</p>
+  </div>
+
+  <div class="assinatura">
+    <div class="linha-assinatura">
+      <span class="linha"></span>
+      <span class="data-linha">____/____/_____</span>
+    </div>
+    <div class="legenda-assinatura">
+      <span>Assinatura (De acordo com o documento)</span>
+      <span>Data</span>
+    </div>
   </div>
 </body>
 </html>`;
