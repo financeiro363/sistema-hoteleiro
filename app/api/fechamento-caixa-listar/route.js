@@ -120,22 +120,25 @@ export async function GET(request) {
 
     // ---- 2) Busca os nomes dos usuários (1 chamada só, pra todo mundo) ----
     const mapaNomeUsuario = {};
+    let diagnosticoUsuarios = null;
     try {
       const respostaUsuarios = await fetch(`https://api.cloudbeds.com/api/v1.2/getUsers?propertyID=${propertyId}`, {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
       const dadosUsuarios = await respostaUsuarios.json().catch(() => null);
+      diagnosticoUsuarios = { status: respostaUsuarios.status, ok: respostaUsuarios.ok, corpo: dadosUsuarios };
       if (respostaUsuarios.ok && Array.isArray(dadosUsuarios?.data)) {
         dadosUsuarios.data.forEach((u) => {
           mapaNomeUsuario[String(u.userID)] = [u.userFirstName, u.userLastName].filter(Boolean).join(' ') || u.userEmail || `Usuário #${u.userID}`;
         });
       }
-    } catch (e) { /* segue sem nome, mostra o ID */ }
+    } catch (e) { diagnosticoUsuarios = { erroCapturado: e.message }; }
 
     // ---- 3) Busca o número do apartamento de cada reserva envolvida ----
     // (uma chamada por reserva ÚNICA, não por lançamento, pra não repetir à toa)
     const idsReservaUnicos = [...new Set(transacoes.map((t) => t.sourceIdentifier).filter(Boolean))];
     const mapaApartamentoPorReserva = {};
+    let diagnosticoReserva = null;
     for (const idReserva of idsReservaUnicos) {
       try {
         const respostaReserva = await fetch(
@@ -143,6 +146,9 @@ export async function GET(request) {
           { headers: { Authorization: `Bearer ${apiKey}` } }
         );
         const dadosReserva = await respostaReserva.json().catch(() => null);
+        if (!diagnosticoReserva) {
+          diagnosticoReserva = { idReservaTestado: idReserva, status: respostaReserva.status, ok: respostaReserva.ok, corpo: dadosReserva };
+        }
         if (respostaReserva.ok && dadosReserva?.data) {
           const quartos = (dadosReserva.data.rooms || [])
             .map((r) => r.roomName)
@@ -151,6 +157,7 @@ export async function GET(request) {
         }
       } catch (e) {
         mapaApartamentoPorReserva[idReserva] = '—';
+        if (!diagnosticoReserva) diagnosticoReserva = { idReservaTestado: idReserva, erroCapturado: e.message };
       }
     }
 
@@ -185,6 +192,7 @@ export async function GET(request) {
       totaisPorForma,
       totalGeral: Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0),
       totalEstornos: estornos.reduce((soma, l) => soma + l.valor, 0),
+      _diagnostico: { diagnosticoUsuarios, diagnosticoReserva },
     });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
