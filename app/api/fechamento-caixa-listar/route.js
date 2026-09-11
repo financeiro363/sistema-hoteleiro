@@ -13,13 +13,22 @@ import { descriptografar } from '../../../lib/cloudbedsCrypto';
 // 9100=Dinheiro, 9200=Transferência Bancária, 9300=Cartão (processado por
 // gateway), 9000=Pagamento genérico (é o que a maioria dos métodos
 // configurados manualmente usa, incluindo os vários tipos de cartão e
-// Pix). Sufixo "A"=estorno, "V"=pagamento anulado.
-const CODIGOS_PAGAMENTO_E_ESTORNO = [
-  '9000', '9000A', '9000V',
-  '9100', '9100A', '9100V',
-  '9200', '9200A', '9200V',
-  '9300', '9300A', '9300V',
-];
+// Pix). 2000=Item consumido (diária, água, lavanderia, etc.).
+const CODIGOS_BASE_PAGAMENTO = ['9000', '9100', '9200', '9300'];
+
+// Sufixo "A" = estorno (dinheiro devolvido/abatido), "V" = lançamento
+// anulado. Isso vale tanto pra pagamento quanto pra item consumido — por
+// isso a classificação é pelo SUFIXO, não por uma lista fixa de códigos:
+// assim, um estorno de diária ou de um item do frigobar entra no relatório
+// do mesmo jeito que um estorno de pagamento, sem eu precisar saber o
+// código exato de cada tipo de item.
+function classificarTransacao(codigo) {
+  const ehCodigoPagamento = CODIGOS_BASE_PAGAMENTO.some((base) => codigo.startsWith(base));
+  if (codigo.endsWith('A')) return ehCodigoPagamento ? 'ESTORNO_PAGAMENTO' : 'ESTORNO_ITEM';
+  if (codigo.endsWith('V')) return ehCodigoPagamento ? 'PAGAMENTO_ANULADO' : 'ITEM_ANULADO';
+  if (ehCodigoPagamento) return 'PAGAMENTO';
+  return 'CONSUMO_NORMAL'; // item comprado sem cancelamento — não interessa pro caixa
+}
 
 function hojeISO() {
   const d = new Date();
@@ -41,8 +50,6 @@ function extrairFormaPagamento(descricao) {
   return (partes[0] || descricao).trim();
 }
 
-function ehEstorno(codigo) { return codigo.endsWith('A'); }
-function ehAnulado(codigo) { return codigo.endsWith('V'); }
 
 export async function GET(request) {
   try {
@@ -116,7 +123,7 @@ export async function GET(request) {
     }
 
     const todasTransacoes = dadosCloudbeds?.transactions || [];
-    const transacoes = todasTransacoes.filter((t) => CODIGOS_PAGAMENTO_E_ESTORNO.includes(t.internalTransactionCode));
+    const transacoes = todasTransacoes.filter((t) => classificarTransacao(t.internalTransactionCode) !== 'CONSUMO_NORMAL');
 
     // ---- 2) Busca os nomes dos usuários (1 chamada só, pra todo mundo) ----
     const mapaNomeUsuario = {};
@@ -155,25 +162,43 @@ export async function GET(request) {
     }
 
     // ---- 4) Monta a lista final, já enriquecida ----
-    const lancamentos = transacoes.map((t) => ({
-      id: t.id,
-      formaPagamento: extrairFormaPagamento(t.description),
-      valor: Math.abs(t.amount),
-      horario: (t.transactionDatetimePropertyTime || t.transactionDatetime || '').slice(11, 16),
-      apartamento: mapaApartamentoPorReserva[t.sourceIdentifier] || '—',
-      usuario: mapaNomeUsuario[t.userId] || `Usuário #${t.userId}`,
-      tipo: ehEstorno(t.internalTransactionCode) ? 'ESTORNO' : ehAnulado(t.internalTransactionCode) ? 'ANULADO' : 'PAGAMENTO',
-      descricaoOriginal: t.description,
-    }));
+    const lancamentos = transacoes.map((t) => {
+      const classificacao = classificarTransacao(t.internalTransactionCode);
+      return {
+        id: t.id,
+        formaPagamento: extrairFormaPagamento(t.description),
+        valor: Math.abs(t.amount),
+        horario: (t.transactionDatetimePropertyTime || t.transactionDatetime || '').slice(11, 16),
+        apartamento: mapaApartamentoPorReserva[t.sourceIdentifier] || '—',
+        usuario: mapaNomeUsuario[t.userId] || `Usuário #${t.userId}`,
+        classificacao,
+        // "ANULADO" cobre tanto pagamento anulado quanto item anulado —
+        // aparece riscado na lista de pagamentos, do mesmo jeito nos dois casos.
+        tipo: classificacao === 'ESTORNO_PAGAMENTO' || classificacao === 'ESTORNO_ITEM' ? 'ESTORNO'
+          : classificacao === 'PAGAMENTO_ANULADO' || classificacao === 'ITEM_ANULADO' ? 'ANULADO'
+          : 'PAGAMENTO',
+        descricaoOriginal: t.description,
+      };
+    });
 
-    const pagamentos = lancamentos.filter((l) => l.tipo === 'PAGAMENTO' || l.tipo === 'ANULADO');
-    const estornos = lancamentos.filter((l) => l.tipo === 'ESTORNO');
+    // Só entram na lista de "Pagamentos" os lançamentos que são de fato
+    // pagamento (dinheiro/cartão/pix) — os itens consumidos (diária, água,
+    // etc.) não aparecem aqui, só quando cancelados (ver estornos abaixo).
+    const pagamentos = lancamentos.filter((l) =>
+      l.classificacao === 'PAGAMENTO' || l.classificacao === 'PAGAMENTO_ANULADO'
+    );
+    // Estornos e abatimentos juntam os dois tipos: devolução de pagamento
+    // E cancelamento de item consumido (diária, água, lavanderia, etc.).
+    const estornos = lancamentos.filter((l) =>
+      l.classificacao === 'ESTORNO_PAGAMENTO' || l.classificacao === 'ESTORNO_ITEM'
+      || l.classificacao === 'ITEM_ANULADO'
+    );
 
     // Totais por forma de pagamento (pagamentos anulados entram com o
-    // valor negativo, pra cancelar certinho o lançamento original)
+    // valor negativo, pra cancelar certinho o lançamento original) — só
+    // considera a lista de PAGAMENTOS, os itens cancelados não entram aqui.
     const totaisPorForma = {};
-    lancamentos.forEach((l) => {
-      if (l.tipo === 'ESTORNO') return;
+    pagamentos.forEach((l) => {
       const sinal = l.tipo === 'ANULADO' ? -1 : 1;
       totaisPorForma[l.formaPagamento] = (totaisPorForma[l.formaPagamento] || 0) + sinal * l.valor;
     });
