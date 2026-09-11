@@ -207,6 +207,22 @@ export default function FechamentoCaixa() {
             <div className="fc-linha-assinatura">Assinatura de quem está passando o caixa</div>
             <div className="fc-linha-assinatura">Assinatura de quem está recebendo o caixa</div>
           </div>
+
+          {(resultado._diagnosticoCodigosOficiais || resultado._codigosVistosHoje) && (
+            <details className="fc-somente-tela" style={{ marginTop: 20 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                🧪 Diagnóstico temporário (códigos de transação) — clique pra ver
+              </summary>
+              <p style={{ fontWeight: 600, marginTop: 10 }}>Códigos vistos hoje:</p>
+              <pre style={{ fontSize: 11, overflowX: 'auto', background: '#F7F8F6', padding: 10, borderRadius: 8 }}>
+                {JSON.stringify(resultado._codigosVistosHoje, null, 2)}
+              </pre>
+              <p style={{ fontWeight: 600, marginTop: 10 }}>Lista oficial completa da Cloudbeds:</p>
+              <pre style={{ fontSize: 11, overflowX: 'auto', background: '#F7F8F6', padding: 10, borderRadius: 8 }}>
+                {JSON.stringify(resultado._diagnosticoCodigosOficiais, null, 2)}
+              </pre>
+            </details>
+          )}
         </div>
       )}
     </main>
