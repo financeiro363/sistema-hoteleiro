@@ -177,10 +177,23 @@ function PainelFichas({ usuario, nomeHotel }) {
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  const [excluindoId, setExcluindoId] = useState(null);
+
   async function registrarLog(fichaId, acao, detalhe) {
     await supabase.from('fichas_fnrh_log').insert({
       usuario_id: usuario.id, ficha_id: fichaId, acao, detalhe, hotel_id: usuario.hotel_id,
     });
+  }
+
+  async function excluirFicha(ficha) {
+    setExcluindoId(null);
+    // Registra no log ANTES de excluir — depois de excluída, o ficha_id
+    // não existiria mais pra referenciar, então essa ordem é obrigatória.
+    await registrarLog(ficha.id, 'EXCLUSAO', `Ficha de ${ficha.nome_completo} excluída (provável duplicidade).`);
+    const { error } = await supabase.from('fichas_fnrh').delete().eq('id', ficha.id);
+    if (error) { setErro('Não foi possível excluir. Detalhe técnico: ' + error.message); return; }
+    setFichas(fichas.filter((f) => f.id !== ficha.id));
+    mostrarAviso(`Ficha de ${ficha.nome_completo} excluída.`);
   }
 
   function verDetalhes(ficha) {
@@ -245,6 +258,19 @@ function PainelFichas({ usuario, nomeHotel }) {
                   <span className="fh-badge" style={f.status === 'EXPORTADO' ? { background: '#DDF2E4', color: '#1E6B3C' } : { background: '#FDF3D7', color: '#8A6100' }}>
                     {f.status === 'EXPORTADO' ? 'Exportada' : 'Aguardando exportação'}
                   </span>
+                  {souAdmin && (
+                    excluindoId === f.id ? (
+                      <span className="fh-confirmar-exclusao">
+                        Excluir esta ficha?
+                        <button type="button" className="botao botao-perigo" onClick={() => excluirFicha(f)}>Sim</button>
+                        <button type="button" className="botao botao-suave" onClick={() => setExcluindoId(null)}>Não</button>
+                      </span>
+                    ) : (
+                      <button type="button" className="fh-botao-excluir" onClick={() => setExcluindoId(f.id)} title="Excluir ficha (ex.: duplicidade)">
+                        🗑️ Excluir
+                      </button>
+                    )
+                  )}
                 </div>
                 <div className="texto-suave" style={{ fontSize: 13 }}>
                   {f.tipo_documento} {f.numero_documento}
@@ -618,6 +644,12 @@ function EstilosFichasAdmin() {
       .fh-item-dir { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
       .fh-input-reserva { width: auto; min-width: 200px; }
       .fh-ver-mais { border: none; background: none; color: var(--marca); font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 0; text-align: left; }
+      .fh-botao-excluir {
+        border: none; background: none; color: var(--erro-texto, #A31212); font-size: 12px;
+        cursor: pointer; font-family: inherit; padding: 2px 6px; border-radius: 6px; margin-left: auto;
+      }
+      .fh-botao-excluir:hover { background: #FBDDDD; }
+      .fh-confirmar-exclusao { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-left: auto; }
       .fh-detalhes { background: var(--fundo); border-radius: 10px; padding: 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 
       @media (min-width: 640px) {
