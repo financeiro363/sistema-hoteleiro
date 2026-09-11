@@ -23,6 +23,11 @@ const CODIGOS_BASE_PAGAMENTO = ['9000', '9100', '9200', '9300'];
 // do mesmo jeito que um estorno de pagamento, sem eu precisar saber o
 // código exato de cada tipo de item.
 function classificarTransacao(codigo) {
+  // Comissão de canal (Booking, Expedia, etc.) é um lançamento interno
+  // entre o hotel e o canal de venda — não passa pelo caixa nem afeta o
+  // que o hóspede pagou, então não entra nem em pagamentos nem em estornos.
+  if (codigo.startsWith('8800')) return 'CONSUMO_NORMAL';
+
   const ehCodigoPagamento = CODIGOS_BASE_PAGAMENTO.some((base) => codigo.startsWith(base));
   if (codigo.endsWith('A')) return ehCodigoPagamento ? 'ESTORNO_PAGAMENTO' : 'ESTORNO_ITEM';
   if (codigo.endsWith('V')) return ehCodigoPagamento ? 'PAGAMENTO_ANULADO' : 'ITEM_ANULADO';
@@ -105,16 +110,6 @@ export async function GET(request) {
       'Content-Type': 'application/json',
       'X-Property-ID': propertyId,
     };
-
-    // ---- 0) DIAGNÓSTICO TEMPORÁRIO: lista oficial e completa de códigos
-    // de transação desta conta — pra descobrir os que ainda faltam mapear.
-    let diagnosticoCodigos = null;
-    try {
-      const respostaCodigos = await fetch('https://api.cloudbeds.com/accounting/v1.0/internal-transaction-codes', {
-        headers: { Authorization: `Bearer ${apiKey}`, 'X-Property-ID': propertyId },
-      });
-      diagnosticoCodigos = await respostaCodigos.json().catch(() => null);
-    } catch (e) { diagnosticoCodigos = { erroCapturado: e.message }; }
 
     // ---- 1) Busca as transações do dia ----
     const respostaCloudbeds = await fetch('https://api.cloudbeds.com/accounting/v1.0/transactions', {
@@ -220,8 +215,6 @@ export async function GET(request) {
       totaisPorForma,
       totalGeral: Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0),
       totalEstornos: estornos.reduce((soma, l) => soma + l.valor, 0),
-      _diagnosticoCodigosOficiais: diagnosticoCodigos,
-      _codigosVistosHoje: [...new Set(todasTransacoes.map((t) => `${t.internalTransactionCode} — ${t.description}`))],
     });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
