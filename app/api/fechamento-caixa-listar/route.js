@@ -106,6 +106,16 @@ export async function GET(request) {
       'X-Property-ID': propertyId,
     };
 
+    // ---- 0) DIAGNÓSTICO TEMPORÁRIO: lista oficial e completa de códigos
+    // de transação desta conta — pra descobrir os que ainda faltam mapear.
+    let diagnosticoCodigos = null;
+    try {
+      const respostaCodigos = await fetch('https://api.cloudbeds.com/accounting/v1.0/internal-transaction-codes', {
+        headers: { Authorization: `Bearer ${apiKey}`, 'X-Property-ID': propertyId },
+      });
+      diagnosticoCodigos = await respostaCodigos.json().catch(() => null);
+    } catch (e) { diagnosticoCodigos = { erroCapturado: e.message }; }
+
     // ---- 1) Busca as transações do dia ----
     const respostaCloudbeds = await fetch('https://api.cloudbeds.com/accounting/v1.0/transactions', {
       method: 'POST',
@@ -210,6 +220,8 @@ export async function GET(request) {
       totaisPorForma,
       totalGeral: Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0),
       totalEstornos: estornos.reduce((soma, l) => soma + l.valor, 0),
+      _diagnosticoCodigosOficiais: diagnosticoCodigos,
+      _codigosVistosHoje: [...new Set(todasTransacoes.map((t) => `${t.internalTransactionCode} — ${t.description}`))],
     });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
