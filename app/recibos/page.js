@@ -276,17 +276,15 @@ export default function Recibos() {
   }
 
   // ---- Gerar número sequencial: REC-AAAA-0001 ----
-  function proximoNumero(tentativaExtra = 0) {
+  // O número em si vem do banco (função proximo_numero_recibo), que
+  // garante — de verdade, não só por tentativa — que duas pessoas nunca
+  // recebem o mesmo número, mesmo gerando ao mesmo tempo.
+  async function proximoNumero() {
     const ano = new Date().getFullYear();
-    const prefixo = `REC-${ano}-`;
-    let maior = 0;
-    recibos.forEach((r) => {
-      if (r.numero && r.numero.startsWith(prefixo)) {
-        const n = Number(r.numero.slice(prefixo.length));
-        if (isFinite(n) && n > maior) maior = n;
-      }
-    });
-    return `${prefixo}${String(maior + 1 + tentativaExtra).padStart(4, '0')}`;
+    const { data: numeroGerado, error } = await supabase
+      .rpc('proximo_numero_recibo', { p_hotel_id: usuario.hotel_id, p_ano: ano });
+    if (error) throw new Error(error.message);
+    return `REC-${ano}-${String(numeroGerado).padStart(4, '0')}`;
   }
 
   // ---- Gerar e imprimir recibo ----
@@ -308,13 +306,12 @@ export default function Recibos() {
     let salvo = null;
     let erroFinal = null;
 
-    // Tenta salvar; se o número já existir (duas pessoas ao mesmo tempo),
-    // tenta de novo com o número seguinte
-    for (let tentativa = 0; tentativa < 3; tentativa++) {
+    try {
+      const numeroGerado = await proximoNumero();
       const { data, error } = await supabase
         .from('recibos')
         .insert({
-          numero: proximoNumero(tentativa),
+          numero: numeroGerado,
           direcao,
           nome_contraparte: fNome.trim(),
           documento_contraparte: fDocumento.trim() || null,
@@ -326,9 +323,10 @@ export default function Recibos() {
         })
         .select()
         .single();
-      if (!error) { salvo = data; break; }
-      erroFinal = error.message;
-      if (!/duplicate|unique/i.test(error.message)) break;
+      if (error) throw new Error(error.message);
+      salvo = data;
+    } catch (e) {
+      erroFinal = e.message;
     }
     setSalvando(false);
 
