@@ -210,9 +210,9 @@ export default function Contabilidade() {
     .filter((l) => !termoLanc || l.nome_documento.toLowerCase().includes(termoLanc) || String(l.valor).includes(termoLanc))
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === 'PENDENTE' ? -1 : 1;
-      return a.status === 'PENDENTE'
-        ? new Date(a.data_vencimento) - new Date(b.data_vencimento)
-        : new Date(b.data_vencimento) - new Date(a.data_vencimento);
+      // Vencimento mais novo primeiro, mais antigo por último — vale pros
+      // dois grupos (pendentes e já lançados).
+      return new Date(b.data_vencimento) - new Date(a.data_vencimento);
     });
 
   // ================= EXTRATOS =================
@@ -503,7 +503,7 @@ function EstilosContabilidade() {
         cursor: pointer; white-space: nowrap; min-height: 42px;
       }
       .ct-aba-ativa { background: var(--marca); border-color: var(--marca); color: var(--branco); }
-      .ct-contador { display: inline-block; margin-left: 6px; font-size: 12px; background: rgba(163,18,18,0.12); color: var(--erro-texto); border-radius: 999px; padding: 1px 8px; font-weight: 700; }
+      .ct-contador { display: inline-block; margin-left: 6px; font-size: 12px; background: var(--erro-texto, #A31212); color: #fff; border-radius: 999px; padding: 1px 8px; font-weight: 700; }
 
       .ct-barra { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
       .ct-duas { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
