@@ -308,6 +308,10 @@ textarea.campo { resize: vertical; }
   border-radius: 999px; background: var(--erro, #A31212); color: #fff;
   font-size: 11px; font-weight: 700; line-height: 1;
 }
+.cabecalho-bolinha {
+  display: inline-block; width: 8px; height: 8px; margin-left: 5px;
+  border-radius: 50%; background: var(--erro, #A31212); vertical-align: middle;
+}
 
 .cabecalho-acoes { display: flex; align-items: center; gap: 8px; }
 .cabecalho-usuario { display: none; font-size: 14px; color: var(--texto-suave); }
