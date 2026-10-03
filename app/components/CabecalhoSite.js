@@ -96,6 +96,9 @@ export default function CabecalhoSite() {
   const [usuarioIdAtual, setUsuarioIdAtual] = useState(null);
   const [contadorSolicitacoes, setContadorSolicitacoes] = useState(0);
   const [contadorFichasPendentes, setContadorFichasPendentes] = useState(0);
+  const [contadorDevolucoes, setContadorDevolucoes] = useState(0);
+  const [contadorArrumacoes, setContadorArrumacoes] = useState(0);
+  const [contadorManutencao, setContadorManutencao] = useState(0);
 
   // Observa o login: mostra "Entrar" ou "Sair" conforme a sessão
   useEffect(() => {
@@ -163,7 +166,7 @@ export default function CabecalhoSite() {
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setPodeVerTarefasDoDia(false); setPodeAcessarFechamentoCaixa(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); setContadorSolicitacoes(0); setContadorFichasPendentes(0); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setPodeVerTarefasDoDia(false); setPodeAcessarFechamentoCaixa(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); setContadorSolicitacoes(0); setContadorFichasPendentes(0); setContadorDevolucoes(0); setContadorArrumacoes(0); setContadorManutencao(0); }
       else carregarSessao();
     });
 
@@ -205,6 +208,9 @@ export default function CabecalhoSite() {
     if (!usuarioId || !hotelId || (papel !== 'ADMIN' && papel !== 'COLABORADOR')) {
       setContadorSolicitacoes(0);
       setContadorFichasPendentes(0);
+      setContadorDevolucoes(0);
+      setContadorArrumacoes(0);
+      setContadorManutencao(0);
       return;
     }
     const { count } = await supabase
@@ -228,6 +234,37 @@ export default function CabecalhoSite() {
     } catch (e) {
       setContadorFichasPendentes(0);
     }
+
+    // Devoluções pendentes — é o admin quem processa, então só conta pra
+    // ele; colaborador não tem ação pendente nessa tela depois de enviar.
+    if (papel === 'ADMIN') {
+      const { count: countDevolucoes } = await supabase
+        .from('devolucoes')
+        .select('id', { count: 'exact', head: true })
+        .eq('hotel_id', hotelId)
+        .eq('status', 'PENDENTE');
+      setContadorDevolucoes(countDevolucoes || 0);
+    } else {
+      setContadorDevolucoes(0);
+    }
+
+    // Arrumações planejadas atribuídas a mim, ainda não concluídas.
+    const { count: countArrumacoes } = await supabase
+      .from('arrumacoes_planejadas')
+      .select('id', { count: 'exact', head: true })
+      .eq('responsavel_id', usuarioId)
+      .eq('hotel_id', hotelId)
+      .neq('status', 'CONCLUIDA');
+    setContadorArrumacoes(countArrumacoes || 0);
+
+    // Chamados de manutenção atribuídos a mim, ainda não concluídos.
+    const { count: countManutencao } = await supabase
+      .from('manutencoes')
+      .select('id', { count: 'exact', head: true })
+      .eq('responsavel_id', usuarioId)
+      .eq('hotel_id', hotelId)
+      .neq('status', 'CONCLUIDO');
+    setContadorManutencao(countManutencao || 0);
   }
 
   // Atualiza os contadores periodicamente (a cada 60s) — como o menu não
@@ -273,6 +310,17 @@ export default function CabecalhoSite() {
   // quem preenche é o hóspede, não a equipe do hotel. Isso vem DEPOIS de
   // todos os hooks acima, porque o React exige que os hooks sempre sejam
   // chamados na mesma ordem, mesmo quando vamos retornar nada.
+  function contadorDoLink(href) {
+    switch (href) {
+      case '/solicitacoes': return contadorSolicitacoes;
+      case '/fichas-hospedes': return contadorFichasPendentes;
+      case '/creditos': return contadorDevolucoes;
+      case '/planejador-arrumacao': return contadorArrumacoes;
+      case '/manutencao': return contadorManutencao;
+      default: return 0;
+    }
+  }
+
   if (caminhoAtual?.startsWith('/ficha-hospede')) return null;
 
   return (
@@ -345,6 +393,10 @@ export default function CabecalhoSite() {
                 const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario, podeAcessarDepositos, podeVerTarefasDoDia, podeAcessarFechamentoCaixa));
                 if (linksVisiveis.length === 0) return null; // esconde a categoria inteira se ninguém dentro dela é visível
                 const temPaginaAtiva = linksVisiveis.some((link) => link.href === caminhoAtual);
+                // Se QUALQUER item dessa categoria tiver algo pendente pra
+                // mim, a categoria-mãe ganha uma bolinha — mesmo com o
+                // dropdown fechado, pra avisar que tem algo lá dentro.
+                const categoriaTemPendencia = linksVisiveis.some((link) => contadorDoLink(link.href) > 0);
                 return (
                   <div key={categoria.chave} className="menu-categoria">
                     <button
@@ -354,13 +406,13 @@ export default function CabecalhoSite() {
                       onClick={() => setCategoriaAberta(categoriaAberta === categoria.chave ? null : categoria.chave)}
                     >
                       {categoria.nome}
+                      {categoriaTemPendencia && <span className="cabecalho-bolinha" aria-label="Tem algo pendente aqui" />}
                       <span className="menu-seta" aria-hidden="true">{categoriaAberta === categoria.chave ? '▲' : '▼'}</span>
                     </button>
                     {categoriaAberta === categoria.chave && (
                       <div className="menu-dropdown">
                         {linksVisiveis.map((link) => {
-                          const contador = link.href === '/solicitacoes' ? contadorSolicitacoes
-                            : link.href === '/fichas-hospedes' ? contadorFichasPendentes : 0;
+                          const contador = contadorDoLink(link.href);
                           return (
                             <Link key={link.href} href={link.href} className={caminhoAtual === link.href ? 'ativa' : ''}>
                               {link.rotulo}
