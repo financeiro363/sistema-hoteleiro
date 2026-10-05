@@ -1,12 +1,12 @@
 // ============================================================================
 // ROTA DE SERVIDOR: /api/fichas-imprimir
 // ============================================================================
-// Devolve os dados COMPLETOS de uma ficha específica — usada só na hora de
-// imprimir. É a exceção explícita: mesmo um colaborador (que não vê esses
-// campos na listagem) continua conseguindo imprimir a ficha física completa,
-// como já funcionava antes. A diferença é que agora esse dado completo só
-// trafega no momento exato da impressão, não fica exposto o tempo todo na
-// listagem geral.
+// Devolve os dados de uma ficha específica — usada só na hora de imprimir.
+// Qualquer colaborador consegue imprimir (essa é a exceção explícita da
+// listagem), mas só recebe o que o modelo impresso realmente usa: nome,
+// documento e datas de entrada/saída. Os demais dados (endereço, país de
+// origem, foto do passaporte etc.) só chegam pro ADMINISTRADOR — mesmo
+// resultado na folha impressa, bem menos dado pessoal trafegando.
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
@@ -33,7 +33,7 @@ export async function GET(request) {
     const { data: dadosAuth, error: erroAuth } = await supabaseComoChamador.auth.getUser(tokenAcesso);
     if (erroAuth || !dadosAuth?.user) return Response.json({ erro: 'Sessão inválida ou expirada.' }, { status: 401 });
     const { data: chamador, error: erroChamador } = await supabaseComoChamador
-      .from('usuarios').select('id, hotel_id').eq('auth_id', dadosAuth.user.id).single();
+      .from('usuarios').select('id, hotel_id, papel').eq('auth_id', dadosAuth.user.id).single();
     if (erroChamador || !chamador) return Response.json({ erro: 'Não foi possível confirmar seu usuário.' }, { status: 403 });
 
     const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
@@ -41,7 +41,18 @@ export async function GET(request) {
       .from('fichas_fnrh').select('*').eq('id', fichaId).eq('hotel_id', chamador.hotel_id).single();
     if (erroFicha || !ficha) return Response.json({ erro: 'Ficha não encontrada.' }, { status: 404 });
 
-    return Response.json({ ficha });
+    if (chamador.papel === 'ADMIN') return Response.json({ ficha });
+
+    // Colaborador: só o que o modelo impresso usa
+    const fichaParaImpressao = {
+      id: ficha.id,
+      nome_completo: ficha.nome_completo,
+      tipo_documento: ficha.tipo_documento,
+      numero_documento: ficha.numero_documento,
+      data_checkin: ficha.data_checkin,
+      data_checkout: ficha.data_checkout,
+    };
+    return Response.json({ ficha: fichaParaImpressao });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
   }
