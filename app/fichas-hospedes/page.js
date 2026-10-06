@@ -12,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { nomePais } from '../../lib/paises';
 
 function formatarData(valor) {
   if (!valor) return '—';
@@ -26,6 +27,10 @@ function formatarDataHora(valor) {
 }
 
 const MOTIVO_LABEL = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
+const TIPO_VIAGEM_ESTRANGEIRO_LABEL = { TURISMO: 'Turismo', TRABALHO_NEGOCIOS: 'Trabalho ou Negócios', ESTUDO_CONGRESSO: 'Estudo ou congresso', OUTROS: 'Outros' };
+function rotuloTipoDocumento(tipo) {
+  return { CPF: 'CPF', RG: 'RG', PASSAPORTE: 'Passaporte' }[tipo] || tipo || '—';
+}
 
 export default function FichasHospedes() {
   const router = useRouter();
@@ -187,13 +192,24 @@ function PainelFichas({ usuario, nomeHotel }) {
 
   async function excluirFicha(ficha) {
     setExcluindoId(null);
-    // Registra no log ANTES de excluir — depois de excluída, o ficha_id
-    // não existiria mais pra referenciar, então essa ordem é obrigatória.
-    await registrarLog(ficha.id, 'EXCLUSAO', `Ficha de ${ficha.nome_completo} excluída (provável duplicidade).`);
-    const { error } = await supabase.from('fichas_fnrh').delete().eq('id', ficha.id);
-    if (error) { setErro('Não foi possível excluir. Detalhe técnico: ' + error.message); return; }
-    setFichas(fichas.filter((f) => f.id !== ficha.id));
-    mostrarAviso(`Ficha de ${ficha.nome_completo} excluída.`);
+    setErro('');
+    // A exclusão passa pelo servidor: ele registra no log, apaga a foto do
+    // passaporte (se tiver) e só então apaga a ficha — assim nenhuma foto
+    // de documento fica guardada sem dono.
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/fichas-excluir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ fichaId: ficha.id }),
+      });
+      const resultado = await resposta.json().catch(() => ({}));
+      if (!resposta.ok || resultado.erro) { setErro(resultado.erro || 'Não foi possível excluir.'); return; }
+      setFichas(fichas.filter((f) => f.id !== ficha.id));
+      mostrarAviso(`Ficha de ${ficha.nome_completo} excluída.`);
+    } catch (e) {
+      setErro('Falha de conexão ao excluir. Tente novamente.');
+    }
   }
 
   function verDetalhes(ficha) {
@@ -273,8 +289,8 @@ function PainelFichas({ usuario, nomeHotel }) {
                   )}
                 </div>
                 <div className="texto-suave" style={{ fontSize: 13 }}>
-                  {f.tipo_documento} {f.numero_documento}
-                  {souAdmin && ` · ${f.email} · ${f.telefone}`}
+                  {rotuloTipoDocumento(f.tipo_documento)} {f.numero_documento}
+                  {souAdmin && [f.email, f.telefone].filter(Boolean).length > 0 && ` · ${[f.email, f.telefone].filter(Boolean).join(' · ')}`}
                 </div>
                 {(f.data_checkin || f.data_checkout) && (
                   <div className="fh-badge-estadia">
@@ -321,6 +337,67 @@ function PainelFichas({ usuario, nomeHotel }) {
 }
 
 function DetalhesFicha({ ficha: f }) {
+  const [abrindoFoto, setAbrindoFoto] = useState(false);
+  const [urlFoto, setUrlFoto] = useState('');
+  const [erroFoto, setErroFoto] = useState('');
+
+  // A foto do passaporte fica num espaço privado: o servidor confere que
+  // quem pede é administrador e entrega um link temporário (2 minutos).
+  async function verFoto() {
+    setAbrindoFoto(true);
+    setErroFoto('');
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch(`/api/ficha-passaporte-url?fichaId=${f.id}`, {
+        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
+      });
+      const resultado = await resposta.json().catch(() => ({}));
+      if (!resposta.ok || resultado.erro) throw new Error(resultado.erro || 'Não foi possível abrir a foto.');
+      setUrlFoto(resultado.url);
+    } catch (e) {
+      setErroFoto(e.message);
+    }
+    setAbrindoFoto(false);
+  }
+
+  if (f.tipo_documento === 'PASSAPORTE') {
+    return (
+      <div className="fh-detalhes">
+        <div><strong>Nascimento:</strong> {formatarData(f.data_nascimento)} · <strong>Gênero:</strong> {f.genero || '—'}</div>
+        <div><strong>Passaporte:</strong> {f.numero_documento || '—'} · <strong>País expedidor:</strong> {nomePais(f.pais_expedidor_documento) || '—'} · <strong>Validade:</strong> {formatarData(f.validade_documento)}</div>
+        <div><strong>País de procedência:</strong> {nomePais(f.pais_origem) || f.procedencia_pais || '—'}</div>
+        <div><strong>Endereço residencial (país de procedência):</strong> {f.endereco || '—'}</div>
+        <div><strong>Data de entrada no país:</strong> {formatarData(f.data_entrada_pais)} · <strong>Local de residência no Brasil:</strong> {f.local_residencia_brasil || '—'}</div>
+        <div><strong>Tipo de viagem:</strong> {TIPO_VIAGEM_ESTRANGEIRO_LABEL[f.tipo_viagem_estrangeiro] || MOTIVO_LABEL[f.motivo_viagem] || '—'}</div>
+        <div>
+          {f.foto_passaporte_caminho ? (
+            <button type="button" className="botao botao-contorno" onClick={verFoto} disabled={abrindoFoto}>
+              {abrindoFoto ? 'Abrindo…' : '🛂 Ver foto do passaporte'}
+            </button>
+          ) : (
+            <span className="texto-suave">Sem foto do passaporte.</span>
+          )}
+          {erroFoto && <div className="aviso-erro" style={{ marginTop: 8 }}>{erroFoto}</div>}
+        </div>
+
+        {urlFoto && (
+          <div className="fh-foto-overlay" role="dialog" aria-modal="true" onClick={() => setUrlFoto('')}>
+            <div className="fh-foto-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="fh-foto-topo">
+                <strong>Passaporte — {f.nome_completo}</strong>
+                <button type="button" className="fh-foto-fechar" onClick={() => setUrlFoto('')} aria-label="Fechar">✕</button>
+              </div>
+              <img src={urlFoto} alt={`Foto do passaporte de ${f.nome_completo}`} className="fh-foto-imagem" />
+              <p className="texto-suave" style={{ fontSize: 12, margin: '8px 0 0' }}>
+                Documento pessoal sensível — uso restrito à administração. Esta visualização foi registrada no log.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="fh-detalhes">
       <div><strong>Nascimento:</strong> {formatarData(f.data_nascimento)} · <strong>Gênero:</strong> {f.genero || '—'}</div>
@@ -458,8 +535,8 @@ function PainelLogFichas({ usuario }) {
     carregar();
   }, [usuario.hotel_id]);
 
-  const ACAO_LABEL = { VISUALIZACAO: 'Visualização', EXPORTACAO: 'Exportação para Cloudbeds' };
-  const ACAO_COR = { VISUALIZACAO: '#1D4E89', EXPORTACAO: '#1E6B3C' };
+  const ACAO_LABEL = { VISUALIZACAO: 'Visualização', EXPORTACAO: 'Exportação para Cloudbeds', EXCLUSAO: 'Exclusão' };
+  const ACAO_COR = { VISUALIZACAO: '#1D4E89', EXPORTACAO: '#1E6B3C', EXCLUSAO: '#A31212' };
 
   if (carregando) return <p className="texto-suave">Carregando…</p>;
 
@@ -489,9 +566,21 @@ function PainelLogFichas({ usuario }) {
 // FICHA PARA IMPRESSÃO — modelo oficial do hotel, 1 página A4
 // ============================================================================
 
+// Quem é estrangeiro não tem CPF — no lugar do CPF, o modelo impresso leva
+// o número do passaporte (com o título trocado pra não confundir).
+function documentoPrincipalParaImpressao(f) {
+  if (f.tipo_documento === 'PASSAPORTE') {
+    return { rotulo: 'Passaporte (número)', valor: f.numero_documento || '' };
+  }
+  return {
+    rotulo: 'CPF (somente números)',
+    valor: f.tipo_documento === 'CPF' ? String(f.numero_documento || '').replace(/\D/g, '') : '',
+  };
+}
+
 function montarHtmlFicha(f, nomeHotel) {
   const numeroDocumentoRG = f.tipo_documento === 'RG' ? f.numero_documento : '';
-  const cpfSomenteNumeros = f.tipo_documento === 'CPF' ? String(f.numero_documento || '').replace(/\D/g, '') : '';
+  const documentoPrincipal = documentoPrincipalParaImpressao(f);
   const escapar = (texto) => String(texto || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
   return `<!DOCTYPE html>
@@ -526,7 +615,7 @@ function montarHtmlFicha(f, nomeHotel) {
     <div class="campo"><label>Número do Documento</label><div class="valor">${escapar(numeroDocumentoRG)}</div></div>
     <div class="campo"><label>Data de partida</label><div class="valor">${escapar(formatarData(f.data_checkout))}</div></div>
     <div class="campo"><label>Número da Acomodação</label><div class="valor"></div></div>
-    <div class="campo"><label>CPF (somente números)</label><div class="valor">${escapar(cpfSomenteNumeros)}</div></div>
+    <div class="campo"><label>${escapar(documentoPrincipal.rotulo)}</label><div class="valor">${escapar(documentoPrincipal.valor)}</div></div>
   </div>
 
   <div class="secao">
@@ -579,7 +668,7 @@ function montarHtmlFicha(f, nomeHotel) {
 
 function FichaImpressao({ ficha: f, nomeHotel, onFechar }) {
   const numeroDocumentoRG = f.tipo_documento === 'RG' ? f.numero_documento : '';
-  const cpfSomenteNumeros = f.tipo_documento === 'CPF' ? String(f.numero_documento || '').replace(/\D/g, '') : '';
+  const documentoPrincipal = documentoPrincipalParaImpressao(f);
 
   function imprimir() {
     // Abre uma janela nova, LIMPA (só com o conteúdo da ficha, nada mais
@@ -615,7 +704,7 @@ function FichaImpressao({ ficha: f, nomeHotel, onFechar }) {
           <div className="ficha-imp-campo"><label>Número do Documento</label><div className="ficha-imp-valor">{numeroDocumentoRG}</div></div>
           <div className="ficha-imp-campo"><label>Data de partida</label><div className="ficha-imp-valor">{formatarData(f.data_checkout)}</div></div>
           <div className="ficha-imp-campo"><label>Número da Acomodação</label><div className="ficha-imp-valor"></div></div>
-          <div className="ficha-imp-campo"><label>CPF (somente números)</label><div className="ficha-imp-valor">{cpfSomenteNumeros}</div></div>
+          <div className="ficha-imp-campo"><label>{documentoPrincipal.rotulo}</label><div className="ficha-imp-valor">{documentoPrincipal.valor}</div></div>
         </div>
 
         <div className="at-modal-botoes at-nao-imprimir">
@@ -644,6 +733,11 @@ function EstilosFichasAdmin() {
       .fh-item-dir { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
       .fh-input-reserva { width: auto; min-width: 200px; }
       .fh-ver-mais { border: none; background: none; color: var(--marca); font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 0; text-align: left; }
+      .fh-foto-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 60; }
+      .fh-foto-modal { background: var(--branco); border-radius: 14px; padding: 16px; width: 100%; max-width: 760px; max-height: 92vh; overflow-y: auto; }
+      .fh-foto-topo { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+      .fh-foto-fechar { border: none; background: none; font-size: 18px; cursor: pointer; }
+      .fh-foto-imagem { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--borda); }
       .fh-botao-excluir {
         border: none; background: none; color: var(--erro-texto, #A31212); font-size: 12px;
         cursor: pointer; font-family: inherit; padding: 2px 6px; border-radius: 6px; margin-left: auto;
