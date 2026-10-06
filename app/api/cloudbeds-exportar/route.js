@@ -16,6 +16,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { descriptografar } from '../../../lib/cloudbedsCrypto';
+import { nomePais, paisValido } from '../../../lib/paises';
 
 const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 
@@ -39,6 +40,7 @@ function paraNomeEstado(siglaOuNome) {
 // Nossos códigos internos → texto em português (os campos da Cloudbeds
 // são de texto livre, não códigos)
 const MOTIVO_VIAGEM_TEXTO = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
+const TIPO_VIAGEM_ESTRANGEIRO_TEXTO = { TURISMO: 'Turismo', TRABALHO_NEGOCIOS: 'Trabalho ou Negócios', ESTUDO_CONGRESSO: 'Estudo ou congresso', OUTROS: 'Outros' };
 const MEIO_TRANSPORTE_TEXTO = { AVIAO: 'Avião', AUTOMOVEL: 'Automóvel', ONIBUS: 'Ônibus', TREM: 'Trem', OUTRO: 'Outro' };
 // Códigos confirmados na documentação oficial da Cloudbeds para o tipo de
 // documento (só vimos 4 dos 8 valores possíveis — "dni" e "passport" são
@@ -223,7 +225,20 @@ export async function POST(request) {
     }
 
     const enderecoCompleto = [ficha.endereco, ficha.numero_endereco].filter(Boolean).join(', ');
-    const siglaPais = paraSiglaPais(ficha.pais);
+    // Hóspede estrangeiro (passaporte): usa os códigos de país que ele
+    // escolheu na ficha — o país de procedência (onde mora) e o país que
+    // emitiu o passaporte. Pra hóspede brasileiro, tudo continua como antes.
+    const ehPassaporte = ficha.tipo_documento === 'PASSAPORTE';
+    const codigoValido = (c) => (c && paisValido(c) ? String(c).toUpperCase() : null);
+    const siglaPais = ehPassaporte
+      ? (codigoValido(ficha.pais_origem) || paraSiglaPais(ficha.pais))
+      : paraSiglaPais(ficha.pais);
+    const siglaPaisDocumento = ehPassaporte
+      ? (codigoValido(ficha.pais_expedidor_documento) || siglaPais)
+      : siglaPais;
+    const siglaNacionalidade = ehPassaporte
+      ? siglaPaisDocumento
+      : paraSiglaPais(ficha.nacionalidade);
     // Gênero: convertendo do nosso formato para o que a Cloudbeds usa (M/F)
     const GENERO_CLOUDBEDS = { Masculino: 'M', Feminino: 'F' };
 
@@ -246,13 +261,14 @@ export async function POST(request) {
       // (carteira de identidade), "passport" = passaporte.
       guestDocumentType: DOC_TIPO_CLOUDBEDS[ficha.tipo_documento] || '',
       guestDocumentNumber: ficha.numero_documento || '',
-      guestDocumentIssuingCountry: siglaPais,
+      guestDocumentIssuingCountry: siglaPaisDocumento,
+      ...(ehPassaporte && ficha.validade_documento ? { guestDocumentExpirationDate: ficha.validade_documento } : {}),
       documentType: ficha.tipo_documento || '',
       documentNumber: ficha.numero_documento || '',
-      documentIssuingCountry: siglaPais,
+      documentIssuingCountry: siglaPaisDocumento,
       gender: GENERO_CLOUDBEDS[ficha.genero] || '',
       guestGender: GENERO_CLOUDBEDS[ficha.genero] || '',
-      guestNationality: paraSiglaPais(ficha.nacionalidade), nationality: paraSiglaPais(ficha.nacionalidade),
+      guestNationality: siglaNacionalidade, nationality: siglaNacionalidade,
     };
 
     const corpoGuest = new URLSearchParams(camposComuns);
@@ -273,9 +289,11 @@ export async function POST(request) {
     // texto JSON (formato mais comum nesse tipo de API) e também com
     // colchetes numerados (reforço, caso o primeiro não funcione).
     const listaCamposPersonalizados = [
-      { customFieldID: '33748', customFieldName: 'CPF', customFieldValue: (ficha.numero_documento || '').replace(/\D/g, '') },
+      // O campo personalizado "CPF" só recebe CPF de verdade — o número do
+      // passaporte NÃO pode ir pra cá (ele já vai no campo de documento).
+      { customFieldID: '33748', customFieldName: 'CPF', customFieldValue: ficha.tipo_documento === 'CPF' ? (ficha.numero_documento || '').replace(/\D/g, '') : '' },
       { customFieldID: '33749', customFieldName: 'Profissao', customFieldValue: ficha.profissao || '' },
-      { customFieldID: '48195', customFieldName: 'motivo_da_viagem', customFieldValue: MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
+      { customFieldID: '48195', customFieldName: 'motivo_da_viagem', customFieldValue: (ehPassaporte && TIPO_VIAGEM_ESTRANGEIRO_TEXTO[ficha.tipo_viagem_estrangeiro]) || MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
       { customFieldID: '48196', customFieldName: 'meio_de_transporte', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
     ];
     // Nome do campo CONFIRMADO na documentação oficial: "guestCustomFields"
@@ -339,6 +357,11 @@ export async function POST(request) {
       const observacoes = [
         `Documento: ${ficha.tipo_documento || '—'} ${ficha.numero_documento || ''}`,
         ficha.orgao_expedidor ? `Órgão expedidor: ${ficha.orgao_expedidor}` : null,
+        ehPassaporte && ficha.pais_expedidor_documento ? `País expedidor do passaporte: ${nomePais(ficha.pais_expedidor_documento)}` : null,
+        ehPassaporte && ficha.validade_documento ? `Validade do passaporte: ${ficha.validade_documento}` : null,
+        ehPassaporte && ficha.data_entrada_pais ? `Entrada no Brasil: ${ficha.data_entrada_pais}` : null,
+        ehPassaporte && ficha.local_residencia_brasil ? `Local de residência no Brasil: ${ficha.local_residencia_brasil}` : null,
+        ehPassaporte && ficha.pais_origem ? `País de procedência: ${nomePais(ficha.pais_origem)}` : null,
         ficha.nacionalidade ? `Nacionalidade: ${ficha.nacionalidade}` : null,
         ficha.profissao ? `Profissão: ${ficha.profissao}` : null,
         ficha.motivo_viagem ? `Motivo da viagem: ${ficha.motivo_viagem}` : null,
