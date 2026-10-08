@@ -147,6 +147,7 @@ const FORM_VAZIO = {
   responsavel: '', documento: '', valor: '', motivo: '',
   pagValor: '', pagForma: '', // pagamento já na reserva (opcional)
   telefone: '', temTelefoneSalvo: false,
+  observacoes: '', temObservacaoSalva: false,
 };
 
 // Taxa cobrada por hora (ou fração) que passar do horário contratado — Cláusula Sexta, "a"
@@ -425,6 +426,8 @@ export default function SalaReuniao() {
       pagValor: '', pagForma: '',
       telefone: formatarTelefone(r.telefone_locatario || ''),
       temTelefoneSalvo: !!r.telefone_locatario,
+      observacoes: r.observacoes || '',
+      temObservacaoSalva: !!r.observacoes,
     });
   }
 
@@ -488,6 +491,10 @@ export default function SalaReuniao() {
     // script SQL do telefone ainda não tenha sido rodado.
     if (form.telefone.trim() || form.temTelefoneSalvo) {
       registro.telefone_locatario = form.telefone.trim() || null;
+    }
+    // Observações: mesma regra (só vai junto se preenchida, ou se já existia e foi apagada)
+    if (form.observacoes.trim() || form.temObservacaoSalva) {
+      registro.observacoes = form.observacoes.trim() || null;
     }
 
     setSalvando(true);
@@ -724,6 +731,7 @@ export default function SalaReuniao() {
     ? reservas.filter((r) =>
         (r.responsavel || '').toLowerCase().includes(termo) ||
         (r.motivo || '').toLowerCase().includes(termo) ||
+        (r.observacoes || '').toLowerCase().includes(termo) ||
         nomeDaSala(r.sala_id).toLowerCase().includes(termo) ||
         formatarData(r.data).includes(termo)
       )
@@ -809,7 +817,7 @@ export default function SalaReuniao() {
           {/* Busca de reservas */}
           <input className="campo" type="search" value={busca}
             onChange={(e) => setBusca(e.target.value)}
-            placeholder="Pesquisar reserva (responsável, motivo, sala ou data)…"
+            placeholder="Pesquisar reserva (responsável, motivo, observação, sala ou data)…"
             aria-label="Pesquisar reservas" style={{ marginBottom: 12 }} />
 
           {termo && (
@@ -1049,6 +1057,13 @@ export default function SalaReuniao() {
               placeholder="(83) 99999-9999" />
             <p className="sr-doc-dica">Aparece no contrato, junto com o motivo do evento.</p>
 
+            <label className="rotulo">Observações (opcional)</label>
+            <textarea className="campo" rows={3} maxLength={1000} value={form.observacoes}
+              onChange={(e) => setForm({ ...form, observacoes: e.target.value })}
+              placeholder="Ex.: precisa de projetor, café às 15h, montagem em formato de auditório…"
+              style={{ resize: 'vertical', minHeight: 72, fontFamily: 'inherit' }} />
+            <p className="sr-doc-dica">Anotação interna da equipe — não vai no contrato nem no recibo.</p>
+
             {/* Pagamento: opcional na criação; depois, pela própria reserva */}
             {!form.editandoId && podeLancarPagamento && !pagamentosIndisponiveis && (
               <div className="sr-pag-novo">
@@ -1116,6 +1131,9 @@ export default function SalaReuniao() {
               <Linha rotulo="CPF/CNPJ" valor={detalhe.documento_locatario} />
               <Linha rotulo="Valor da locação" valor={dinheiro(detalhe.valor_locacao)} />
               <Linha rotulo="Motivo" valor={detalhe.motivo} />
+              <Linha rotulo="Telefone" valor={detalhe.telefone_locatario} />
+              <Linha rotulo="Observações"
+                valor={detalhe.observacoes ? <span style={{ whiteSpace: 'pre-wrap', fontWeight: 400 }}>{detalhe.observacoes}</span> : null} />
               <Linha rotulo="Reservado por" valor={`${nomeDe(detalhe.criado_por_id)} em ${formatarDataHora(detalhe.criado_em)}`} />
             </div>
 
