@@ -135,10 +135,26 @@ export default function FechamentoCaixa() {
             <p style={{ margin: '2px 0 0', color: '#666' }}>Data: {formatarDataBR(resultado.data)}</p>
           </div>
 
+          {resultado.avisoCloudbeds && (
+            <div className="aviso-erro" style={{ marginBottom: 12 }}>
+              <strong>Atenção — os valores da Cloudbeds não foram carregados:</strong> {resultado.avisoCloudbeds}{' '}
+              O total abaixo inclui apenas os pagamentos da Sala de Reunião.
+            </div>
+          )}
+          {resultado.avisoSalaReuniao && (
+            <div className="aviso-erro fc-somente-tela" style={{ marginBottom: 12 }}>
+              <strong>Atenção:</strong> {resultado.avisoSalaReuniao}
+            </div>
+          )}
+
           <div className="fc-cards-resumo">
             <div className="fc-card-resumo">
               <span className="fc-card-numero">{dinheiro(resultado.totalGeral)}</span>
               <span className="fc-card-rotulo">Total recebido no dia</span>
+            </div>
+            <div className="fc-card-resumo">
+              <span className="fc-card-numero">{dinheiro(resultado.totalSalaReuniao)}</span>
+              <span className="fc-card-rotulo">Sala de Reunião (já incluído no total)</span>
             </div>
             <div className="fc-card-resumo">
               <span className="fc-card-numero">{dinheiro(resultado.totalEstornos)}</span>
@@ -155,7 +171,13 @@ export default function FechamentoCaixa() {
               {Object.entries(resultado.totaisPorForma).sort((a, b) => b[1] - a[1]).map(([forma, total]) => (
                 <tr key={forma}><td>{forma}</td><td style={{ textAlign: 'right' }}>{dinheiro(total)}</td></tr>
               ))}
-              {Object.keys(resultado.totaisPorForma).length === 0 && (
+              {Object.entries(resultado.totaisSalaPorForma || {}).sort((a, b) => b[1] - a[1]).map(([forma, total]) => (
+                <tr key={`sala-${forma}`} className="fc-linha-sala">
+                  <td><span className="fc-selo-sala">Sala de Reunião</span> {forma}</td>
+                  <td style={{ textAlign: 'right' }}>{dinheiro(total)}</td>
+                </tr>
+              ))}
+              {Object.keys(resultado.totaisPorForma).length === 0 && Object.keys(resultado.totaisSalaPorForma || {}).length === 0 && (
                 <tr><td colSpan={2} style={{ textAlign: 'center', color: '#888' }}>Nenhum pagamento nesse dia.</td></tr>
               )}
             </tbody>
@@ -184,6 +206,36 @@ export default function FechamentoCaixa() {
               )}
             </tbody>
           </table>
+
+          <h3>🏛️ Sala de Reunião — pagamentos do dia</h3>
+          <table className="fc-tabela fc-tabela-detalhe">
+            <thead>
+              <tr><th>Horário</th><th>Forma de pagamento</th><th>Sala / Cliente</th><th>Recibo</th><th>Usuário</th><th style={{ textAlign: 'right' }}>Valor</th></tr>
+            </thead>
+            <tbody>
+              {(resultado.salaReuniao || []).map((l) => (
+                <tr key={l.id} style={l.anulado ? { color: '#A31212', textDecoration: 'line-through' } : undefined}>
+                  <td>{l.horario}</td>
+                  <td>{l.formaPagamento}{l.anulado ? ' (anulado)' : ''}</td>
+                  <td>{l.sala} — {l.cliente}</td>
+                  <td>{l.recibo}</td>
+                  <td>{l.usuario}</td>
+                  <td style={{ textAlign: 'right' }}>{dinheiro(l.valor)}</td>
+                </tr>
+              ))}
+              {(resultado.salaReuniao || []).length === 0 && (
+                <tr><td colSpan={6} style={{ textAlign: 'center', color: '#888' }}>Nenhum pagamento da Sala de Reunião nesse dia.</td></tr>
+              )}
+            </tbody>
+            <tfoot>
+              <tr><td colSpan={5}><strong>Total Sala de Reunião</strong></td><td style={{ textAlign: 'right' }}><strong>{dinheiro(resultado.totalSalaReuniao)}</strong></td></tr>
+            </tfoot>
+          </table>
+          {(resultado.salaReuniao || []).some((l) => l.anulado) && (
+            <p style={{ fontSize: 12, color: '#666', marginTop: -12 }}>
+              Pagamentos riscados foram anulados pelo administrador e não entram no total.
+            </p>
+          )}
 
           <h3>🚫 Abatimentos e estornos</h3>
           <table className="fc-tabela fc-tabela-detalhe">
@@ -219,7 +271,13 @@ export default function FechamentoCaixa() {
 function EstilosFechamento() {
   return (
     <style>{`
-      .fc-cards-resumo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+      .fc-cards-resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }
+      @media (max-width: 640px) { .fc-cards-resumo { grid-template-columns: 1fr 1fr; } }
+      .fc-selo-sala {
+        display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px;
+        padding: 1px 8px; margin-right: 4px; background: var(--marca-clara, #E3F0EC); color: var(--marca, #0E5A4E);
+      }
+      .fc-linha-sala td { background: rgba(14, 90, 78, 0.04); }
       .fc-card-resumo {
         background: var(--branco); border: 1px solid var(--borda); border-radius: 12px;
         padding: 14px; display: flex; flex-direction: column; gap: 2px;
