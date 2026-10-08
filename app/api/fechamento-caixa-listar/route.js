@@ -5,6 +5,10 @@
 // já organizadas: lançamentos de pagamento (com forma de pagamento, valor,
 // horário, apartamento e usuário), separados dos estornos/abatimentos, e
 // os totais somados por forma de pagamento.
+//
+// Soma também os pagamentos da SALA DE REUNIÃO lançados no sistema naquele
+// dia (Pix, dinheiro, cartão de crédito/débito), sempre identificados como
+// "Sala de Reunião" — e mesmo que a Cloudbeds falhe, eles aparecem.
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
@@ -15,6 +19,14 @@ import { descriptografar } from '../../../lib/cloudbedsCrypto';
 // configurados manualmente usa, incluindo os vários tipos de cartão e
 // Pix). 2000=Item consumido (diária, água, lavanderia, etc.).
 const CODIGOS_BASE_PAGAMENTO = ['9000', '9100', '9200', '9300'];
+
+// Formas de pagamento da Sala de Reunião (código guardado no banco -> nome)
+const FORMAS_SALA = {
+  PIX: 'Pix',
+  DINHEIRO: 'Dinheiro',
+  CARTAO_CREDITO: 'Cartão de crédito',
+  CARTAO_DEBITO: 'Cartão de débito',
+};
 
 // Sufixo "A" = estorno (dinheiro devolvido/abatido), "V" = lançamento
 // anulado. Isso vale tanto pra pagamento quanto pra item consumido — por
@@ -59,53 +71,19 @@ function extrairFormaPagamento(descricao) {
 }
 
 
-export async function GET(request) {
-  try {
-    const url = new URL(request.url);
-    const dataConsultada = url.searchParams.get('data') || hojeISO();
-
-    const tokenAcesso = (request.headers.get('authorization') || '').replace('Bearer ', '');
-    if (!tokenAcesso) return Response.json({ erro: 'Não autorizado — faça login novamente.' }, { status: 401 });
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const chaveAnonima = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    const chaveMestra = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const segredoCripto = process.env.CLOUDBEDS_CRYPTO_SECRET;
-    if (!supabaseUrl || !chaveAnonima || !chaveMestra || !segredoCripto) {
-      return Response.json({ erro: 'O servidor não está configurado corretamente.' }, { status: 500 });
-    }
-
-    const supabaseComoChamador = createClient(supabaseUrl, chaveAnonima, {
-      global: { headers: { Authorization: `Bearer ${tokenAcesso}` } },
-    });
-    const { data: dadosAuth, error: erroAuth } = await supabaseComoChamador.auth.getUser(tokenAcesso);
-    if (erroAuth || !dadosAuth?.user) return Response.json({ erro: 'Sessão inválida ou expirada.' }, { status: 401 });
-    const { data: chamador, error: erroChamador } = await supabaseComoChamador
-      .from('usuarios').select('id, hotel_id, papel, pode_acessar_fechamento_caixa').eq('auth_id', dadosAuth.user.id).single();
-    if (erroChamador || !chamador) return Response.json({ erro: 'Não foi possível confirmar seu usuário.' }, { status: 403 });
-
-    // ---- Permissão e trava de data ----
-    if (chamador.papel === 'COLABORADOR') {
-      if (!chamador.pode_acessar_fechamento_caixa) {
-        return Response.json({ erro: 'Você não tem permissão pra acessar o Fechamento de Caixa.' }, { status: 403 });
-      }
-      const permitidas = [hojeISO(), ontemISO()];
-      if (!permitidas.includes(dataConsultada)) {
-        return Response.json({ erro: 'Colaboradores só podem consultar o dia atual e o dia anterior.' }, { status: 403 });
-      }
-    } else if (chamador.papel !== 'ADMIN') {
-      return Response.json({ erro: 'Sem acesso.' }, { status: 403 });
-    }
-
-    const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
+// ---- Parte Cloudbeds (hóspedes do hotel) -----------------------------------
+// Se algo falhar aqui (integração não configurada, Cloudbeds fora do ar...),
+// quem chama mostra um aviso mas ainda entrega os pagamentos da Sala de
+// Reunião, que não dependem da Cloudbeds.
+async function buscarCloudbeds({ supabaseAdmin, hotelId, dataConsultada, segredoCripto }) {
     const { data: credencial, error: erroCred } = await supabaseAdmin
-      .from('cloudbeds_credenciais').select('*').eq('hotel_id', chamador.hotel_id).maybeSingle();
+      .from('cloudbeds_credenciais').select('*').eq('hotel_id', hotelId).maybeSingle();
     if (erroCred || !credencial?.api_key_cifrada || !credencial?.cloudbeds_property_id) {
-      return Response.json({ erro: 'A integração com a Cloudbeds ainda não foi configurada para este hotel.' }, { status: 400 });
+      throw new Error('A integração com a Cloudbeds ainda não foi configurada para este hotel.');
     }
     let apiKey;
     try { apiKey = descriptografar(credencial.api_key_cifrada, segredoCripto); }
-    catch (e) { return Response.json({ erro: 'Não foi possível ler a credencial salva.' }, { status: 500 }); }
+    catch (e) { throw new Error('Não foi possível ler a credencial salva.'); }
 
     const propertyId = String(credencial.cloudbeds_property_id);
     const cabecalhosCloudbeds = {
@@ -125,9 +103,7 @@ export async function GET(request) {
     });
     const dadosCloudbeds = await respostaCloudbeds.json().catch(() => null);
     if (!respostaCloudbeds.ok) {
-      return Response.json({
-        erro: dadosCloudbeds?.message || dadosCloudbeds?.error || `A Cloudbeds recusou a chamada (status ${respostaCloudbeds.status}).`,
-      }, { status: 502 });
+      throw new Error(dadosCloudbeds?.message || dadosCloudbeds?.error || `A Cloudbeds recusou a chamada (status ${respostaCloudbeds.status}).`);
     }
 
     const todasTransacoes = dadosCloudbeds?.transactions || [];
@@ -211,12 +187,126 @@ export async function GET(request) {
       totaisPorForma[l.formaPagamento] = (totaisPorForma[l.formaPagamento] || 0) + sinal * l.valor;
     });
 
+    return { pagamentos, estornos, totaisPorForma };
+}
+
+// ---- Parte Sala de Reunião (pagamentos lançados no sistema) ----------------
+// Soma só o que NÃO foi anulado; os anulados aparecem na lista (riscados).
+async function buscarSalaReuniao({ supabaseAdmin, hotelId, dataConsultada }) {
+  const vazio = { pagamentos: [], totaisPorForma: {}, total: 0, aviso: null };
+  const { data: linhas, error } = await supabaseAdmin
+    .from('reservas_sala_pagamentos').select('*')
+    .eq('hotel_id', hotelId).eq('data_pagamento', dataConsultada)
+    .order('criado_em', { ascending: true });
+  if (error) {
+    return {
+      ...vazio,
+      aviso: /does not exist|schema cache|relation/i.test(error.message)
+        ? 'Os pagamentos da Sala de Reunião ainda não foram ativados no banco de dados (falta rodar o script SQL).'
+        : 'Não foi possível ler os pagamentos da Sala de Reunião: ' + error.message,
+    };
+  }
+
+  const idsUsuarios = [...new Set((linhas || []).flatMap((l) => [l.criado_por_id, l.anulado_por_id]).filter(Boolean))];
+  const nomes = {};
+  if (idsUsuarios.length) {
+    const { data: pessoas } = await supabaseAdmin.from('usuarios').select('id, nome').in('id', idsUsuarios);
+    (pessoas || []).forEach((u) => { nomes[u.id] = u.nome; });
+  }
+
+  const pagamentos = (linhas || []).map((l) => ({
+    id: l.id,
+    horario: new Date(l.criado_em).toLocaleTimeString('pt-BR', { timeZone: FUSO_HOTEL, hour: '2-digit', minute: '2-digit' }),
+    forma: l.forma_pagamento,
+    formaPagamento: FORMAS_SALA[l.forma_pagamento] || l.forma_pagamento,
+    valor: Number(l.valor),
+    sala: l.sala_nome || 'Sala de Reunião',
+    cliente: l.pagador_nome,
+    recibo: l.numero_recibo,
+    usuario: nomes[l.criado_por_id] || `Usuário #${l.criado_por_id}`,
+    anulado: !!l.anulado_em,
+    motivoAnulacao: l.motivo_anulacao || null,
+    anuladoPor: l.anulado_em ? (nomes[l.anulado_por_id] || `Usuário #${l.anulado_por_id}`) : null,
+  }));
+
+  const totaisPorForma = {};
+  pagamentos.filter((p) => !p.anulado).forEach((p) => {
+    totaisPorForma[p.formaPagamento] = Math.round(((totaisPorForma[p.formaPagamento] || 0) + p.valor) * 100) / 100;
+  });
+  const total = Math.round(Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0) * 100) / 100;
+  return { pagamentos, totaisPorForma, total, aviso: null };
+}
+
+export async function GET(request) {
+  try {
+    const url = new URL(request.url);
+    const dataConsultada = url.searchParams.get('data') || hojeISO();
+
+    const tokenAcesso = (request.headers.get('authorization') || '').replace('Bearer ', '');
+    if (!tokenAcesso) return Response.json({ erro: 'Não autorizado — faça login novamente.' }, { status: 401 });
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const chaveAnonima = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const chaveMestra = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const segredoCripto = process.env.CLOUDBEDS_CRYPTO_SECRET;
+    if (!supabaseUrl || !chaveAnonima || !chaveMestra || !segredoCripto) {
+      return Response.json({ erro: 'O servidor não está configurado corretamente.' }, { status: 500 });
+    }
+
+    const supabaseComoChamador = createClient(supabaseUrl, chaveAnonima, {
+      global: { headers: { Authorization: `Bearer ${tokenAcesso}` } },
+    });
+    const { data: dadosAuth, error: erroAuth } = await supabaseComoChamador.auth.getUser(tokenAcesso);
+    if (erroAuth || !dadosAuth?.user) return Response.json({ erro: 'Sessão inválida ou expirada.' }, { status: 401 });
+    const { data: chamador, error: erroChamador } = await supabaseComoChamador
+      .from('usuarios').select('id, hotel_id, papel, pode_acessar_fechamento_caixa').eq('auth_id', dadosAuth.user.id).single();
+    if (erroChamador || !chamador) return Response.json({ erro: 'Não foi possível confirmar seu usuário.' }, { status: 403 });
+
+    // ---- Permissão e trava de data ----
+    if (chamador.papel === 'COLABORADOR') {
+      if (!chamador.pode_acessar_fechamento_caixa) {
+        return Response.json({ erro: 'Você não tem permissão pra acessar o Fechamento de Caixa.' }, { status: 403 });
+      }
+      const permitidas = [hojeISO(), ontemISO()];
+      if (!permitidas.includes(dataConsultada)) {
+        return Response.json({ erro: 'Colaboradores só podem consultar o dia atual e o dia anterior.' }, { status: 403 });
+      }
+    } else if (chamador.papel !== 'ADMIN') {
+      return Response.json({ erro: 'Sem acesso.' }, { status: 403 });
+    }
+
+    const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
+
+    // ---- 1) Cloudbeds (se falhar, segue só com a Sala de Reunião + aviso) ----
+    let cloudbeds = { pagamentos: [], estornos: [], totaisPorForma: {} };
+    let avisoCloudbeds = null;
+    try {
+      cloudbeds = await buscarCloudbeds({
+        supabaseAdmin, hotelId: chamador.hotel_id, dataConsultada, segredoCripto,
+      });
+    } catch (e) {
+      avisoCloudbeds = e.message;
+    }
+    const { pagamentos, estornos, totaisPorForma } = cloudbeds;
+
+    // ---- 2) Pagamentos da Sala de Reunião no dia ----
+    const sala = await buscarSalaReuniao({ supabaseAdmin, hotelId: chamador.hotel_id, dataConsultada });
+
+    const totalCloudbeds = Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0);
+
     return Response.json({
       data: dataConsultada,
       pagamentos,
       estornos,
       totaisPorForma,
-      totalGeral: Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0),
+      // Sala de Reunião: lista do dia, totais por forma e total (anulados não somam)
+      salaReuniao: sala.pagamentos,
+      totaisSalaPorForma: sala.totaisPorForma,
+      totalSalaReuniao: sala.total,
+      avisoSalaReuniao: sala.aviso,
+      avisoCloudbeds,
+      totalCloudbeds,
+      totalGeral: totalCloudbeds + sala.total,
       totalEstornos: estornos.reduce((soma, l) => soma + l.valor, 0),
     });
   } catch (erro) {
