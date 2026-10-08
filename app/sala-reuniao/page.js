@@ -93,10 +93,6 @@ function segundaDaSemana(deslocamento) {
   return segunda;
 }
 
-function dataPorExtenso(data) {
-  const d = data ? new Date(data) : new Date();
-  return `${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`;
-}
 
 // Valor por extenso (mesma função validada no módulo Recibos)
 function valorPorExtenso(valor) {
@@ -150,7 +146,45 @@ const FORM_VAZIO = {
   editandoId: null, salaId: '', data: '', horaInicio: '09:00', horaFim: '10:00',
   responsavel: '', documento: '', valor: '', motivo: '',
   pagValor: '', pagForma: '', // pagamento já na reserva (opcional)
+  telefone: '', temTelefoneSalvo: false,
 };
+
+// Taxa cobrada por hora (ou fração) que passar do horário contratado — Cláusula Sexta, "a"
+const TAXA_HORA_EXCEDENTE = 60;
+
+// (83) 99629-9481 / (83) 3222-1234, formatado enquanto digita
+function formatarTelefone(texto) {
+  const d = String(texto || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length === 0) return '';
+  if (d.length <= 2) return `(${d}`;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+
+// 2026-10-08 -> "08 de outubro de 2026" (dia com dois dígitos, como no modelo do contrato)
+function dataContrato(iso) {
+  const [ano, mes, dia] = String(iso || '').slice(0, 10).split('-').map(Number);
+  if (!ano) return '________________';
+  return `${String(dia).padStart(2, '0')} de ${MESES[mes - 1]} de ${ano}`;
+}
+
+// Regras de letra/espaçamento do contrato impresso numa folha A4. Usadas na
+// impressão de verdade E na medição que escolhe o tamanho da letra para o
+// texto caber inteiro em uma única folha.
+function regrasContratoA4(seletor) {
+  return `
+    ${seletor} {
+      font-family: 'Times New Roman', Times, serif; color: #000; text-align: justify;
+      font-size: var(--contrato-fs, 9pt); line-height: 1.3;
+    }
+    ${seletor} h3 { font-size: 1.25em; text-align: center; margin: 0 0 7pt; letter-spacing: 0.03em; }
+    ${seletor} p { margin: 0 0 3.5pt; }
+    ${seletor} .contrato-clausula { margin: 6pt 0 1.5pt; font-weight: 700; }
+    ${seletor} .contrato-assinaturas { margin-top: 30pt; gap: 28pt; }
+    ${seletor} .contrato-linha-ass { margin-bottom: 3pt; }
+  `;
+}
 
 const PAG_FORM_VAZIO = { valor: '', forma: '', data: '', observacao: '' };
 
@@ -201,6 +235,8 @@ export default function SalaReuniao() {
 
   // Gestão de salas (admin)
   const [novaSalaNome, setNovaSalaNome] = useState('');
+  const [novaSalaCapacidade, setNovaSalaCapacidade] = useState('');
+  const [capacidadesEditadas, setCapacidadesEditadas] = useState({}); // { idDaSala: 'texto' }
   const [excluindoSalaId, setExcluindoSalaId] = useState(null);
 
   // Endereço do hotel (admin preenche se faltar)
@@ -387,6 +423,8 @@ export default function SalaReuniao() {
       valor: r.valor_locacao || '',
       motivo: r.motivo || '',
       pagValor: '', pagForma: '',
+      telefone: formatarTelefone(r.telefone_locatario || ''),
+      temTelefoneSalvo: !!r.telefone_locatario,
     });
   }
 
@@ -445,6 +483,12 @@ export default function SalaReuniao() {
       motivo: form.motivo.trim() || null,
       hotel_id: usuario.hotel_id,
     };
+    // O telefone só vai junto quando foi preenchido (ou quando já existia e foi
+    // apagado) — assim o cadastro de reservas continua funcionando mesmo que o
+    // script SQL do telefone ainda não tenha sido rodado.
+    if (form.telefone.trim() || form.temTelefoneSalvo) {
+      registro.telefone_locatario = form.telefone.trim() || null;
+    }
 
     setSalvando(true);
     let salvo = null;
@@ -583,6 +627,26 @@ export default function SalaReuniao() {
     carregarTudo(usuario);
   }
 
+  // Imprime o contrato em UMA folha A4: mede o texto na largura útil da folha e
+  // diminui a letra, se preciso, até caber inteiro (nunca passa de 9,5 pt).
+  function imprimirContrato() {
+    const folha = document.querySelector('.contrato-folha');
+    if (!folha) { window.print(); return; }
+    const clone = folha.cloneNode(true);
+    clone.classList.add('contrato-medida');
+    document.body.appendChild(clone);
+    const alturaUtilPx = (277 / 25.4) * 96; // A4 (297 mm) menos 10 mm de margem em cima e embaixo
+    let tamanho = 9.5;
+    while (tamanho > 6.5) {
+      clone.style.fontSize = `${tamanho}pt`;
+      if (clone.scrollHeight <= alturaUtilPx * 0.97) break;
+      tamanho -= 0.1;
+    }
+    document.body.removeChild(clone);
+    folha.style.setProperty('--contrato-fs', `${tamanho.toFixed(1)}pt`);
+    window.print();
+  }
+
   function fecharRecibo() {
     setReciboAberto(null);
     if (contratoDepois) {
@@ -595,13 +659,38 @@ export default function SalaReuniao() {
   async function cadastrarSala() {
     if (!novaSalaNome.trim() || salvando) return;
     setSalvando(true);
-    const { error } = await supabase
-      .from('salas_reuniao').insert({ nome: novaSalaNome.trim(), hotel_id: usuario.hotel_id });
+    const novaSala = { nome: novaSalaNome.trim(), hotel_id: usuario.hotel_id };
+    if (Number(novaSalaCapacidade) > 0) novaSala.capacidade_pessoas = Math.floor(Number(novaSalaCapacidade));
+    const { error } = await supabase.from('salas_reuniao').insert(novaSala);
     setSalvando(false);
     if (error) { setErro('Não foi possível cadastrar a sala. Detalhe técnico: ' + error.message); return; }
     await registrarLog('Cadastrou Sala', `Sala "${novaSalaNome.trim()}".`);
     setNovaSalaNome('');
+    setNovaSalaCapacidade('');
     mostrarAviso('Sala cadastrada!');
+    carregarTudo(usuario);
+  }
+
+  // Capacidade máxima de pessoas da sala (vai escrita no contrato)
+  async function salvarCapacidade(sala) {
+    const texto = capacidadesEditadas[sala.id];
+    const capacidade = Math.floor(Number(texto));
+    if (!(capacidade > 0)) { setErro('Informe uma capacidade maior que zero.'); return; }
+    setSalvando(true);
+    const { error } = await supabase
+      .from('salas_reuniao').update({ capacidade_pessoas: capacidade }).eq('id', sala.id);
+    setSalvando(false);
+    if (error) {
+      setErro(
+        /capacidade_pessoas|schema cache|column/i.test(error.message)
+          ? 'A capacidade ainda não foi ativada no banco de dados (falta rodar o script SQL do contrato).'
+          : 'Não foi possível salvar a capacidade. Detalhe técnico: ' + error.message
+      );
+      return;
+    }
+    await registrarLog('Editou Sala', `Sala "${sala.nome}" · capacidade ${capacidade} pessoas.`);
+    setCapacidadesEditadas((atual) => { const novo = { ...atual }; delete novo[sala.id]; return novo; });
+    mostrarAviso('Capacidade salva! Ela aparece no contrato.');
     carregarTudo(usuario);
   }
 
@@ -819,6 +908,9 @@ export default function SalaReuniao() {
             <div className="sr-nova-sala">
               <input className="campo" type="text" value={novaSalaNome}
                 onChange={(e) => setNovaSalaNome(e.target.value)} placeholder="Sala de Reunião Térrea" />
+              <input className="campo sr-capacidade" type="number" min="1" step="1" value={novaSalaCapacidade}
+                onChange={(e) => setNovaSalaCapacidade(e.target.value)} placeholder="Capacidade (pessoas)"
+                aria-label="Capacidade máxima de pessoas" />
               <button type="button" className="botao botao-principal" onClick={cadastrarSala} disabled={salvando}>
                 Salvar
               </button>
@@ -832,6 +924,18 @@ export default function SalaReuniao() {
                 <strong style={{ flex: 1 }}>{s.nome}</strong>
                 <span className="texto-suave" style={{ fontSize: 13 }}>
                   {reservas.filter((r) => r.sala_id === s.id).length} reserva(s)
+                </span>
+                <span className="sr-capacidade-item">
+                  <input className="campo sr-capacidade" type="number" min="1" step="1"
+                    value={capacidadesEditadas[s.id] ?? s.capacidade_pessoas ?? ''}
+                    onChange={(e) => setCapacidadesEditadas({ ...capacidadesEditadas, [s.id]: e.target.value })}
+                    placeholder="Capacidade" aria-label={`Capacidade máxima de pessoas — ${s.nome}`} />
+                  <span className="texto-suave" style={{ fontSize: 12 }}>pessoas</span>
+                  {capacidadesEditadas[s.id] !== undefined && (
+                    <button type="button" className="botao botao-suave" onClick={() => salvarCapacidade(s)} disabled={salvando}>
+                      Salvar
+                    </button>
+                  )}
                 </span>
                 {excluindoSalaId === s.id ? (
                   <span className="sr-confirmar">
@@ -938,6 +1042,12 @@ export default function SalaReuniao() {
             <input className="campo" type="text" value={form.motivo}
               onChange={(e) => setForm({ ...form, motivo: e.target.value })}
               placeholder="Ex: Reunião comercial" />
+
+            <label className="rotulo">Telefone / WhatsApp de contato (opcional)</label>
+            <input className="campo" type="tel" inputMode="tel" autoComplete="off" value={form.telefone}
+              onChange={(e) => setForm({ ...form, telefone: formatarTelefone(e.target.value) })}
+              placeholder="(83) 99999-9999" />
+            <p className="sr-doc-dica">Aparece no contrato, junto com o motivo do evento.</p>
 
             {/* Pagamento: opcional na criação; depois, pela própria reserva */}
             {!form.editandoId && podeLancarPagamento && !pagamentosIndisponiveis && (
@@ -1200,74 +1310,168 @@ export default function SalaReuniao() {
                 Endereço/cidade do hotel incompletos — complete no aviso do topo da página para o contrato sair completo.
               </div>
             )}
-
-            <div className="contrato-folha">
-              <h3 style={{ textAlign: 'center', fontSize: 16, margin: '0 0 16px', letterSpacing: '0.06em' }}>
-                CONTRATO DE LOCAÇÃO
-              </h3>
-
-              <p>
-                Pelo presente instrumento, de um lado <strong>{hotel?.nome_fantasia || 'Hotel'}</strong>
-                {hotel?.documento ? <>, portador do CNPJ {hotel.documento}</> : null}
-                {hotel?.endereco ? <>, localizado na {hotel.endereco}{hotel?.cidade ? `, ${hotel.cidade}` : ''}</> : null},
-                aqui denominado de <strong>LOCADOR</strong>, e de outro{' '}
-                <strong>{contrato.responsavel}</strong>, portador(a) do CPF/CNPJ{' '}
-                {contrato.documento_locatario || '________________'}, aqui denominado(a) de{' '}
-                <strong>LOCATÁRIO(A)</strong>, têm acordado o presente contrato com as cláusulas abaixo.
-              </p>
-
-              <p>
-                <strong>1. OBJETO DO CONTRATO:</strong> Locação da {nomeDaSala(contrato.sala_id)} para
-                evento de {contrato.motivo || 'reunião'}, no dia {formatarData(contrato.data)}, das{' '}
-                {hora(contrato.hora_inicio)} às {hora(contrato.hora_fim)}.
-              </p>
-
-              <p>
-                <strong>2. VALOR DA LOCAÇÃO:</strong> Pela locação, será paga a importância de{' '}
-                <strong>{dinheiro(contrato.valor_locacao)}{Number(contrato.valor_locacao) > 0 ? ` (${valorPorExtenso(Number(contrato.valor_locacao))})` : ''}</strong>,
-                mediante pagamento antecipado.
-              </p>
-
-              <p>
-                <strong>3. DAS OBRIGAÇÕES DO LOCATÁRIO:</strong> O LOCATÁRIO se compromete a zelar pelo
-                espaço e pelos equipamentos disponibilizados, a devolvê-los nas mesmas condições em que
-                foram recebidos, e a responsabilizar-se por quaisquer danos causados durante o período
-                de uso.
-              </p>
-
-              <p>
-                <strong>4. DA RESCISÃO:</strong> O cancelamento da locação deverá ser comunicado com
-                antecedência mínima de 24 (vinte e quatro) horas. Em caso de não comparecimento sem
-                comunicação prévia, o valor pago não será devolvido.
-              </p>
-
-              <p>
-                <strong>5. DO FORO:</strong> Fica eleito o foro da comarca de{' '}
-                {hotel?.cidade || '[cidade não cadastrada]'} para dirimir quaisquer dúvidas oriundas
-                do presente contrato.
-              </p>
-
-              <p style={{ marginTop: 20 }}>
-                {hotel?.cidade || '[cidade não cadastrada]'}, {dataPorExtenso()}.
-              </p>
-
-              <div className="contrato-assinaturas">
-                <div>
-                  <div className="contrato-linha-ass"></div>
-                  <div style={{ fontWeight: 700 }}>{hotel?.nome_fantasia || 'Hotel'}</div>
-                  <div style={{ fontSize: 11, color: '#555' }}>LOCADOR</div>
-                </div>
-                <div>
-                  <div className="contrato-linha-ass"></div>
-                  <div style={{ fontWeight: 700 }}>{contrato.responsavel}</div>
-                  <div style={{ fontSize: 11, color: '#555' }}>LOCATÁRIO(A)</div>
-                </div>
+            {!salas.find((x) => x.id === contrato.sala_id)?.capacidade_pessoas && (
+              <div className="aviso-erro sr-nao-imprimir" style={{ fontSize: 13 }}>
+                A capacidade máxima desta sala ainda não está cadastrada, então o contrato sai com um espaço em branco
+                (“____ pessoas”).{' '}
+                {souAdmin ? 'Informe na aba “Salas”.' : 'Peça ao administrador para informar na aba “Salas”.'}
               </div>
-            </div>
+            )}
+
+            {(() => {
+              const sala = salas.find((x) => x.id === contrato.sala_id);
+              const capacidade = sala?.capacidade_pessoas;
+              const razaoSocial = hotel?.razao_social || hotel?.nome_fantasia || 'Hotel';
+              const cnpjHotel = hotel?.documento ? formatarDocumento(hotel.documento) : '________________';
+              const enderecoHotel = hotel?.endereco || '[endereço não cadastrado]';
+              const cidadeHotel = hotel?.cidade || '[cidade não cadastrada]';
+              const nomeLocatario = String(contrato.responsavel || '').toLocaleUpperCase('pt-BR');
+              const docLocatario = contrato.documento_locatario || '________________';
+              const valorLocacao = Number(contrato.valor_locacao) || 0;
+              const evento = contrato.motivo || 'reunião';
+              const contato = contrato.telefone_locatario ? ` - Contato/Ref: ${contrato.telefone_locatario}` : '';
+              return (
+                <div className="contrato-folha">
+                  <h3>CONTRATO DE LOCAÇÃO DE ESPAÇO PARA EVENTOS E SALA DE REUNIÃO</h3>
+
+                  <p>
+                    Pelo presente instrumento particular, de um lado <strong>{razaoSocial}</strong>, pessoa jurídica de
+                    direito privado, inscrita no CNPJ sob o nº {cnpjHotel}, com sede na {enderecoHotel}, {cidadeHotel},
+                    doravante denominado simplesmente <strong>LOCADOR</strong> e, de outro lado, <strong>{nomeLocatario}</strong>,
+                    inscrito(a) no CPF/CNPJ sob o nº {docLocatario}, doravante denominado(a) simplesmente{' '}
+                    <strong>LOCATÁRIO(A)</strong>, celebram o presente Contrato de Locação de Espaço, que se regerá pelas
+                    cláusulas e condições a seguir:
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA PRIMEIRA - DO OBJETO E DA CAPACIDADE</p>
+                  <p>
+                    O LOCADOR cede ao(à) LOCATÁRIO(A), a título de locação temporária, a {nomeDaSala(contrato.sala_id)} do
+                    hotel, para a realização do evento descrito como: {evento}{contato}, no dia {dataContrato(contrato.data)},
+                    estritamente no horário das {hora(contrato.hora_inicio)} às {hora(contrato.hora_fim)}.
+                  </p>
+                  <p>
+                    <strong>Parágrafo Único:</strong> Em obediência às normas do Corpo de Bombeiros e para garantir a
+                    segurança, a sala possui capacidade máxima de {capacidade || '______'} pessoas.
+                    O descumprimento deste limite autoriza o LOCADOR a impedir a entrada de excedentes ou a suspender o evento.
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA SEGUNDA - DO VALOR, FORMA DE PAGAMENTO E ARRAS</p>
+                  <p>
+                    Pela locação ora ajustada, o(a) LOCATÁRIO(A) pagará ao LOCADOR a quantia de{' '}
+                    <strong>{dinheiro(valorLocacao)} ({valorPorExtenso(valorLocacao)})</strong>. O pagamento deverá ser
+                    realizado de forma antecipada para garantir a reserva do espaço.
+                  </p>
+                  <p>
+                    <strong>Parágrafo Único:</strong> O valor antecipado tem expressa natureza de Arras/Sinal, nos termos dos
+                    Arts. 417 a 420 do Código Civil Brasileiro, servindo como princípio de pagamento e garantia de execução
+                    do contrato.
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA TERCEIRA - DA FINALIDADE DO EVENTO E INDEPENDÊNCIA DAS PARTES</p>
+                  <p>
+                    O LOCADOR atua exclusivamente como locador da infraestrutura física. Fica expressamente acordado que:
+                  </p>
+                  <p>
+                    a) Inexiste qualquer vínculo associativo, societário, de parceria ou responsabilidade solidária do
+                    LOCADOR quanto ao conteúdo, organização, produtos, serviços ou promessas oferecidas no evento pelo(a)
+                    LOCATÁRIO(A).
+                  </p>
+                  <p>
+                    b) O(A) LOCATÁRIO(A) assume integral e exclusiva responsabilidade civil e penal perante seus convidados e
+                    participantes, especialmente em eventuais casos de propagandas enganosas, fraudes ou promessas ilícitas.
+                  </p>
+                  <p>
+                    c) Constatada a utilização do espaço para fins ilícitos, imorais ou que violem os bons costumes e a
+                    ordem pública, o LOCADOR reserva-se o direito de rescindir o contrato imediatamente, interrompendo o
+                    evento e acionando as autoridades competentes, sem direito a reembolso ao LOCATÁRIO(A).
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA QUARTA - DA GUARDA DE BENS E CONTROLE DE ACESSO</p>
+                  <p>
+                    Durante o período de locação, a gestão e o controle de acesso de pessoas ao interior da Sala de Reunião
+                    são de responsabilidade exclusiva do(a) LOCATÁRIO(A).
+                  </p>
+                  <p>
+                    <strong>Parágrafo Único:</strong> O LOCADOR não presta serviço de guarda, depósito ou custódia de bens.
+                    Por não possuir gerência sobre os participantes convidados pelo(a) LOCATÁRIO(A), o LOCADOR não se
+                    responsabiliza por perdas, furtos ou danos a equipamentos (notebooks, celulares, etc.) e pertences
+                    pessoais ocorridos no interior da sala durante a realização do evento, cabendo ao(à) LOCATÁRIO(A)
+                    orientar seus convidados sobre a vigilância de seus próprios bens.
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA QUINTA - DA CONSERVAÇÃO E DOS DANOS AO PATRIMÔNIO</p>
+                  <p>
+                    O(A) LOCATÁRIO(A) declara receber o espaço e seus equipamentos em perfeito estado de conservação,
+                    conforme vistoria inicial.
+                  </p>
+                  <p>
+                    <strong>Parágrafo Único:</strong> O(A) LOCATÁRIO(A) obriga-se a reparar, de forma integral, qualquer dano
+                    material causado à estrutura física, mobiliário ou equipamentos do hotel, seja provocado por si próprio,
+                    por sua equipe ou por seus convidados (Arts. 186 e 927 do Código Civil). O ressarcimento ocorrerá
+                    mediante apresentação de orçamento ou nota fiscal pelo LOCADOR, com prazo de pagamento de até 5 (cinco)
+                    dias úteis.
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA SEXTA - DO HORÁRIO E DO SOSSEGO (LEI DO SILÊNCIO)</p>
+                  <p>O horário estipulado na Cláusula Primeira deve ser cumprido.</p>
+                  <p>
+                    a) A permanência na sala após o horário contratado implicará na cobrança de taxa extra de{' '}
+                    {dinheiro(TAXA_HORA_EXCEDENTE)} por hora ou fração de hora excedente.
+                  </p>
+                  <p>
+                    b) O evento deverá respeitar o direito ao sossego dos demais hóspedes do hotel (Art. 1.277 do Código
+                    Civil). O LOCADOR reserva-se o direito de exigir a imediata adequação do volume sonoro, podendo
+                    interromper o evento caso as advertências não sejam acatadas.
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA SÉTIMA - DA POLÍTICA DE CANCELAMENTO</p>
+                  <p>
+                    O cancelamento da locação pelo(a) LOCATÁRIO(A) deverá ser comunicado com antecedência mínima de 24
+                    (vinte e quatro) horas do horário de início do evento, situação em que haverá a devolução integral do
+                    valor ou sua conversão em crédito.
+                  </p>
+                  <p>
+                    <strong>Parágrafo Único:</strong> O cancelamento realizado com prazo inferior a 24 horas, ou o não
+                    comparecimento injustificado (no-show), implicará na retenção total do sinal pago (Cláusula Segunda), a
+                    título de indenização por lucros cessantes e bloqueio de agenda, conforme autoriza o Art. 418 do Código
+                    Civil.
+                  </p>
+
+                  <p className="contrato-clausula">CLÁUSULA OITAVA - DO FORO</p>
+                  <p>
+                    As partes elegem o foro da Comarca de {cidadeHotel} para dirimir quaisquer controvérsias oriundas deste
+                    contrato, ressalvada a prerrogativa legal do(a) LOCATÁRIO(A) de optar pelo foro de seu domicílio caso
+                    reste configurada relação de consumo e esta exigência dificulte o seu direito de defesa, nos estritos
+                    termos do Código de Defesa do Consumidor.
+                  </p>
+
+                  <p style={{ marginTop: 8 }}>
+                    E, por estarem assim justos e contratados, firmam o presente instrumento em 02 (duas) vias de igual teor
+                    e forma.
+                  </p>
+                  <p>{cidadeHotel}, {dataContrato(hojeFortaleza())}.</p>
+
+                  <div className="contrato-assinaturas">
+                    <div>
+                      <div className="contrato-linha-ass"></div>
+                      <div style={{ fontWeight: 700 }}>{razaoSocial}</div>
+                      <div>LOCADOR</div>
+                      <div>CNPJ: {cnpjHotel}</div>
+                    </div>
+                    <div>
+                      <div className="contrato-linha-ass"></div>
+                      <div style={{ fontWeight: 700 }}>{nomeLocatario}</div>
+                      <div>LOCATÁRIO(A)</div>
+                      <div>CPF/CNPJ: {docLocatario}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="sr-modal-botoes sr-nao-imprimir">
-              <button type="button" className="botao botao-principal" onClick={() => window.print()}>
-                🖨️ Imprimir Contrato
+              <button type="button" className="botao botao-principal" onClick={imprimirContrato}>
+                🖨️ Imprimir Contrato (1 folha A4)
               </button>
               <button type="button" className="botao botao-suave" onClick={() => setContrato(null)}>
                 Fechar
@@ -1486,6 +1690,9 @@ function EstilosSala() {
       .sr-sala-item { display: flex; align-items: center; gap: 12px; padding: 14px 16px; flex-wrap: wrap; }
       .sr-nova-sala { display: flex; gap: 8px; flex-wrap: wrap; }
       .sr-nova-sala .campo { width: auto; flex: 1; min-width: 200px; }
+      .sr-nova-sala .sr-capacidade { flex: 0 0 190px; min-width: 150px; }
+      .sr-capacidade-item { display: inline-flex; align-items: center; gap: 6px; }
+      .sr-capacidade-item .sr-capacidade { width: 110px; min-width: 0; }
       .sr-confirmar { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--erro-texto); flex-wrap: wrap; }
 
       .sr-log-acao {
@@ -1583,14 +1790,24 @@ function EstilosSala() {
 
       .contrato-folha {
         border: 1px solid var(--borda); border-radius: 12px; padding: 22px;
-        background: #FFFFFF; color: #1a1a1a; font-size: 12.5px; line-height: 1.7;
-        text-align: justify;
+        background: #FFFFFF; color: #1a1a1a; font-size: 13px; line-height: 1.5;
+        text-align: justify; font-family: 'Times New Roman', Times, serif;
       }
+      .contrato-folha h3 { text-align: center; font-size: 15px; margin: 0 0 14px; letter-spacing: 0.03em; }
+      .contrato-folha p { margin: 0 0 8px; }
+      .contrato-folha .contrato-clausula { margin-top: 14px; font-weight: 700; }
       .contrato-assinaturas {
         display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
-        margin-top: 56px; text-align: center;
+        margin-top: 56px; text-align: center; font-size: 0.92em;
       }
       .contrato-linha-ass { border-top: 1px solid #333; margin-bottom: 6px; }
+
+      /* Cópia invisível usada só para medir se o contrato cabe em 1 folha A4 */
+      .contrato-medida {
+        position: absolute !important; left: -10000px; top: 0; width: 190mm;
+        border: none; border-radius: 0; padding: 0; visibility: hidden;
+      }
+      ${regrasContratoA4('.contrato-medida')}
 
       @media (min-width: 640px) {
         .sr-duas { grid-template-columns: 1fr 1fr; }
@@ -1600,10 +1817,14 @@ function EstilosSala() {
       }
 
       /* Impressão: só o contrato ou o recibo aberto sai no papel */
+      @page { size: A4; margin: 10mm; }
       @media print {
         body * { visibility: hidden; }
         .contrato-folha, .contrato-folha *, .sr-recibo-folha, .sr-recibo-folha * { visibility: visible; }
+        .contrato-medida, .contrato-medida * { visibility: hidden !important; }
         .contrato-folha, .sr-recibo-folha { position: fixed; top: 0; left: 0; width: 100%; border: none; padding: 24px; }
+        .contrato-folha { padding: 0; border-radius: 0; }
+        ${regrasContratoA4('.contrato-folha')}
         .sr-nao-imprimir { display: none !important; }
       }
     `}</style>
