@@ -4,23 +4,39 @@
 // SALA DE REUNIÃO (com contrato de locação)
 // - Calendário semanal: linhas = salas, colunas = dias da semana, com
 //   navegação "← Semana anterior / Próxima semana →"
-// - Reserva com responsável, CPF/CNPJ, valor da locação e motivo
+// - Reserva com responsável, CPF/CNPJ (obrigatório e conferido de verdade),
+//   valor da locação e motivo
 // - Detecção de conflito de horário (vale também na edição)
 // - CONTRATO DE LOCAÇÃO abre automaticamente a cada reserva, imprimível,
 //   com LOCADOR (hotel) e LOCATÁRIO, cláusulas e assinaturas
+// - PAGAMENTOS da locação (opcionais): pode pagar tudo de uma vez ou em
+//   várias parcelas, em dias diferentes. Cada pagamento tem forma (Pix,
+//   dinheiro, cartão de crédito/débito), recibo numerado com reimpressão,
+//   e entra no Fechamento de Caixa do dia em que foi pago. Erro de
+//   lançamento não se apaga: o ADMIN anula (fica registrado quem e por quê).
 // - Busca de reservas; Salas gerenciadas pelo ADMIN; Log de auditoria
-//   imutável (Criou/Editou/Cancelou Reserva, Cadastrou/Excluiu Sala)
+//   imutável (Criou/Editou/Cancelou Reserva, Lançou/Anulou Pagamento...)
 // ============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { formatarDocumento, validarDocumento, mensagemErroDocumento } from '../../lib/validarDocumento';
 
 // ---- Constantes -------------------------------------------------------------
 
 const CORES_SALAS = ['#0E5A4E', '#1D4E89', '#A34E00', '#5B3A8E', '#8A6100', '#A31212'];
 const DIAS_SEMANA = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+const FUSO_HOTEL = 'America/Fortaleza';
+
+// Formas de pagamento aceitas (o código à esquerda é o que vai pro banco)
+const FORMAS_PAGAMENTO = {
+  PIX: 'Pix',
+  DINHEIRO: 'Dinheiro',
+  CARTAO_CREDITO: 'Cartão de crédito',
+  CARTAO_DEBITO: 'Cartão de débito',
+};
 const MESES = [
   'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
   'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
@@ -51,6 +67,18 @@ function hora(valor) {
   return String(valor || '').slice(0, 5); // "09:00:00" -> "09:00"
 }
 
+// "Hoje" no horário de Fortaleza/Paraíba, igual ao do servidor e do banco
+function hojeFortaleza() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: FUSO_HOTEL });
+}
+
+// 2026-10-08 -> "8 de outubro de 2026" (sem sofrer desvio de fuso)
+function dataISOPorExtenso(iso) {
+  const [ano, mes, dia] = String(iso || '').slice(0, 10).split('-').map(Number);
+  if (!ano) return '';
+  return `${dia} de ${MESES[mes - 1]} de ${ano}`;
+}
+
 function dataISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -68,62 +96,6 @@ function segundaDaSemana(deslocamento) {
 function dataPorExtenso(data) {
   const d = data ? new Date(data) : new Date();
   return `${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`;
-}
-
-// CPF (11) ou CNPJ (14) com formatação automática
-function formatarDocumento(texto) {
-  const d = String(texto || '').replace(/\D/g, '').slice(0, 14);
-  if (d.length <= 11) {
-    if (d.length <= 3) return d;
-    if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
-    if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
-    return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
-  }
-  return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
-}
-
-// Validação REAL de CPF (dígitos verificadores)
-function validarCPF(cpf) {
-  const d = String(cpf || '').replace(/\D/g, '');
-  if (d.length !== 11) return false;
-  if (/^(\d)\1{10}$/.test(d)) return false;
-  let soma = 0;
-  for (let i = 0; i < 9; i++) soma += Number(d[i]) * (10 - i);
-  let dv1 = (soma * 10) % 11;
-  if (dv1 === 10) dv1 = 0;
-  if (dv1 !== Number(d[9])) return false;
-  soma = 0;
-  for (let i = 0; i < 10; i++) soma += Number(d[i]) * (11 - i);
-  let dv2 = (soma * 10) % 11;
-  if (dv2 === 10) dv2 = 0;
-  return dv2 === Number(d[10]);
-}
-
-// Validação REAL de CNPJ (dígitos verificadores)
-function validarCNPJ(cnpj) {
-  const d = String(cnpj || '').replace(/\D/g, '');
-  if (d.length !== 14) return false;
-  if (/^(\d)\1{13}$/.test(d)) return false;
-  function calcularDV(base) {
-    const tamanho = base.length;
-    let pos = tamanho - 7;
-    let soma = 0;
-    for (let i = tamanho; i >= 1; i--) {
-      soma += Number(base.charAt(tamanho - i)) * pos--;
-      if (pos < 2) pos = 9;
-    }
-    const resto = soma % 11;
-    return resto < 2 ? 0 : 11 - resto;
-  }
-  if (calcularDV(d.substring(0, 12)) !== Number(d.charAt(12))) return false;
-  return calcularDV(d.substring(0, 13)) === Number(d.charAt(13));
-}
-
-function validarDocumento(texto) {
-  const d = String(texto || '').replace(/\D/g, '');
-  if (d.length === 11) return validarCPF(d);
-  if (d.length === 14) return validarCNPJ(d);
-  return null;
 }
 
 // Valor por extenso (mesma função validada no módulo Recibos)
@@ -177,7 +149,15 @@ function valorPorExtenso(valor) {
 const FORM_VAZIO = {
   editandoId: null, salaId: '', data: '', horaInicio: '09:00', horaFim: '10:00',
   responsavel: '', documento: '', valor: '', motivo: '',
+  pagValor: '', pagForma: '', // pagamento já na reserva (opcional)
 };
+
+const PAG_FORM_VAZIO = { valor: '', forma: '', data: '', observacao: '' };
+
+// Arredonda em 2 casas (evita 0,1 + 0,2 = 0,30000000000000004)
+function centavos(valor) {
+  return Math.round(Number(valor || 0) * 100) / 100;
+}
 
 // ---- Componente principal ---------------------------------------------------
 
@@ -210,6 +190,15 @@ export default function SalaReuniao() {
   const [contrato, setContrato] = useState(null);
   const [confirmCancelar, setConfirmCancelar] = useState(false);
 
+  // Pagamentos
+  const [pagamentos, setPagamentos] = useState([]);
+  const [pagamentosIndisponiveis, setPagamentosIndisponiveis] = useState('');
+  const [pagForm, setPagForm] = useState(null); // null = fechado
+  const [erroPag, setErroPag] = useState('');
+  const [reciboAberto, setReciboAberto] = useState(null); // { pagamento, reimpressao }
+  const [contratoDepois, setContratoDepois] = useState(null); // abre ao fechar o recibo
+  const [anulando, setAnulando] = useState(null); // { id, motivo }
+
   // Gestão de salas (admin)
   const [novaSalaNome, setNovaSalaNome] = useState('');
   const [excluindoSalaId, setExcluindoSalaId] = useState(null);
@@ -219,6 +208,7 @@ export default function SalaReuniao() {
   const [cidadeNova, setCidadeNova] = useState('');
 
   const souAdmin = usuario?.papel === 'ADMIN';
+  const podeLancarPagamento = usuario?.papel === 'ADMIN' || usuario?.papel === 'COLABORADOR';
 
   function mostrarAviso(texto) {
     setAviso(texto);
@@ -238,6 +228,24 @@ export default function SalaReuniao() {
   function nomeDaSala(salaId) {
     return salas.find((s) => s.id === salaId)?.nome || `Sala #${salaId}`;
   }
+
+  // ---- Resumo financeiro de uma reserva (só conta pagamento NÃO anulado) ----
+  function resumoPagamento(reserva) {
+    const total = centavos(reserva?.valor_locacao);
+    const lista = pagamentos.filter((p) => p.reserva_id === reserva?.id);
+    const ativos = lista.filter((p) => !p.anulado_em);
+    const pago = centavos(ativos.reduce((soma, p) => soma + Number(p.valor), 0));
+    const saldo = centavos(total - pago);
+    let status = 'SEM_PAGAMENTO';
+    if (total <= 0) status = 'SEM_VALOR';
+    else if (pago >= total) status = 'QUITADO';
+    else if (pago > 0) status = 'PARCIAL';
+    return { total, pago, saldo, status, lista };
+  }
+
+  const ROTULO_STATUS = {
+    QUITADO: 'Pago', PARCIAL: 'Parcial', SEM_PAGAMENTO: 'A pagar', SEM_VALOR: '',
+  };
 
   // ---- Login e carregamento ----
   useEffect(() => {
@@ -287,6 +295,21 @@ export default function SalaReuniao() {
     if (e1) setErro('Não foi possível carregar as reservas. Detalhe técnico: ' + e1.message);
     else setReservas(listaReservas || []);
 
+    const { data: listaPagamentos, error: e2 } = await supabase
+      .from('reservas_sala_pagamentos').select('*')
+      .order('data_pagamento', { ascending: true }).order('id', { ascending: true });
+    if (e2) {
+      setPagamentos([]);
+      setPagamentosIndisponiveis(
+        /does not exist|schema cache|relation/i.test(e2.message)
+          ? 'Os pagamentos da Sala de Reunião ainda não foram ativados no banco de dados (falta rodar o script SQL). As reservas funcionam normalmente.'
+          : 'Não foi possível carregar os pagamentos. Detalhe técnico: ' + e2.message
+      );
+    } else {
+      setPagamentos(listaPagamentos || []);
+      setPagamentosIndisponiveis('');
+    }
+
     if (u.papel === 'ADMIN') {
       const { data: ls } = await supabase
         .from('salas_reuniao_log').select('*')
@@ -299,6 +322,13 @@ export default function SalaReuniao() {
   useEffect(() => {
     if (usuario) carregarTudo(usuario);
   }, [usuario, carregarTudo]);
+
+  // Ao abrir/fechar o pop-up de uma reserva, limpa formulários de pagamento abertos
+  useEffect(() => {
+    setPagForm(null);
+    setAnulando(null);
+    setErroPag('');
+  }, [detalhe]);
 
   async function registrarLog(acao, detalhe) {
     await supabase.from('salas_reuniao_log').insert({
@@ -356,6 +386,7 @@ export default function SalaReuniao() {
       documento: r.documento_locatario || '',
       valor: r.valor_locacao || '',
       motivo: r.motivo || '',
+      pagValor: '', pagForma: '',
     });
   }
 
@@ -372,10 +403,27 @@ export default function SalaReuniao() {
       return;
     }
     if (!form.responsavel.trim()) { setErroForm('Informe o nome de quem vai usar a sala.'); return; }
-    if (form.documento.trim()) {
-      const documentoValido = validarDocumento(form.documento);
-      if (documentoValido === null) { setErroForm('O CPF/CNPJ está incompleto — confira os números.'); return; }
-      if (documentoValido === false) { setErroForm('O CPF/CNPJ digitado é inválido — confira os números.'); return; }
+    // CPF/CNPJ é obrigatório e precisa ser válido de verdade (dígitos verificadores)
+    const mensagemDocumento = mensagemErroDocumento(form.documento);
+    if (mensagemDocumento) { setErroForm(mensagemDocumento); return; }
+
+    const valorLocacao = centavos(form.valor);
+    if (form.editandoId) {
+      const jaPago = resumoPagamento({ id: form.editandoId, valor_locacao: 0 }).pago;
+      if (valorLocacao < jaPago) {
+        setErroForm(`O valor da locação não pode ser menor do que o já pago (${dinheiro(jaPago)}).`);
+        return;
+      }
+    }
+
+    // Pagamento já na criação da reserva (opcional)
+    const pagValor = centavos(form.pagValor);
+    const querPagarAgora = !form.editandoId && (String(form.pagValor).trim() !== '' || form.pagForma);
+    if (querPagarAgora) {
+      if (!(pagValor > 0)) { setErroForm('Informe o valor do pagamento (ou deixe os dois campos de pagamento vazios).'); return; }
+      if (!form.pagForma) { setErroForm('Escolha a forma de pagamento (Pix, dinheiro, cartão de crédito ou débito).'); return; }
+      if (!(valorLocacao > 0)) { setErroForm('Para lançar um pagamento, informe antes o valor da locação.'); return; }
+      if (pagValor > valorLocacao) { setErroForm(`O pagamento (${dinheiro(pagValor)}) não pode ser maior que o valor da locação (${dinheiro(valorLocacao)}).`); return; }
     }
 
     const conflito = verificarConflito(form.salaId, form.data, form.horaInicio, form.horaFim, form.editandoId);
@@ -393,13 +441,14 @@ export default function SalaReuniao() {
       hora_fim: form.horaFim,
       responsavel: form.responsavel.trim(),
       documento_locatario: form.documento.trim() || null,
-      valor_locacao: Number(form.valor) || 0,
+      valor_locacao: valorLocacao,
       motivo: form.motivo.trim() || null,
       hotel_id: usuario.hotel_id,
     };
 
     setSalvando(true);
     let salvo = null;
+    let pagamentoNovo = null;
     if (form.editandoId) {
       const { data, error } = await supabase
         .from('reservas_sala').update(registro).eq('id', form.editandoId).select().single();
@@ -416,18 +465,46 @@ export default function SalaReuniao() {
       await registrarLog('Criou Reserva',
         `${nomeDaSala(salvo.sala_id)} · ${formatarData(salvo.data)} ${hora(salvo.hora_inicio)}–${hora(salvo.hora_fim)} · Responsável: ${salvo.responsavel} · Valor: ${dinheiro(salvo.valor_locacao)}.`);
       mostrarAviso('Reserva criada! O contrato de locação foi aberto para impressão.');
+
+      if (querPagarAgora) {
+        const { data: pagNovo, error: erroPagNovo } = await supabase.rpc('lancar_pagamento_sala', {
+          p_reserva_id: salvo.id, p_valor: pagValor, p_forma: form.pagForma,
+          p_data: null, p_observacao: null,
+        });
+        if (erroPagNovo) {
+          setErro(`A reserva foi criada, mas o pagamento NÃO foi lançado: ${erroPagNovo.message} Abra a reserva e lance o pagamento por lá.`);
+        } else {
+          pagamentoNovo = pagNovo;
+          await registrarLog('Lançou Pagamento',
+            `${nomeDaSala(salvo.sala_id)} · ${formatarData(salvo.data)} · ${salvo.responsavel} · ${dinheiro(pagNovo.valor)} em ${FORMAS_PAGAMENTO[pagNovo.forma_pagamento]} · Recibo ${pagNovo.numero_recibo}.`);
+          mostrarAviso(`Reserva criada e pagamento lançado! Recibo ${pagNovo.numero_recibo} aberto para impressão.`);
+        }
+      }
     }
     setSalvando(false);
     setForm(null);
     await carregarTudo(usuario);
     if (!registro || !salvo) return;
-    // Contrato obrigatório: abre automaticamente para reservas novas
-    if (!form.editandoId) setContrato(salvo);
+    // Contrato obrigatório: abre automaticamente para reservas novas.
+    // Se houve pagamento, o recibo aparece primeiro e o contrato logo depois.
+    if (!form.editandoId) {
+      if (pagamentoNovo) {
+        setReciboAberto({ pagamento: pagamentoNovo, reimpressao: false });
+        setContratoDepois(salvo);
+      } else {
+        setContrato(salvo);
+      }
+    }
   }
 
   // ---- Cancelar reserva ----
   async function cancelarReserva() {
     if (!detalhe || salvando) return;
+    if (resumoPagamento(detalhe).pago > 0) {
+      setConfirmCancelar(false);
+      setErro('Esta reserva tem pagamento lançado e não pode ser cancelada. Peça ao administrador para anular o(s) pagamento(s) primeiro.');
+      return;
+    }
     setSalvando(true);
     const { error } = await supabase.from('reservas_sala').delete().eq('id', detalhe.id);
     setSalvando(false);
@@ -438,6 +515,80 @@ export default function SalaReuniao() {
     setConfirmCancelar(false);
     mostrarAviso('Reserva cancelada.');
     carregarTudo(usuario);
+  }
+
+  // ---- Pagamentos ----
+  function abrirLancarPagamento() {
+    const { saldo } = resumoPagamento(detalhe);
+    setErroPag('');
+    setPagForm({ ...PAG_FORM_VAZIO, valor: saldo > 0 ? String(saldo.toFixed(2)) : '', data: hojeFortaleza() });
+  }
+
+  async function lancarPagamento(evento) {
+    evento.preventDefault();
+    if (salvando || !pagForm || !detalhe) return;
+    setErroPag('');
+    const resumo = resumoPagamento(detalhe);
+    const valorPag = centavos(pagForm.valor);
+
+    if (!(resumo.total > 0)) { setErroPag('Esta reserva está sem valor de locação. Edite a reserva e informe o valor antes.'); return; }
+    if (!(valorPag > 0)) { setErroPag('Informe um valor de pagamento maior que zero.'); return; }
+    if (!pagForm.forma) { setErroPag('Escolha a forma de pagamento.'); return; }
+    if (valorPag > resumo.saldo) { setErroPag(`O valor (${dinheiro(valorPag)}) é maior que o saldo a pagar (${dinheiro(resumo.saldo)}).`); return; }
+    if (pagForm.data > hojeFortaleza()) { setErroPag('A data do pagamento não pode ser no futuro.'); return; }
+
+    setSalvando(true);
+    const { data: pagNovo, error } = await supabase.rpc('lancar_pagamento_sala', {
+      p_reserva_id: detalhe.id,
+      p_valor: valorPag,
+      p_forma: pagForm.forma,
+      // Colaborador sempre lança com a data de hoje; só o ADMIN escolhe outra
+      p_data: souAdmin ? pagForm.data : null,
+      p_observacao: pagForm.observacao.trim() || null,
+    });
+    setSalvando(false);
+    if (error) { setErroPag(error.message); return; }
+
+    await registrarLog('Lançou Pagamento',
+      `${nomeDaSala(detalhe.sala_id)} · ${formatarData(detalhe.data)} · ${detalhe.responsavel} · ${dinheiro(pagNovo.valor)} em ${FORMAS_PAGAMENTO[pagNovo.forma_pagamento]} · Recibo ${pagNovo.numero_recibo}.`);
+    setPagForm(null);
+    mostrarAviso(`Pagamento lançado! Recibo ${pagNovo.numero_recibo} aberto para impressão.`);
+    await carregarTudo(usuario);
+    setReciboAberto({ pagamento: pagNovo, reimpressao: false });
+  }
+
+  async function reimprimirRecibo(pagamento) {
+    const { data: atualizado, error } = await supabase.rpc('registrar_reimpressao_pagamento_sala', {
+      p_pagamento_id: pagamento.id,
+    });
+    if (error) { setErro('Não foi possível abrir a reimpressão. Detalhe técnico: ' + error.message); return; }
+    setPagamentos(pagamentos.map((p) => (p.id === atualizado.id ? atualizado : p)));
+    setReciboAberto({ pagamento: atualizado, reimpressao: true });
+  }
+
+  async function anularPagamento() {
+    if (!anulando || salvando) return;
+    if (anulando.motivo.trim().length < 3) { setErroPag('Informe o motivo da anulação.'); return; }
+    setSalvando(true);
+    const { data: anulado, error } = await supabase.rpc('anular_pagamento_sala', {
+      p_pagamento_id: anulando.id, p_motivo: anulando.motivo.trim(),
+    });
+    setSalvando(false);
+    if (error) { setErroPag(error.message); return; }
+    await registrarLog('Anulou Pagamento',
+      `Recibo ${anulado.numero_recibo} · ${dinheiro(anulado.valor)} em ${FORMAS_PAGAMENTO[anulado.forma_pagamento]} · ${anulado.pagador_nome} · Motivo: ${anulado.motivo_anulacao}.`);
+    setAnulando(null);
+    setErroPag('');
+    mostrarAviso(`Pagamento ${anulado.numero_recibo} anulado.`);
+    carregarTudo(usuario);
+  }
+
+  function fecharRecibo() {
+    setReciboAberto(null);
+    if (contratoDepois) {
+      setContrato(contratoDepois);
+      setContratoDepois(null);
+    }
   }
 
   // ---- Salas (admin) ----
@@ -515,6 +666,7 @@ export default function SalaReuniao() {
 
       {aviso && <div className="aviso-sucesso">{aviso}</div>}
       {erro && <div className="aviso-erro">{erro}</div>}
+      {pagamentosIndisponiveis && <div className="aviso-erro">{pagamentosIndisponiveis}</div>}
 
       {/* Dados do hotel faltando (aparecem no contrato) */}
       {faltaEndereco && (
@@ -583,6 +735,9 @@ export default function SalaReuniao() {
                     <span className="sr-bolinha" style={{ background: corDaSala(r.sala_id) }} />
                     {formatarData(r.data)} · {hora(r.hora_inicio)}–{hora(r.hora_fim)} · {nomeDaSala(r.sala_id)} · <strong>{r.responsavel}</strong>
                     {r.motivo ? ` · ${r.motivo}` : ''}
+                    {ROTULO_STATUS[resumoPagamento(r).status] && (
+                      <span className={`sr-status sr-status-${resumoPagamento(r).status}`}>{ROTULO_STATUS[resumoPagamento(r).status]}</span>
+                    )}
                   </button>
                 ))}
                 {resultadosBusca.length === 0 && (
@@ -632,6 +787,7 @@ export default function SalaReuniao() {
                       dias={diasDaSemana}
                       hojeISO={hojeISO}
                       reservas={reservas}
+                      statusDe={(r) => ROTULO_STATUS[resumoPagamento(r).status]}
                       aoClicarReserva={(r) => { setDetalhe(r); setConfirmCancelar(false); }}
                       aoCriar={(dataDia) => novaReserva(sala.id, dataDia)}
                     />
@@ -641,6 +797,9 @@ export default function SalaReuniao() {
 
               {/* Legenda */}
               <div className="sr-legenda">
+                <span className="sr-legenda-item" style={{ color: 'var(--texto-suave)' }}>
+                  Situação do pagamento em cada reserva: Pago · Parcial · A pagar
+                </span>
                 {salas.map((s) => (
                   <span key={s.id} className="sr-legenda-item">
                     <span className="sr-bolinha" style={{ background: corDaSala(s.id) }} /> {s.nome}
@@ -755,15 +914,17 @@ export default function SalaReuniao() {
 
             <div className="sr-duas">
               <div>
-                <label className="rotulo">CPF ou CNPJ</label>
-                <input className="campo" type="text" inputMode="numeric" value={form.documento}
+                <label className="rotulo">CPF ou CNPJ *</label>
+                <input className="campo" type="text" inputMode="text" autoCapitalize="characters"
+                  autoComplete="off" maxLength={18} value={form.documento}
                   onChange={(e) => setForm({ ...form, documento: formatarDocumento(e.target.value) })}
-                  placeholder="000.000.000-00" />
+                  placeholder="000.000.000-00" aria-required="true" />
                 {(() => {
-                  const status = form.documento.trim() ? validarDocumento(form.documento) : null;
+                  if (!form.documento.trim()) return <p className="sr-doc-dica">Obrigatório — vai no contrato e no recibo.</p>;
+                  const status = validarDocumento(form.documento);
                   if (status === true) return <p className="sr-doc-ok">✓ documento válido</p>;
-                  if (status === false) return <p className="sr-doc-erro">✗ documento inválido</p>;
-                  return null;
+                  if (status === false) return <p className="sr-doc-erro">✗ documento inválido — confira os números</p>;
+                  return <p className="sr-doc-dica">Continue digitando…</p>;
                 })()}
               </div>
               <div>
@@ -777,6 +938,43 @@ export default function SalaReuniao() {
             <input className="campo" type="text" value={form.motivo}
               onChange={(e) => setForm({ ...form, motivo: e.target.value })}
               placeholder="Ex: Reunião comercial" />
+
+            {/* Pagamento: opcional na criação; depois, pela própria reserva */}
+            {!form.editandoId && podeLancarPagamento && !pagamentosIndisponiveis && (
+              <div className="sr-pag-novo">
+                <strong>Pagamento (opcional)</strong>
+                <p className="texto-suave" style={{ fontSize: 12.5, margin: '2px 0 8px' }}>
+                  Se o cliente já vai pagar agora, informe aqui — o recibo sai na hora. Pode pagar tudo ou só uma parte;
+                  o restante é lançado depois, abrindo a reserva no calendário.
+                </p>
+                <div className="sr-duas">
+                  <div>
+                    <label className="rotulo" style={{ marginTop: 0 }}>Valor pago agora (R$)</label>
+                    <input className="campo" type="number" min="0" step="0.01" value={form.pagValor}
+                      onChange={(e) => setForm({ ...form, pagValor: e.target.value })} placeholder="0,00" />
+                  </div>
+                  <div>
+                    <label className="rotulo" style={{ marginTop: 0 }}>Forma de pagamento</label>
+                    <select className="campo" value={form.pagForma}
+                      onChange={(e) => setForm({ ...form, pagForma: e.target.value })}>
+                      <option value="">— escolha —</option>
+                      {Object.entries(FORMAS_PAGAMENTO).map(([codigo, nome]) => (
+                        <option key={codigo} value={codigo}>{nome}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+            {form.editandoId && (() => {
+              const r = resumoPagamento({ id: form.editandoId, valor_locacao: 0 });
+              return r.pago > 0 ? (
+                <p className="sr-doc-dica" style={{ marginTop: 10 }}>
+                  Já foram pagos {dinheiro(r.pago)} desta locação — o valor não pode ficar abaixo disso.
+                  Para lançar outro pagamento, feche esta tela e use “Lançar pagamento” na reserva.
+                </p>
+              ) : null;
+            })()}
 
             {erroForm && <div className="aviso-erro">{erroForm}</div>}
 
@@ -810,6 +1008,158 @@ export default function SalaReuniao() {
               <Linha rotulo="Motivo" valor={detalhe.motivo} />
               <Linha rotulo="Reservado por" valor={`${nomeDe(detalhe.criado_por_id)} em ${formatarDataHora(detalhe.criado_em)}`} />
             </div>
+
+            {/* ---------- PAGAMENTOS ---------- */}
+            {(() => {
+              const r = resumoPagamento(detalhe);
+              return (
+                <div className="sr-pag-bloco">
+                  <div className="sr-pag-topo">
+                    <strong style={{ fontSize: 15 }}>Pagamentos</strong>
+                    {ROTULO_STATUS[r.status] && (
+                      <span className={`sr-status sr-status-${r.status}`}>
+                        {r.status === 'QUITADO' ? 'Locação paga' : r.status === 'PARCIAL' ? 'Pago em parte' : 'Nada pago ainda'}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="sr-pag-resumo">
+                    <div><span>Valor da locação</span><strong>{dinheiro(r.total)}</strong></div>
+                    <div><span>Já pago</span><strong>{dinheiro(r.pago)}</strong></div>
+                    <div><span>Falta pagar</span><strong style={{ color: r.saldo > 0 ? 'var(--erro-texto)' : 'var(--sucesso-texto)' }}>{dinheiro(r.saldo)}</strong></div>
+                  </div>
+
+                  {pagamentosIndisponiveis ? (
+                    <p className="texto-suave" style={{ fontSize: 13 }}>Pagamentos indisponíveis (veja o aviso no topo da página).</p>
+                  ) : r.lista.length === 0 ? (
+                    <p className="texto-suave" style={{ fontSize: 13, margin: '8px 0' }}>
+                      Nenhum pagamento lançado para esta reserva.
+                    </p>
+                  ) : (
+                    <div className="sr-pag-lista">
+                      {r.lista.map((p) => (
+                        <div key={p.id} className={`sr-pag-item ${p.anulado_em ? 'sr-pag-anulado' : ''}`}>
+                          <div className="sr-pag-item-topo">
+                            <span>
+                              <strong>{dinheiro(p.valor)}</strong> · {FORMAS_PAGAMENTO[p.forma_pagamento] || p.forma_pagamento}
+                            </span>
+                            <span className="sr-pag-recibo">{p.numero_recibo}</span>
+                          </div>
+                          <div className="texto-suave" style={{ fontSize: 12.5 }}>
+                            Pago em {formatarData(p.data_pagamento)} · lançado por {nomeDe(p.criado_por_id)} em {formatarDataHora(p.criado_em)}
+                            {p.observacao ? ` · ${p.observacao}` : ''}
+                          </div>
+                          {p.reimpressoes > 0 && (
+                            <div className="texto-suave" style={{ fontSize: 12 }}>
+                              Recibo reimpresso {p.reimpressoes}x · última por {nomeDe(p.reimpresso_por_id)} em {formatarDataHora(p.reimpresso_em)}
+                            </div>
+                          )}
+                          {p.anulado_em && (
+                            <div className="sr-pag-anulado-aviso">
+                              ANULADO em {formatarDataHora(p.anulado_em)} por {nomeDe(p.anulado_por_id)} — {p.motivo_anulacao}
+                            </div>
+                          )}
+                          <div className="sr-pag-acoes">
+                            <button type="button" className="botao botao-suave" onClick={() => reimprimirRecibo(p)}>
+                              🖨️ Reimprimir recibo
+                            </button>
+                            {souAdmin && !p.anulado_em && anulando?.id !== p.id && (
+                              <button type="button" className="botao botao-suave"
+                                onClick={() => { setErroPag(''); setAnulando({ id: p.id, motivo: '' }); }}>
+                                Anular pagamento
+                              </button>
+                            )}
+                          </div>
+                          {anulando?.id === p.id && (
+                            <div className="sr-pag-anular-form">
+                              <label className="rotulo" style={{ marginTop: 0 }}>Motivo da anulação *</label>
+                              <input className="campo" type="text" value={anulando.motivo}
+                                onChange={(e) => setAnulando({ ...anulando, motivo: e.target.value })}
+                                placeholder="Ex.: valor digitado errado" />
+                              <div className="sr-modal-botoes" style={{ marginTop: 8 }}>
+                                <button type="button" className="botao botao-perigo" onClick={anularPagamento} disabled={salvando}>
+                                  {salvando ? 'Anulando…' : 'Confirmar anulação'}
+                                </button>
+                                <button type="button" className="botao botao-suave" onClick={() => { setAnulando(null); setErroPag(''); }}>
+                                  Voltar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {erroPag && !pagForm && <div className="aviso-erro" style={{ marginTop: 8 }}>{erroPag}</div>}
+
+                  {/* Lançar novo pagamento */}
+                  {podeLancarPagamento && !pagamentosIndisponiveis && !pagForm && r.status !== 'QUITADO' && (
+                    r.total > 0 ? (
+                      <button type="button" className="botao botao-principal" style={{ marginTop: 10 }} onClick={abrirLancarPagamento}>
+                        + Lançar pagamento
+                      </button>
+                    ) : (
+                      <p className="texto-suave" style={{ fontSize: 13, marginTop: 8 }}>
+                        Para lançar pagamento, edite a reserva e informe o valor da locação.
+                      </p>
+                    )
+                  )}
+
+                  {pagForm && (
+                    <form className="sr-pag-form" onSubmit={lancarPagamento}>
+                      <strong style={{ fontSize: 14 }}>Novo pagamento</strong>
+                      <div className="sr-duas">
+                        <div>
+                          <label className="rotulo">Valor (R$) *</label>
+                          <input className="campo" type="number" min="0" step="0.01" value={pagForm.valor}
+                            onChange={(e) => setPagForm({ ...pagForm, valor: e.target.value })} placeholder="0,00" />
+                        </div>
+                        <div>
+                          <label className="rotulo">Forma de pagamento *</label>
+                          <select className="campo" value={pagForm.forma}
+                            onChange={(e) => setPagForm({ ...pagForm, forma: e.target.value })}>
+                            <option value="">— escolha —</option>
+                            {Object.entries(FORMAS_PAGAMENTO).map(([codigo, nome]) => (
+                              <option key={codigo} value={codigo}>{nome}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="sr-duas">
+                        <div>
+                          <label className="rotulo">Data do pagamento</label>
+                          {souAdmin ? (
+                            <input className="campo" type="date" value={pagForm.data} max={hojeFortaleza()}
+                              onChange={(e) => setPagForm({ ...pagForm, data: e.target.value })} />
+                          ) : (
+                            <input className="campo" type="text" value={`Hoje (${formatarData(pagForm.data)})`} disabled />
+                          )}
+                        </div>
+                        <div>
+                          <label className="rotulo">Observação (opcional)</label>
+                          <input className="campo" type="text" value={pagForm.observacao}
+                            onChange={(e) => setPagForm({ ...pagForm, observacao: e.target.value })}
+                            placeholder="Ex.: sinal de 50%" />
+                        </div>
+                      </div>
+                      <p className="texto-suave" style={{ fontSize: 12.5, margin: '8px 0 0' }}>
+                        Este valor entra no Fechamento de Caixa do dia {formatarData(souAdmin ? pagForm.data : hojeFortaleza())}, como “Sala de Reunião”.
+                      </p>
+                      {erroPag && <div className="aviso-erro" style={{ marginTop: 8 }}>{erroPag}</div>}
+                      <div className="sr-modal-botoes" style={{ marginTop: 10 }}>
+                        <button type="submit" className="botao botao-principal" disabled={salvando}>
+                          {salvando ? 'Lançando…' : 'Lançar e gerar recibo'}
+                        </button>
+                        <button type="button" className="botao botao-suave" onClick={() => { setPagForm(null); setErroPag(''); }}>
+                          Cancelar
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="sr-modal-botoes">
               <button type="button" className="botao botao-contorno" onClick={() => setContrato(detalhe)}>
@@ -926,12 +1276,107 @@ export default function SalaReuniao() {
           </div>
         </div>
       )}
+
+      {/* ================= RECIBO DE PAGAMENTO ================= */}
+      {reciboAberto && (() => {
+        const p = reciboAberto.pagamento;
+        const quitou = Number(p.saldo_apos) <= 0;
+        const tipoPagamento = quitou && Number(p.valor) >= Number(p.total_locacao)
+          ? 'pagamento integral' : quitou ? 'pagamento final (quitação)' : 'pagamento parcial';
+        return (
+          <div className="sr-overlay" role="dialog" aria-modal="true">
+            <div className="sr-modal" style={{ maxWidth: 700 }}>
+              <div className="sr-modal-topo sr-nao-imprimir">
+                <h2 style={{ fontSize: '1.15rem', margin: 0 }}>Recibo de pagamento</h2>
+                <button type="button" className="sr-fechar" onClick={fecharRecibo} aria-label="Fechar">✕</button>
+              </div>
+
+              <div className="sr-recibo-folha">
+                <div className="sr-recibo-cabecalho">
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 17 }}>{hotel?.nome_fantasia || 'Hotel'}</div>
+                    {hotel?.razao_social && <div style={{ fontSize: 11, color: '#555' }}>{hotel.razao_social}</div>}
+                    {hotel?.documento && <div style={{ fontSize: 11, color: '#555' }}>C.N.P.J: {hotel.documento}</div>}
+                  </div>
+                  <div className="sr-recibo-caixa">
+                    <div style={{ fontSize: 11, color: '#555' }}>RECIBO Nº</div>
+                    <div style={{ fontWeight: 700 }}>{p.numero_recibo}</div>
+                    <div style={{ fontSize: 11, color: '#555', marginTop: 6 }}>VALOR</div>
+                    <div style={{ fontWeight: 700 }}>{dinheiro(p.valor)}</div>
+                  </div>
+                </div>
+
+                <h3 style={{ textAlign: 'center', margin: '18px 0 14px', fontSize: 15, letterSpacing: '0.08em' }}>
+                  RECIBO DE PAGAMENTO — SALA DE REUNIÃO
+                </h3>
+
+                {p.anulado_em && (
+                  <div className="sr-recibo-anulado">
+                    RECIBO ANULADO em {formatarDataHora(p.anulado_em)} — {p.motivo_anulacao}. Não tem valor como comprovante.
+                  </div>
+                )}
+
+                <p style={{ fontSize: 13, lineHeight: 1.8, textAlign: 'justify' }}>
+                  Recebemos de <strong>{p.pagador_nome}</strong>
+                  {p.pagador_documento ? <>, C.P.F/C.N.P.J nº <strong>{p.pagador_documento}</strong></> : null}, a importância de{' '}
+                  <strong>{dinheiro(p.valor)} ({valorPorExtenso(Number(p.valor))})</strong>, referente a{' '}
+                  <strong>{tipoPagamento}</strong> da locação da <strong>{p.sala_nome || 'Sala de Reunião'}</strong>
+                  {p.data_reserva ? <>, no dia <strong>{formatarData(p.data_reserva)}</strong>
+                  {p.hora_inicio ? <>, das <strong>{p.hora_inicio}</strong> às <strong>{p.hora_fim}</strong></> : null}</> : null},
+                  paga por meio de <strong>{FORMAS_PAGAMENTO[p.forma_pagamento] || p.forma_pagamento}</strong> em{' '}
+                  <strong>{formatarData(p.data_pagamento)}</strong>.
+                </p>
+
+                <table className="sr-recibo-tabela">
+                  <tbody>
+                    <tr><td>Valor total da locação</td><td>{dinheiro(p.total_locacao)}</td></tr>
+                    <tr><td>Valor deste pagamento</td><td>{dinheiro(p.valor)}</td></tr>
+                    <tr>
+                      <td><strong>{quitou ? 'Situação' : 'Saldo restante a pagar'}</strong></td>
+                      <td><strong>{quitou ? 'Locação totalmente paga' : dinheiro(p.saldo_apos)}</strong></td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                {p.observacao && <p style={{ fontSize: 12.5 }}>Observação: {p.observacao}</p>}
+
+                <p style={{ fontSize: 13, marginTop: 20 }}>
+                  {hotel?.cidade || '[cidade não cadastrada]'}, {dataISOPorExtenso(p.data_pagamento)}.
+                </p>
+
+                <div style={{ marginTop: 48, textAlign: 'center' }}>
+                  <div style={{ borderTop: '1px solid #333', width: '70%', margin: '0 auto', paddingTop: 6 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{hotel?.nome_fantasia || 'Hotel'}</div>
+                    <div style={{ fontSize: 11, color: '#555' }}>
+                      C.N.P.J: {hotel?.documento || '________________________'}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 10.5, color: '#666', marginTop: 18, textAlign: 'center' }}>
+                  Emitido por {nomeDe(p.criado_por_id)} em {formatarDataHora(p.criado_em)}
+                  {reciboAberto.reimpressao ? ` · REIMPRESSÃO em ${formatarDataHora(p.reimpresso_em)} por ${nomeDe(p.reimpresso_por_id)}` : ''}
+                </div>
+              </div>
+
+              <div className="sr-modal-botoes sr-nao-imprimir">
+                <button type="button" className="botao botao-principal" onClick={() => window.print()}>
+                  🖨️ Imprimir recibo
+                </button>
+                <button type="button" className="botao botao-suave" onClick={fecharRecibo}>
+                  {contratoDepois ? 'Fechar e ver o contrato' : 'Fechar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </main>
   );
 }
 
 // Linha da grade para uma sala (nome + 7 células de dias)
-function FragmentoLinhaSala({ sala, cor, dias, hojeISO, reservas, aoClicarReserva, aoCriar }) {
+function FragmentoLinhaSala({ sala, cor, dias, hojeISO, reservas, statusDe, aoClicarReserva, aoCriar }) {
   return (
     <>
       <div className="sr-celula sr-sala-nome">
@@ -950,6 +1395,7 @@ function FragmentoLinhaSala({ sala, cor, dias, hojeISO, reservas, aoClicarReserv
                 onClick={() => aoClicarReserva(r)}>
                 {String(r.hora_inicio).slice(0, 5)}–{String(r.hora_fim).slice(0, 5)}
                 <span className="sr-bloco-nome">{r.responsavel}</span>
+                {statusDe(r) && <span className="sr-bloco-pago">{statusDe(r)}</span>}
               </button>
             ))}
             <button type="button" className="sr-mais" onClick={() => aoCriar(dia)} aria-label={`Reservar ${sala.nome} em ${dia}`}>
@@ -1066,6 +1512,69 @@ function EstilosSala() {
       .sr-tres { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
       .sr-doc-ok { color: var(--sucesso-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
       .sr-doc-erro { color: var(--erro-texto); font-weight: 700; font-size: 13px; margin: 6px 0 0; }
+      .sr-doc-dica { color: var(--texto-suave); font-size: 12.5px; margin: 6px 0 0; }
+
+      .sr-bloco-pago {
+        display: inline-block; margin-top: 2px; font-size: 10px; font-weight: 700;
+        background: rgba(255,255,255,0.25); border-radius: 999px; padding: 0 7px;
+      }
+      .sr-status {
+        display: inline-block; font-size: 11.5px; font-weight: 700; border-radius: 999px;
+        padding: 2px 9px; margin-left: 8px;
+      }
+      .sr-status-QUITADO { background: var(--sucesso-fundo, #DDF1E4); color: var(--sucesso-texto); }
+      .sr-status-PARCIAL { background: #F4ECD7; color: var(--latao-texto, #8A6100); }
+      .sr-status-SEM_PAGAMENTO { background: var(--erro-fundo, #FBE3E3); color: var(--erro-texto); }
+
+      .sr-pag-novo {
+        margin-top: 14px; padding: 12px 14px; border: 1px solid var(--borda);
+        border-radius: 12px; background: var(--fundo);
+      }
+      .sr-pag-bloco {
+        margin-top: 16px; padding: 14px; border: 1px solid var(--borda);
+        border-radius: 12px; background: var(--fundo);
+      }
+      .sr-pag-topo { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+      .sr-pag-resumo { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 10px 0; }
+      .sr-pag-resumo div {
+        background: var(--branco); border: 1px solid var(--borda); border-radius: 10px;
+        padding: 8px 10px; display: flex; flex-direction: column; gap: 2px;
+      }
+      .sr-pag-resumo span { font-size: 11.5px; color: var(--texto-suave); }
+      .sr-pag-resumo strong { font-size: 14px; }
+      .sr-pag-lista { display: flex; flex-direction: column; gap: 8px; }
+      .sr-pag-item {
+        background: var(--branco); border: 1px solid var(--borda); border-radius: 10px;
+        padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 14px;
+      }
+      .sr-pag-item-topo { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+      .sr-pag-recibo { font-size: 12px; font-weight: 700; color: var(--texto-suave); }
+      .sr-pag-anulado { opacity: 0.85; }
+      .sr-pag-anulado .sr-pag-item-topo { text-decoration: line-through; color: var(--erro-texto); }
+      .sr-pag-anulado-aviso {
+        font-size: 12.5px; font-weight: 700; color: var(--erro-texto);
+        background: var(--erro-fundo, #FBE3E3); border-radius: 8px; padding: 5px 9px;
+      }
+      .sr-pag-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+      .sr-pag-anular-form { margin-top: 6px; }
+      .sr-pag-form { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--borda); }
+
+      .sr-recibo-folha {
+        border: 1px solid var(--borda); border-radius: 12px; padding: 22px;
+        background: #FFFFFF; color: #1a1a1a;
+      }
+      .sr-recibo-cabecalho { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+      .sr-recibo-caixa {
+        border: 1px solid #333; border-radius: 8px; padding: 8px 14px; text-align: center;
+        font-size: 14px; flex-shrink: 0;
+      }
+      .sr-recibo-tabela { width: 100%; border-collapse: collapse; margin: 14px 0 6px; font-size: 13px; }
+      .sr-recibo-tabela td { border: 1px solid #bbb; padding: 6px 10px; }
+      .sr-recibo-tabela td:last-child { text-align: right; white-space: nowrap; }
+      .sr-recibo-anulado {
+        border: 2px solid #A31212; color: #A31212; font-weight: 700; font-size: 12.5px;
+        border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; text-align: center;
+      }
 
       .sr-ficha { margin-top: 8px; }
       .sr-linha { display: flex; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px dashed var(--borda); font-size: 14px; }
@@ -1090,11 +1599,11 @@ function EstilosSala() {
         .sr-modal { max-width: 580px; border-radius: 18px; padding: 24px; }
       }
 
-      /* Impressão: só o contrato sai no papel */
+      /* Impressão: só o contrato ou o recibo aberto sai no papel */
       @media print {
         body * { visibility: hidden; }
-        .contrato-folha, .contrato-folha * { visibility: visible; }
-        .contrato-folha { position: fixed; top: 0; left: 0; width: 100%; border: none; padding: 24px; }
+        .contrato-folha, .contrato-folha *, .sr-recibo-folha, .sr-recibo-folha * { visibility: visible; }
+        .contrato-folha, .sr-recibo-folha { position: fixed; top: 0; left: 0; width: 100%; border: none; padding: 24px; }
         .sr-nao-imprimir { display: none !important; }
       }
     `}</style>
