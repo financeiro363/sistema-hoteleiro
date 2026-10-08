@@ -5,14 +5,17 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
+// "Hoje" e "ontem" sempre no horário de Fortaleza/Paraíba (UTC-3), igual
+// para a tela e para o servidor — assim os dois nunca discordam, não
+// importa o relógio de onde o código esteja rodando.
+const FUSO_HOTEL = 'America/Fortaleza';
 function hojeISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return new Date().toLocaleDateString('en-CA', { timeZone: FUSO_HOTEL });
 }
 function ontemISO() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const [a, m, d] = hojeISO().split('-').map(Number);
+  const ontem = new Date(Date.UTC(a, m - 1, d - 1));
+  return ontem.toISOString().slice(0, 10);
 }
 function dinheiro(v) { return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
 function formatarDataBR(iso) {
