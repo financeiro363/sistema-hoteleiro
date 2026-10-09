@@ -1376,7 +1376,7 @@ function EstilosDoModulo() {
       /* Modal de detalhe */
       .sol-fundo-modal {
         position: fixed; inset: 0; background: rgba(15, 25, 22, 0.45);
-        display: flex; align-items: flex-end; justify-content: center; z-index: 50;
+        display: flex; align-items: flex-end; justify-content: center; z-index: 80; /* acima do menu (60) e dos submenus (70) */
         padding: 0;
       }
       .sol-modal {
