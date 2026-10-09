@@ -183,6 +183,10 @@ function PainelFichas({ usuario, nomeHotel }) {
   useEffect(() => { carregar(); }, [carregar]);
 
   const [excluindoId, setExcluindoId] = useState(null);
+  // "Não exportar": ficha que está pedindo confirmação + motivo digitado
+  const [dispensandoId, setDispensandoId] = useState(null);
+  const [motivoDispensa, setMotivoDispensa] = useState('');
+  const [alterandoExportacao, setAlterandoExportacao] = useState(null);
 
   async function registrarLog(fichaId, acao, detalhe) {
     await supabase.from('fichas_fnrh_log').insert({
@@ -209,6 +213,40 @@ function PainelFichas({ usuario, nomeHotel }) {
       mostrarAviso(`Ficha de ${ficha.nome_completo} excluída.`);
     } catch (e) {
       setErro('Falha de conexão ao excluir. Tente novamente.');
+    }
+  }
+
+  // Marca a ficha como "não será exportada" (ou volta para a fila). A ficha
+  // NÃO é excluída — só deixa de contar como pendente no menu.
+  async function alterarDispensa(ficha, dispensar) {
+    setAlterandoExportacao(ficha.id);
+    setErro('');
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/fichas-dispensar-exportacao', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ fichaId: ficha.id, dispensar, motivo: dispensar ? motivoDispensa : '' }),
+      });
+      const resultado = await resposta.json().catch(() => ({}));
+      setAlterandoExportacao(null);
+      if (!resposta.ok || resultado.erro) { setErro(resultado.erro || 'Não foi possível salvar.'); return; }
+      setDispensandoId(null);
+      setMotivoDispensa('');
+      setFichas((lista) => lista.map((f) => f.id === ficha.id ? {
+        ...f,
+        exportacao_dispensada: dispensar,
+        dispensada_em: dispensar ? resultado.dispensada_em : null,
+        dispensada_motivo: dispensar ? resultado.dispensada_motivo : null,
+      } : f));
+      mostrarAviso(dispensar
+        ? `Ficha de ${ficha.nome_completo} marcada como "não será exportada". Ela continua na lista e não conta mais no menu.`
+        : `Ficha de ${ficha.nome_completo} voltou para a fila de exportação.`);
+      // Avisa o menu para atualizar o número de fichas pendentes
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('fichas-atualizadas'));
+    } catch (e) {
+      setAlterandoExportacao(null);
+      setErro('Falha de conexão. Tente novamente.');
     }
   }
 
@@ -243,7 +281,12 @@ function PainelFichas({ usuario, nomeHotel }) {
 
   const termo = busca.trim().toLowerCase();
   const filtradas = fichas
-    .filter((f) => filtroStatus === 'TODOS' ? true : f.status === filtroStatus)
+    .filter((f) => {
+      if (filtroStatus === 'TODOS') return true;
+      if (filtroStatus === 'PENDENTE') return f.status === 'PENDENTE' && !f.exportacao_dispensada;
+      if (filtroStatus === 'DISPENSADA') return f.status === 'PENDENTE' && f.exportacao_dispensada === true;
+      return f.status === filtroStatus;
+    })
     .filter((f) => !termo || f.nome_completo.toLowerCase().includes(termo) || f.numero_documento.toLowerCase().includes(termo));
 
   if (carregando) return <p className="texto-suave">Carregando…</p>;
@@ -259,6 +302,7 @@ function PainelFichas({ usuario, nomeHotel }) {
           <option value="TODOS">Todos os status</option>
           <option value="PENDENTE">Aguardando exportação</option>
           <option value="EXPORTADO">Já exportadas</option>
+          <option value="DISPENSADA">Não serão exportadas</option>
         </select>
       </div>
 
@@ -271,8 +315,12 @@ function PainelFichas({ usuario, nomeHotel }) {
               <div className="fh-item-esq">
                 <div className="fh-item-topo">
                   <strong>{f.nome_completo}</strong>
-                  <span className="fh-badge" style={f.status === 'EXPORTADO' ? { background: '#DDF2E4', color: '#1E6B3C' } : { background: '#FDF3D7', color: '#8A6100' }}>
-                    {f.status === 'EXPORTADO' ? 'Exportada' : 'Aguardando exportação'}
+                  <span className="fh-badge" style={
+                    f.status === 'EXPORTADO' ? { background: '#DDF2E4', color: '#1E6B3C' }
+                      : f.exportacao_dispensada ? { background: '#E6E8E6', color: '#4A5551' }
+                        : { background: '#FDF3D7', color: '#8A6100' }
+                  }>
+                    {f.status === 'EXPORTADO' ? 'Exportada' : f.exportacao_dispensada ? 'Não será exportada' : 'Aguardando exportação'}
                   </span>
                   {souAdmin && (
                     excluindoId === f.id ? (
@@ -301,6 +349,12 @@ function PainelFichas({ usuario, nomeHotel }) {
                   Enviada em {formatarDataHora(f.criado_em)}
                   {f.status === 'EXPORTADO' && ` · Exportada para a reserva ${f.cloudbeds_reservation_id} em ${formatarDataHora(f.exportado_em)}`}
                 </div>
+                {f.status === 'PENDENTE' && f.exportacao_dispensada && (
+                  <div className="fh-nota-dispensada">
+                    Marcada como "não será exportada" em {formatarDataHora(f.dispensada_em)}
+                    {f.dispensada_motivo ? ` — motivo: ${f.dispensada_motivo}` : ''}
+                  </div>
+                )}
                 {souAdmin && (
                   <button type="button" className="fh-ver-mais" onClick={() => verDetalhes(f)}>
                     {fichaAberta === f.id ? 'Ver menos ▲' : 'Ver todos os dados ▼'}
@@ -312,16 +366,41 @@ function PainelFichas({ usuario, nomeHotel }) {
                 <button type="button" className="botao botao-contorno" onClick={() => clicarImprimir(f)} disabled={imprimindoDireto === f.id}>
                   {imprimindoDireto === f.id ? 'Preparando…' : '🖨️ Imprimir ficha'}
                 </button>
-                {f.status === 'PENDENTE' ? (
+                {f.status !== 'PENDENTE' ? (
+                  <span className="texto-suave" style={{ fontSize: 13 }}>✓ Já vinculada</span>
+                ) : f.exportacao_dispensada ? (
+                  <button type="button" className="botao botao-contorno" onClick={() => alterarDispensa(f, false)} disabled={alterandoExportacao === f.id}>
+                    {alterandoExportacao === f.id ? 'Salvando…' : '↩️ Voltar para a fila de exportação'}
+                  </button>
+                ) : (
                   <>
                     <input className="campo fh-input-reserva" type="text" placeholder="Nº da reserva Cloudbeds"
                       value={reservaPorFicha[f.id] || ''} onChange={(e) => setReservaPorFicha({ ...reservaPorFicha, [f.id]: e.target.value })} />
                     <button type="button" className="botao botao-principal" onClick={() => exportar(f)} disabled={exportando === f.id}>
                       {exportando === f.id ? 'Exportando…' : '☁️ Exportar para Cloudbeds'}
                     </button>
+                    {dispensandoId === f.id ? (
+                      <div className="fh-dispensa-caixa">
+                        <span style={{ fontSize: 13 }}>
+                          Não enviar esta ficha para a Cloudbeds? Ela <strong>não é excluída</strong> e você pode desfazer depois.
+                        </span>
+                        <input className="campo" type="text" maxLength={300} placeholder="Motivo (opcional)"
+                          aria-label="Motivo para não exportar"
+                          value={motivoDispensa} onChange={(e) => setMotivoDispensa(e.target.value)} />
+                        <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button type="button" className="botao botao-principal" onClick={() => alterarDispensa(f, true)} disabled={alterandoExportacao === f.id}>
+                            {alterandoExportacao === f.id ? 'Salvando…' : 'Sim, não exportar'}
+                          </button>
+                          <button type="button" className="botao botao-suave" onClick={() => { setDispensandoId(null); setMotivoDispensa(''); }}>Cancelar</button>
+                        </span>
+                      </div>
+                    ) : (
+                      <button type="button" className="fh-botao-dispensar" onClick={() => { setDispensandoId(f.id); setMotivoDispensa(''); }}
+                        title="Não vai ser enviada para a Cloudbeds: tira do aviso do menu, sem excluir a ficha">
+                        🚫 Não exportar
+                      </button>
+                    )}
                   </>
-                ) : (
-                  <span className="texto-suave" style={{ fontSize: 13 }}>✓ Já vinculada</span>
                 )}
               </div>
             </div>
@@ -535,8 +614,8 @@ function PainelLogFichas({ usuario }) {
     carregar();
   }, [usuario.hotel_id]);
 
-  const ACAO_LABEL = { VISUALIZACAO: 'Visualização', EXPORTACAO: 'Exportação para Cloudbeds', EXCLUSAO: 'Exclusão' };
-  const ACAO_COR = { VISUALIZACAO: '#1D4E89', EXPORTACAO: '#1E6B3C', EXCLUSAO: '#A31212' };
+  const ACAO_LABEL = { VISUALIZACAO: 'Visualização', EXPORTACAO: 'Exportação para Cloudbeds', EXCLUSAO: 'Exclusão', DISPENSA: 'Não exportar', REATIVACAO: 'Voltou para a fila' };
+  const ACAO_COR = { VISUALIZACAO: '#1D4E89', EXPORTACAO: '#1E6B3C', EXCLUSAO: '#A31212', DISPENSA: '#4A5551', REATIVACAO: '#8A6100' };
 
   if (carregando) return <p className="texto-suave">Carregando…</p>;
 
@@ -733,7 +812,11 @@ function EstilosFichasAdmin() {
       .fh-item-dir { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
       .fh-input-reserva { width: auto; min-width: 200px; }
       .fh-ver-mais { border: none; background: none; color: var(--marca); font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 0; text-align: left; }
-      .fh-foto-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 60; }
+      .fh-foto-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 80; }
+      .fh-nota-dispensada { font-size: 12px; color: #4A5551; background: #F0F2F0; border-radius: 8px; padding: 6px 10px; width: fit-content; max-width: 100%; }
+      .fh-botao-dispensar { border: none; background: none; color: var(--texto-suave); font-size: 13px; cursor: pointer; font-family: inherit; padding: 6px 8px; border-radius: 6px; min-height: 36px; }
+      .fh-botao-dispensar:hover { background: #E9ECE8; }
+      .fh-dispensa-caixa { display: flex; flex-direction: column; gap: 8px; background: var(--fundo); border: 1px solid var(--borda); border-radius: 10px; padding: 10px; max-width: 320px; }
       .fh-foto-modal { background: var(--branco); border-radius: 14px; padding: 16px; width: 100%; max-width: 760px; max-height: 92vh; overflow-y: auto; }
       .fh-foto-topo { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
       .fh-foto-fechar { border: none; background: none; font-size: 18px; cursor: pointer; }
