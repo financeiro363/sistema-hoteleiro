@@ -229,7 +229,8 @@ export default function CabecalhoSite() {
         headers: { Authorization: `Bearer ${sessaoAtual.session.access_token}` },
       });
       const resultado = await resposta.json();
-      const pendentes = (resultado.fichas || []).filter((f) => f.status === 'PENDENTE').length;
+      // Fichas marcadas como "não será exportada" não contam como pendentes
+      const pendentes = (resultado.fichas || []).filter((f) => f.status === 'PENDENTE' && !f.exportacao_dispensada).length;
       setContadorFichasPendentes(pendentes);
     } catch (e) {
       setContadorFichasPendentes(0);
@@ -276,6 +277,18 @@ export default function CabecalhoSite() {
       atualizarContadores(usuarioIdAtual, hotelIdAtual, papelUsuario);
     }, 60000);
     return () => clearInterval(id);
+  }, [usuarioIdAtual, hotelIdAtual, papelUsuario]);
+
+  // A tela de Fichas de Hóspedes avisa (evento 'fichas-atualizadas') quando
+  // uma ficha é marcada como "não será exportada" ou volta pra fila — assim o
+  // número do menu muda na hora, sem esperar o minuto da atualização.
+  useEffect(() => {
+    if (!usuarioIdAtual || !hotelIdAtual) return;
+    function aoAtualizarFichas() {
+      atualizarContadores(usuarioIdAtual, hotelIdAtual, papelUsuario);
+    }
+    window.addEventListener('fichas-atualizadas', aoAtualizarFichas);
+    return () => window.removeEventListener('fichas-atualizadas', aoAtualizarFichas);
   }, [usuarioIdAtual, hotelIdAtual, papelUsuario]);
 
   // Fecha o menu hambúrguer e o dropdown de categoria sempre que muda de
