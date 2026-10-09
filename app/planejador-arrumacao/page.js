@@ -520,7 +520,7 @@ function EstilosPlanejador() {
 
       .pa-overlay {
         position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex;
-        align-items: center; justify-content: center; padding: 16px; z-index: 50;
+        align-items: center; justify-content: center; padding: 16px; z-index: 80; /* acima do menu (60) */
       }
       .pa-modal { background: var(--branco); border-radius: 14px; padding: 20px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; }
       .pa-modal-topo { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
