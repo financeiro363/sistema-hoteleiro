@@ -28,6 +28,10 @@ function somenteCamposPermitidos(f) {
     criado_em: f.criado_em,
     cloudbeds_reservation_id: f.cloudbeds_reservation_id,
     exportado_em: f.exportado_em,
+    // "Não será exportada" (ficha dispensada) — não é dado pessoal
+    exportacao_dispensada: f.exportacao_dispensada === true,
+    dispensada_em: f.dispensada_em || null,
+    dispensada_motivo: f.dispensada_motivo || null,
   };
 }
 
