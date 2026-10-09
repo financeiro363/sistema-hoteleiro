@@ -3,7 +3,8 @@
 // ============================================================================
 // AGENDA TELEFÔNICA
 // - Exige login (senão manda para /login)
-// - Mostra e cadastra contatos apenas do hotel da pessoa logada
+// - Mostra, cadastra e EDITA contatos apenas do hotel da pessoa logada
+//   (o lápis no canto de cada contato abre o formulário já preenchido)
 // - A segurança de verdade está no banco (RLS); o filtro aqui é reforço
 // ============================================================================
 
@@ -44,6 +45,7 @@ export default function AgendaTelefonica() {
   const [telefone, setTelefone] = useState('');
   const [email, setEmail] = useState('');
   const [funcao, setFuncao] = useState('');
+  const [editandoId, setEditandoId] = useState(null); // null = cadastrando contato novo
   const [salvando, setSalvando] = useState(false);
   const [avisoSucesso, setAvisoSucesso] = useState('');
 
@@ -97,7 +99,40 @@ export default function AgendaTelefonica() {
     if (usuario?.hotel_id) carregarContatos(usuario.hotel_id);
   }, [usuario, carregarContatos]);
 
-  // Cadastrar novo contato
+  function limparFormulario() {
+    setNomeCompleto('');
+    setTelefone('');
+    setEmail('');
+    setFuncao('');
+    setEditandoId(null);
+  }
+
+  // Botão do topo: abre o formulário vazio (contato novo) ou fecha
+  function alternarFormulario() {
+    if (mostrarFormulario) {
+      setMostrarFormulario(false);
+      limparFormulario();
+    } else {
+      limparFormulario();
+      setMostrarFormulario(true);
+    }
+    setErro('');
+  }
+
+  // Lápis do contato: abre o formulário já preenchido com os dados dele
+  function editarContato(c) {
+    setErro('');
+    setAvisoSucesso('');
+    setNomeCompleto(c.nome_completo || '');
+    setTelefone(formatarTelefoneBR(c.telefone || ''));
+    setEmail(c.email || '');
+    setFuncao(c.funcao || '');
+    setEditandoId(c.id);
+    setMostrarFormulario(true);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Salvar: contato novo OU alterações de um contato existente
   async function salvarContato(evento) {
     evento.preventDefault();
     if (salvando) return;
@@ -113,27 +148,43 @@ export default function AgendaTelefonica() {
       return;
     }
 
-    setSalvando(true);
-    const { error } = await supabase.from('agenda_telefonica').insert({
+    const dados = {
       nome_completo: nomeCompleto.trim(),
       telefone: telefone.trim(),
       email: email.trim() || null,
       funcao: funcao.trim() || null,
-      hotel_id: usuario.hotel_id,
-    });
+    };
+
+    setSalvando(true);
+    let erroSalvar = null;
+    if (editandoId) {
+      // .select() devolve as linhas alteradas: se vier vazio, o banco não deixou editar
+      const { data: alterados, error } = await supabase
+        .from('agenda_telefonica')
+        .update(dados)
+        .eq('id', editandoId)
+        .eq('hotel_id', usuario.hotel_id)
+        .select();
+      erroSalvar = error
+        ? 'Não foi possível salvar as alterações. Detalhe técnico: ' + error.message
+        : (alterados || []).length === 0
+          ? 'O banco de dados não permitiu alterar este contato (falta rodar o script SQL de edição da agenda).'
+          : null;
+    } else {
+      const { error } = await supabase.from('agenda_telefonica').insert({ ...dados, hotel_id: usuario.hotel_id });
+      erroSalvar = error ? 'Não foi possível salvar o contato. Detalhe técnico: ' + error.message : null;
+    }
     setSalvando(false);
 
-    if (error) {
-      setErro('Não foi possível salvar o contato. Detalhe técnico: ' + error.message);
+    if (erroSalvar) {
+      setErro(erroSalvar);
       return;
     }
 
-    setNomeCompleto('');
-    setTelefone('');
-    setEmail('');
-    setFuncao('');
+    const foiEdicao = !!editandoId;
+    limparFormulario();
     setMostrarFormulario(false);
-    setAvisoSucesso('Contato salvo com sucesso!');
+    setAvisoSucesso(foiEdicao ? 'Contato atualizado com sucesso!' : 'Contato salvo com sucesso!');
     setTimeout(() => setAvisoSucesso(''), 4000);
     carregarContatos(usuario.hotel_id);
   }
@@ -166,7 +217,7 @@ export default function AgendaTelefonica() {
         <button
           type="button"
           className="botao botao-principal"
-          onClick={() => setMostrarFormulario(!mostrarFormulario)}
+          onClick={alternarFormulario}
         >
           {mostrarFormulario ? 'Fechar formulário' : '+ Novo contato'}
         </button>
@@ -178,7 +229,9 @@ export default function AgendaTelefonica() {
       {/* Formulário de cadastro */}
       {mostrarFormulario && (
         <form className="cartao" style={{ marginBottom: 20 }} onSubmit={salvarContato}>
-          <h2 style={{ fontSize: '1.2rem', marginBottom: 4 }}>Novo contato</h2>
+          <h2 style={{ fontSize: '1.2rem', marginBottom: 4 }}>
+            {editandoId ? 'Editar contato' : 'Novo contato'}
+          </h2>
 
           <label className="rotulo" htmlFor="contato-nome">Nome completo *</label>
           <input
@@ -227,8 +280,18 @@ export default function AgendaTelefonica() {
             disabled={salvando}
             style={{ marginTop: 18 }}
           >
-            {salvando ? 'Salvando…' : 'Salvar contato'}
+            {salvando ? 'Salvando…' : editandoId ? 'Salvar alterações' : 'Salvar contato'}
           </button>
+          {editandoId && (
+            <button
+              type="button"
+              className="botao botao-suave"
+              onClick={alternarFormulario}
+              style={{ marginTop: 18, marginLeft: 10 }}
+            >
+              Cancelar
+            </button>
+          )}
         </form>
       )}
 
@@ -255,8 +318,28 @@ export default function AgendaTelefonica() {
       ) : (
         <div className="grade-contatos">
           {contatosFiltrados.map((c) => (
-            <div key={c.id} className="contato-cartao">
-              <div className="contato-nome">{c.nome_completo}</div>
+            <div
+              key={c.id}
+              className="contato-cartao"
+              style={{
+                position: 'relative',
+                ...(editandoId === c.id ? { outline: '2px solid var(--marca)' } : null),
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => editarContato(c)}
+                title="Editar contato"
+                aria-label={`Editar contato ${c.nome_completo}`}
+                style={{
+                  position: 'absolute', top: 8, right: 8, width: 40, height: 40,
+                  border: '1px solid var(--borda)', borderRadius: 999, background: 'var(--branco)',
+                  cursor: 'pointer', fontSize: 16, lineHeight: 1,
+                }}
+              >
+                ✏️
+              </button>
+              <div className="contato-nome" style={{ paddingRight: 44 }}>{c.nome_completo}</div>
               {c.funcao && <span className="contato-funcao">{c.funcao}</span>}
               <div className="contato-linha">
                 📞 <a href={`tel:${(c.telefone || '').replace(/[^\d+]/g, '')}`}>{c.telefone}</a>
