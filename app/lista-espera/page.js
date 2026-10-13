@@ -14,6 +14,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Funções de apoio -------------------------------------------------------
 
@@ -155,12 +156,12 @@ export default function ListaEspera() {
   const carregarRegistros = useCallback(async (hotelId) => {
     setCarregando(true);
     setErro('');
-    const { data, error } = await supabase
+    const { data, error } = await buscarTodos(() => supabase
       .from('lista_espera')
       .select('*')
       .eq('hotel_id', hotelId)
       .order('data_checkin', { ascending: true })
-      .order('data_solicitacao', { ascending: true });
+      .order('data_solicitacao', { ascending: true }));
 
     if (error) {
       setErro('Não foi possível carregar a lista de espera. Detalhe técnico: ' + error.message);
