@@ -17,6 +17,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes (mesmos rótulos do protótipo) -------------------------------
 
@@ -198,17 +199,17 @@ export default function CreditosDevolucoes() {
       if (admin) setAdminHotel({ nome: admin.nome, email: admin.email });
     }
 
-    const { data: cs, error: e1 } = await supabase
+    const { data: cs, error: e1 } = await buscarTodos(() => supabase
       .from('creditos_hospedes')
       .select('*')
-      .order('criado_em', { ascending: false });
+      .order('criado_em', { ascending: false }));
     if (e1) setErro('Não foi possível carregar os créditos. Detalhe técnico: ' + e1.message);
     else setCreditos(cs || []);
 
-    const { data: ds, error: e2 } = await supabase
+    const { data: ds, error: e2 } = await buscarTodos(() => supabase
       .from('devolucoes')
       .select('*')
-      .order('criado_em', { ascending: false });
+      .order('criado_em', { ascending: false }));
     if (e2) setErro('Não foi possível carregar as devoluções. Detalhe técnico: ' + e2.message);
     else setDevolucoes(ds || []);
 
