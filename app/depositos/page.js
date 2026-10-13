@@ -18,6 +18,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes (mesmas do protótipo) ---------------------------------------
 
@@ -242,11 +243,11 @@ export default function DepositosBancarios() {
       setNomesUsuarios(mapa);
     }
 
-    const { data: lista, error: e1 } = await supabase
+    const { data: lista, error: e1 } = await buscarTodos(() => supabase
       .from('depositos')
       .select('*')
       .order('data_deposito', { ascending: false })
-      .order('criado_em', { ascending: false });
+      .order('criado_em', { ascending: false }));
     if (e1) setErro('Não foi possível carregar os depósitos. Detalhe técnico: ' + e1.message);
     else setDepositos(lista || []);
 
