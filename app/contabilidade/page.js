@@ -16,6 +16,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { buscarTodos } from '../../lib/buscarTodos';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 
 // ---- Constantes -------------------------------------------------------------
@@ -119,11 +120,13 @@ export default function Contabilidade() {
     setCarregando(true);
     setErro('');
     const [l, e, pessoas] = await Promise.all([
-      supabase.from('contabilidade_lancamentos').select('*'),
-      supabase.from('contabilidade_extratos').select('*'),
+      // buscarTodos: passa do limite de 1.000 linhas por consulta do Supabase
+      buscarTodos(() => supabase.from('contabilidade_lancamentos').select('*')),
+      buscarTodos(() => supabase.from('contabilidade_extratos').select('*')),
       supabase.from('usuarios').select('id, nome').eq('hotel_id', u.hotel_id),
     ]);
     if (l.error) setErro('Não foi possível carregar. Detalhe técnico: ' + l.error.message);
+    else if (e.error) setErro('Não foi possível carregar os extratos. Detalhe técnico: ' + e.error.message);
     setLancamentos(l.data || []);
     setExtratos(e.data || []);
     if (pessoas.data) {
