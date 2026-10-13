@@ -16,6 +16,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -243,10 +244,10 @@ export default function Recibos() {
       .single();
     if (h) setHotel(h);
 
-    const { data: lista, error: e1 } = await supabase
+    const { data: lista, error: e1 } = await buscarTodos(() => supabase
       .from('recibos')
       .select('*')
-      .order('emitido_em', { ascending: false });
+      .order('emitido_em', { ascending: false }));
     if (e1) setErro('Não foi possível carregar os recibos. Detalhe técnico: ' + e1.message);
     else setRecibos(lista || []);
 
