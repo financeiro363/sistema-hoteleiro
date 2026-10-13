@@ -17,6 +17,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -174,8 +175,8 @@ export default function Estoque() {
       setNomesUsuarios(mapa);
     }
 
-    const { data: prods, error: e1 } = await supabase
-      .from('estoque_produtos').select('*').order('nome', { ascending: true });
+    const { data: prods, error: e1 } = await buscarTodos(() => supabase
+      .from('estoque_produtos').select('*').order('nome', { ascending: true }));
     if (e1) setErro('Não foi possível carregar os produtos. Detalhe técnico: ' + e1.message);
     else setProdutos(prods || []);
 
@@ -183,7 +184,7 @@ export default function Estoque() {
       .from('estoque_depositos').select('*').eq('hotel_id', u.hotel_id).order('nome', { ascending: true });
     setDepositos(deps || []);
 
-    const { data: sld } = await supabase.from('estoque_saldos').select('*').eq('hotel_id', u.hotel_id);
+    const { data: sld } = await buscarTodos(() => supabase.from('estoque_saldos').select('*').eq('hotel_id', u.hotel_id));
     setSaldos(sld || []);
 
     const { data: hist } = await supabase
@@ -229,7 +230,7 @@ export default function Estoque() {
   // Recalcula e grava o total do produto (soma de todos os depósitos) —
   // é essa coluna que a "Visão Geral" usa pra não ter que somar toda hora.
   async function recomputarTotalProduto(produtoId) {
-    const { data: linhas } = await supabase.from('estoque_saldos').select('quantidade').eq('produto_id', produtoId);
+    const { data: linhas } = await buscarTodos(() => supabase.from('estoque_saldos').select('quantidade').eq('produto_id', produtoId));
     const total = (linhas || []).reduce((s, l) => s + Number(l.quantidade), 0);
     await supabase.from('estoque_produtos').update({ quantidade: total }).eq('id', produtoId);
     return total;
