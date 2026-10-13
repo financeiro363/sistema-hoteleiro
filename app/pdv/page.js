@@ -10,6 +10,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 function formatarMoeda(valor) {
   return (Number(valor) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -234,7 +235,7 @@ function PainelVender({ usuario }) {
   }
 
   const carregarProdutos = useCallback(async () => {
-    const { data } = await supabase.from('pdv_produtos').select('*').eq('ativo', true).order('nome', { ascending: true });
+    const { data } = await buscarTodos(() => supabase.from('pdv_produtos').select('*').eq('ativo', true).order('nome', { ascending: true }));
     setProdutos(data || []);
   }, []);
 
@@ -398,9 +399,9 @@ function PainelVender({ usuario }) {
     });
 
     // 3) Detalhe venda a venda deste turno — pra "onde foram lançados" ficar visível na consulta.
-    const { data: itensDoTurno } = await supabase.from('pdv_venda_itens')
+    const { data: itensDoTurno } = await buscarTodos(() => supabase.from('pdv_venda_itens')
       .select('nome_produto, quantidade, subtotal, pdv_vendas!inner(turno_id, status)')
-      .eq('pdv_vendas.turno_id', turno.id).eq('pdv_vendas.status', 'CONCLUIDA');
+      .eq('pdv_vendas.turno_id', turno.id).eq('pdv_vendas.status', 'CONCLUIDA'));
     const mapaItens = {};
     (itensDoTurno || []).forEach((it) => {
       if (!mapaItens[it.nome_produto]) mapaItens[it.nome_produto] = { nome: it.nome_produto, quantidade: 0, total: 0 };
@@ -989,7 +990,7 @@ function PainelEstoque({ usuario }) {
 
   const carregar = useCallback(async () => {
     setCarregando(true);
-    const { data, error } = await supabase.from('pdv_produtos').select('*').order('nome', { ascending: true });
+    const { data, error } = await buscarTodos(() => supabase.from('pdv_produtos').select('*').order('nome', { ascending: true }));
     if (error) setErro('Não foi possível carregar. Detalhe técnico: ' + error.message);
     setProdutos(data || []);
     setCarregando(false);
@@ -1210,14 +1211,18 @@ function PainelRelatorios({ usuario }) {
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro('');
-    let consulta = supabase.from('pdv_venda_itens')
-      .select('produto_id, nome_produto, quantidade, preco_unitario, custo_unitario, subtotal, pdv_vendas!inner(status, criado_em, hotel_id)')
-      .eq('pdv_vendas.hotel_id', usuario.hotel_id)
-      .eq('pdv_vendas.status', 'CONCLUIDA');
-    if (dataInicio) consulta = consulta.gte('pdv_vendas.criado_em', dataInicio);
-    if (dataFim) consulta = consulta.lte('pdv_vendas.criado_em', dataFim + 'T23:59:59');
+    // Monta a consulta do zero a cada parte (buscarTodos passa do limite de 1.000 itens)
+    function montarConsulta() {
+      let consulta = supabase.from('pdv_venda_itens')
+        .select('produto_id, nome_produto, quantidade, preco_unitario, custo_unitario, subtotal, pdv_vendas!inner(status, criado_em, hotel_id)')
+        .eq('pdv_vendas.hotel_id', usuario.hotel_id)
+        .eq('pdv_vendas.status', 'CONCLUIDA');
+      if (dataInicio) consulta = consulta.gte('pdv_vendas.criado_em', dataInicio);
+      if (dataFim) consulta = consulta.lte('pdv_vendas.criado_em', dataFim + 'T23:59:59');
+      return consulta;
+    }
 
-    const { data, error } = await consulta;
+    const { data, error } = await buscarTodos(montarConsulta);
     if (error) { setErro('Não foi possível carregar. Detalhe técnico: ' + error.message); setCarregando(false); return; }
 
     // Agrupa por produto
@@ -1258,7 +1263,7 @@ function PainelRelatorios({ usuario }) {
     (async () => {
       const [{ data: pessoas }, { data: prods }] = await Promise.all([
         supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id).order('nome', { ascending: true }),
-        supabase.from('pdv_produtos').select('id, nome').order('nome', { ascending: true }),
+        buscarTodos(() => supabase.from('pdv_produtos').select('id, nome').order('nome', { ascending: true })),
       ]);
       setOperadores(pessoas || []);
       setProdutosLista(prods || []);
