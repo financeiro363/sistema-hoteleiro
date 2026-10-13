@@ -20,6 +20,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes (mesmas do protótipo) ---------------------------------------
 
@@ -169,12 +170,12 @@ export default function Lavanderia() {
       setNomesUsuarios(mapa);
     }
 
-    const { data: pecas } = await supabase
-      .from('lavanderia_catalogo').select('*').order('nome_peca', { ascending: true });
+    const { data: pecas } = await buscarTodos(() => supabase
+      .from('lavanderia_catalogo').select('*').order('nome_peca', { ascending: true }));
     setCatalogo(pecas || []);
 
-    const { data: listaLotes, error: e1 } = await supabase
-      .from('lavanderia_lotes').select('*').order('criado_em', { ascending: false });
+    const { data: listaLotes, error: e1 } = await buscarTodos(() => supabase
+      .from('lavanderia_lotes').select('*').order('criado_em', { ascending: false }));
     if (e1) setErro('Não foi possível carregar os lotes. Detalhe técnico: ' + e1.message);
     else setLotes(listaLotes || []);
 
