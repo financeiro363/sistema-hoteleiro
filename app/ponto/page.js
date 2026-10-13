@@ -22,6 +22,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ============================================================================
 // CONSTANTES DA CCT SINDHOTEL-PB
@@ -328,7 +329,7 @@ export default function Ponto() {
     setErro('');
     const [f, l, c, us] = await Promise.all([
       supabase.from('funcionarios').select('*').order('nome', { ascending: true }),
-      supabase.from('ponto_lancamentos').select('*').order('data', { ascending: false }),
+      buscarTodos(() => supabase.from('ponto_lancamentos').select('*').order('data', { ascending: false })),
       supabase.from('ponto_config').select('*').eq('hotel_id', u.hotel_id).maybeSingle(),
       supabase.from('usuarios').select('id, nome').eq('hotel_id', u.hotel_id).order('nome', { ascending: true }),
     ]);
