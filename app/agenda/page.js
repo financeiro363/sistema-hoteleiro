@@ -12,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // Telefone brasileiro: máscara ao vivo (fixo ou celular) + validação de DDD
 function formatarTelefoneBR(texto) {
@@ -81,11 +82,11 @@ export default function AgendaTelefonica() {
   const carregarContatos = useCallback(async (hotelId) => {
     setCarregando(true);
     setErro('');
-    const { data, error } = await supabase
+    const { data, error } = await buscarTodos(() => supabase
       .from('agenda_telefonica')
       .select('*')
       .eq('hotel_id', hotelId)
-      .order('nome_completo', { ascending: true });
+      .order('nome_completo', { ascending: true }));
 
     if (error) {
       setErro('Não foi possível carregar os contatos. Detalhe técnico: ' + error.message);
