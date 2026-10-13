@@ -12,6 +12,7 @@
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
+import { buscarTodos } from '../../../lib/buscarTodos';
 
 // Campos liberados pra quem NÃO é admin — só o essencial pra identificar o
 // hóspede e a estadia, mais o que é necessário pro fluxo de exportação
@@ -57,8 +58,8 @@ export async function GET(request) {
     if (erroChamador || !chamador) return Response.json({ erro: 'Não foi possível confirmar seu usuário.' }, { status: 403 });
 
     const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
-    const { data: fichas, error: erroFichas } = await supabaseAdmin
-      .from('fichas_fnrh').select('*').eq('hotel_id', chamador.hotel_id).order('criado_em', { ascending: false });
+    const { data: fichas, error: erroFichas } = await buscarTodos(() => supabaseAdmin
+      .from('fichas_fnrh').select('*').eq('hotel_id', chamador.hotel_id).order('criado_em', { ascending: false }));
     if (erroFichas) return Response.json({ erro: erroFichas.message }, { status: 500 });
 
     const ehAdmin = chamador.papel === 'ADMIN';
