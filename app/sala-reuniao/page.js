@@ -23,6 +23,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { formatarDocumento, validarDocumento, mensagemErroDocumento } from '../../lib/validarDocumento';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -326,15 +327,15 @@ export default function SalaReuniao() {
     }
     setSalas(listaSalas || []);
 
-    const { data: listaReservas, error: e1 } = await supabase
+    const { data: listaReservas, error: e1 } = await buscarTodos(() => supabase
       .from('reservas_sala').select('*')
-      .order('data', { ascending: true }).order('hora_inicio', { ascending: true });
+      .order('data', { ascending: true }).order('hora_inicio', { ascending: true }));
     if (e1) setErro('Não foi possível carregar as reservas. Detalhe técnico: ' + e1.message);
     else setReservas(listaReservas || []);
 
-    const { data: listaPagamentos, error: e2 } = await supabase
+    const { data: listaPagamentos, error: e2 } = await buscarTodos(() => supabase
       .from('reservas_sala_pagamentos').select('*')
-      .order('data_pagamento', { ascending: true }).order('id', { ascending: true });
+      .order('data_pagamento', { ascending: true }));  // buscarTodos já desempata pelo id
     if (e2) {
       setPagamentos([]);
       setPagamentosIndisponiveis(
