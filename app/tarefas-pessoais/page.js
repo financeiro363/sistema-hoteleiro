@@ -17,6 +17,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 export default function TarefasPessoais() {
   const router = useRouter();
@@ -67,9 +68,9 @@ export default function TarefasPessoais() {
     if (!alvoId) return;
     setCarregando(true);
     setErro('');
-    const { data, error } = await supabase.from('tarefas_pessoais')
+    const { data, error } = await buscarTodos(() => supabase.from('tarefas_pessoais')
       .select('*').eq('usuario_id', alvoId)
-      .order('concluida', { ascending: true }).order('criado_em', { ascending: true });
+      .order('concluida', { ascending: true }).order('criado_em', { ascending: true }));
     if (error) setErro('Não foi possível carregar as tarefas. Detalhe técnico: ' + error.message);
     else setTarefas(data || []);
     setCarregando(false);
