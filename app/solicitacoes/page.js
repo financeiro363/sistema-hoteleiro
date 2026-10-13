@@ -9,6 +9,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes de apoio ----------------------------------------------------
 
@@ -136,10 +137,10 @@ export default function PaginaSolicitacoes() {
   // ---- Carregamento de dados ------------------------------------------------
 
   const carregarTarefas = useCallback(async () => {
-    const { data, error } = await supabase
+    const { data, error } = await buscarTodos(() => supabase
       .from('tarefas')
       .select('*')
-      .order('data_atualizacao', { ascending: false });
+      .order('data_atualizacao', { ascending: false }));
     if (error) {
       setErroGeral('Não foi possível carregar as solicitações. Detalhe técnico: ' + error.message);
       return;
