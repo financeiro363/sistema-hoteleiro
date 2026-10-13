@@ -17,6 +17,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 const PRIORIDADE_LABEL = { BAIXA: 'Baixa', MEDIA: 'Média', ALTA: 'Alta' };
 const PRIORIDADE_COR = {
@@ -116,7 +117,7 @@ function VisaoAdmin({ usuario }) {
   const carregarTudo = useCallback(async () => {
     setCarregando(true);
     const [{ data: arr, error: erroArr }, { data: colegas }] = await Promise.all([
-      supabase.from('arrumacoes_planejadas').select('*').order('data', { ascending: true }),
+      buscarTodos(() => supabase.from('arrumacoes_planejadas').select('*').order('data', { ascending: true })),
       supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id).eq('papel', 'COLABORADOR').eq('ativo', true).order('nome'),
     ]);
     if (erroArr) setErro('Não foi possível carregar. Detalhe técnico: ' + erroArr.message);
@@ -394,10 +395,10 @@ function VisaoColaborador({ usuario }) {
 
   const carregarTudo = useCallback(async () => {
     setCarregando(true);
-    const { data, error } = await supabase
+    const { data, error } = await buscarTodos(() => supabase
       .from('arrumacoes_planejadas').select('*')
       .eq('responsavel_id', usuario.id).eq('data', hojeISO())
-      .order('prioridade', { ascending: false });
+      .order('prioridade', { ascending: false }));
     if (error) setErro('Não foi possível carregar. Detalhe técnico: ' + error.message);
     setArrumacoes(data || []);
     setCarregando(false);
