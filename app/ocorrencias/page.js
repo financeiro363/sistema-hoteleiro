@@ -17,6 +17,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes (mesmas do protótipo) ---------------------------------------
 
@@ -156,8 +157,8 @@ export default function Ocorrencias() {
       setNomesUsuarios(mapa);
     }
 
-    const { data: lista, error } = await supabase
-      .from('ocorrencias').select('*').order('registrado_em', { ascending: false });
+    const { data: lista, error } = await buscarTodos(() => supabase
+      .from('ocorrencias').select('*').order('registrado_em', { ascending: false }));
     if (error) setErro('Não foi possível carregar as ocorrências. Detalhe técnico: ' + error.message);
     else setOcorrencias(lista || []);
 
