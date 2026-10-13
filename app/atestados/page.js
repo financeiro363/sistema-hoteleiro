@@ -24,6 +24,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -186,7 +187,7 @@ function VisaoAdmin({ usuario, nomeHotel }) {
     if (mostrarCarregando) setCarregando(true);
     setErro('');
     const [a, f, u, l, h] = await Promise.all([
-      supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
+      buscarTodos(() => supabase.from('atestados').select('*').order('criado_em', { ascending: false })),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
       supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id),
       supabase.from('atestados_log').select('*').order('data_hora', { ascending: false }).limit(300),
@@ -287,7 +288,7 @@ function VisaoContador({ usuario }) {
   const carregarTudo = useCallback(async (mostrarCarregando = true) => {
     if (mostrarCarregando) setCarregando(true);
     const [a, f, u] = await Promise.all([
-      supabase.from('atestados').select('*').order('criado_em', { ascending: false }),
+      buscarTodos(() => supabase.from('atestados').select('*').order('criado_em', { ascending: false })),
       supabase.from('funcionarios').select('id, nome, matricula').order('nome', { ascending: true }),
       supabase.from('usuarios').select('id, nome').eq('hotel_id', usuario.hotel_id),
     ]);
