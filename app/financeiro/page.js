@@ -16,6 +16,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Funções de apoio -------------------------------------------------------
 
@@ -287,12 +288,12 @@ export default function Financeiro() {
     setCarregando(true);
     setErro('');
     const [c, f, cc, pc, cr, cp] = await Promise.all([
-      supabase.from('clientes').select('*').order('nome', { ascending: true }),
-      supabase.from('fornecedores').select('*').order('nome', { ascending: true }),
+      buscarTodos(() => supabase.from('clientes').select('*').order('nome', { ascending: true })),
+      buscarTodos(() => supabase.from('fornecedores').select('*').order('nome', { ascending: true })),
       supabase.from('centros_custo').select('*').order('nome', { ascending: true }),
       supabase.from('plano_contas').select('*').order('nome', { ascending: true }),
-      supabase.from('contas_receber').select('*').order('data_vencimento', { ascending: true }),
-      supabase.from('contas_pagar').select('*').order('data_vencimento', { ascending: true }),
+      buscarTodos(() => supabase.from('contas_receber').select('*').order('data_vencimento', { ascending: true })),
+      buscarTodos(() => supabase.from('contas_pagar').select('*').order('data_vencimento', { ascending: true })),
     ]);
     if (cr.error) setErro('Não foi possível carregar. Detalhe técnico: ' + cr.error.message);
     setClientes(c.data || []);
