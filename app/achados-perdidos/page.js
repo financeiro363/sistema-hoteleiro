@@ -16,6 +16,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import { buscarTodos } from '../../lib/buscarTodos';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -183,10 +184,10 @@ export default function AchadosPerdidos() {
       setNomesUsuarios(mapa);
     }
 
-    const { data: lista, error: e1 } = await supabase
+    const { data: lista, error: e1 } = await buscarTodos(() => supabase
       .from('achados_perdidos')
       .select('*')
-      .order('registrado_em', { ascending: false });
+      .order('registrado_em', { ascending: false }));
     if (e1) {
       setErro('Não foi possível carregar os itens. Detalhe técnico: ' + e1.message);
     } else {
