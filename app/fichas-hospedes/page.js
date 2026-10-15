@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { nomePais } from '../../lib/paises';
+import { rotuloRaca, rotuloNecessidade } from '../../lib/fnrhOpcoes';
 
 function formatarData(valor) {
   if (!valor) return '—';
@@ -272,7 +273,11 @@ function PainelFichas({ usuario, nomeHotel }) {
       setExportando(null);
       if (!resposta.ok || resultado.erro) { setErro(resultado.erro || 'Não foi possível exportar.'); return; }
       mostrarAviso(`Dados de ${ficha.nome_completo} exportados para a reserva ${reservationId} na Cloudbeds!`);
-      carregar();
+      // Recarrega a lista primeiro (ela limpa as mensagens) e só depois
+      // mostra o aviso dos campos do governo, se houver
+      await carregar();
+      const avisoGoverno = textoCamposGoverno(resultado.camposGoverno);
+      if (avisoGoverno) setErro(avisoGoverno);
     } catch (e) {
       setExportando(null);
       setErro('Falha de conexão com o servidor. Tente novamente.');
@@ -415,6 +420,27 @@ function PainelFichas({ usuario, nomeHotel }) {
   );
 }
 
+// Raça e necessidade especial (dados sensíveis — só o admin vê os detalhes)
+// Depois da exportação: avisa se Raça / Necessidade especial NÃO ficaram
+// gravadas nos campos do governo da Cloudbeds (os dados também vão na
+// anotação da reserva, então não se perdem).
+function textoCamposGoverno(cg) {
+  if (!cg) return '';
+  const faltando = [...(cg.naoConfirmados || []), ...(cg.naoEncontrados || [])];
+  if (faltando.length === 0) return '';
+  return `Atenção: a ficha foi exportada, mas a Cloudbeds não confirmou estes campos do governo: ${faltando.join(', ')}. `
+    + 'Eles foram registrados na anotação da reserva. Para corrigir de vez, use "Diagnóstico dos campos do governo" na aba Configurar Cloudbeds e envie o resultado para o suporte do sistema.';
+}
+
+function LinhaRacaNecessidade({ f }) {
+  return (
+    <div>
+      <strong>Raça:</strong> {rotuloRaca(f.raca) || '—'} · <strong>Necessidade especial:</strong> {rotuloNecessidade(f.possui_necessidade_especial) || '—'}
+      {f.possui_necessidade_especial === 'SIM' && f.necessidades_especiais && <> · <strong>Quais:</strong> {f.necessidades_especiais}</>}
+    </div>
+  );
+}
+
 function DetalhesFicha({ ficha: f }) {
   const [abrindoFoto, setAbrindoFoto] = useState(false);
   const [urlFoto, setUrlFoto] = useState('');
@@ -448,6 +474,7 @@ function DetalhesFicha({ ficha: f }) {
         <div><strong>Endereço residencial (país de procedência):</strong> {f.endereco || '—'}</div>
         <div><strong>Data de entrada no país:</strong> {formatarData(f.data_entrada_pais)} · <strong>Local de residência no Brasil:</strong> {f.local_residencia_brasil || '—'}</div>
         <div><strong>Tipo de viagem:</strong> {TIPO_VIAGEM_ESTRANGEIRO_LABEL[f.tipo_viagem_estrangeiro] || MOTIVO_LABEL[f.motivo_viagem] || '—'}</div>
+        <LinhaRacaNecessidade f={f} />
         <div>
           {f.foto_passaporte_caminho ? (
             <button type="button" className="botao botao-contorno" onClick={verFoto} disabled={abrindoFoto}>
@@ -481,6 +508,7 @@ function DetalhesFicha({ ficha: f }) {
     <div className="fh-detalhes">
       <div><strong>Nascimento:</strong> {formatarData(f.data_nascimento)} · <strong>Gênero:</strong> {f.genero || '—'}</div>
       <div><strong>Nacionalidade:</strong> {f.nacionalidade || '—'} · <strong>Profissão:</strong> {f.profissao || '—'}</div>
+          <LinhaRacaNecessidade f={f} />
       <div><strong>Órgão expedidor:</strong> {f.orgao_expedidor || '—'}</div>
       <div><strong>Endereço:</strong> {[f.endereco, f.numero_endereco, f.complemento].filter(Boolean).join(', ') || '—'}</div>
       <div><strong>Bairro/Cidade/UF:</strong> {[f.bairro, f.cidade, f.estado].filter(Boolean).join(' · ') || '—'} · <strong>CEP:</strong> {f.cep || '—'} · {f.pais || '—'}</div>
@@ -586,7 +614,75 @@ function PainelConfigCloudbeds() {
         🔒 Por segurança, a chave nunca aparece de volta na tela depois de salva — nem para o administrador.
         Se precisar trocar, é só colar uma nova aqui, ela substitui a anterior.
       </p>
+
+      {configurado && <DiagnosticoCamposGoverno />}
     </section>
+  );
+}
+
+// Mostra como a Cloudbeds guarda os campos do governo (Raça, Necessidade
+// especial...) dos hóspedes de uma reserva — só leitura, não altera nada.
+function DiagnosticoCamposGoverno() {
+  const [reserva, setReserva] = useState('');
+  const [consultando, setConsultando] = useState(false);
+  const [erroDiag, setErroDiag] = useState('');
+  const [resultado, setResultado] = useState(null);
+
+  async function consultar(evento) {
+    evento.preventDefault();
+    if (!reserva.trim() || consultando) return;
+    setConsultando(true); setErroDiag(''); setResultado(null);
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch(`/api/cloudbeds-diagnostico-hospede?reservationId=${encodeURIComponent(reserva.trim())}`, {
+        headers: { Authorization: `Bearer ${sessao.session.access_token}` },
+      });
+      const r = await resposta.json().catch(() => ({}));
+      if (!resposta.ok || r.erro) setErroDiag(r.erro || 'Não foi possível consultar.');
+      else setResultado(r);
+    } catch (e) { setErroDiag('Falha de conexão.'); }
+    setConsultando(false);
+  }
+
+  return (
+    <form className="cartao" onSubmit={consultar} style={{ marginTop: 16 }}>
+      <h2 style={{ fontSize: '1.1rem', marginBottom: 4 }}>🔎 Diagnóstico dos campos do governo</h2>
+      <p className="texto-suave" style={{ fontSize: 13 }}>
+        Mostra como a Cloudbeds guarda Raça, Necessidade especial, Motivo da viagem e Meio de transporte
+        de uma reserva. Para o melhor resultado: escolha uma reserva em que esses campos já foram
+        preenchidos <strong>manualmente na Cloudbeds</strong>. Só consulta — não altera nada.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input className="campo" style={{ flex: 1, minWidth: 180 }} type="text" placeholder="Nº da reserva Cloudbeds"
+          aria-label="Número da reserva para diagnóstico" value={reserva} onChange={(e) => setReserva(e.target.value)} />
+        <button type="submit" className="botao botao-contorno" disabled={consultando || !reserva.trim()}>
+          {consultando ? 'Consultando…' : 'Consultar'}
+        </button>
+      </div>
+      {erroDiag && <div className="aviso-erro" style={{ marginTop: 10 }}>{erroDiag}</div>}
+      {resultado && (
+        <div style={{ marginTop: 12 }}>
+          {resultado.hospedes.length === 0 && <p className="texto-suave">Nenhum hóspede encontrado nessa reserva.</p>}
+          {resultado.hospedes.map((h) => (
+            <div key={h.guestId} className="fh-detalhes" style={{ marginBottom: 10 }}>
+              <div><strong>{h.nome}</strong> · hóspede nº {h.guestId}{h.erroConsulta && <> · ⚠️ {h.erroConsulta}</>}</div>
+              <div>
+                <strong>Campos reconhecidos:</strong>{' '}
+                {h.reconhecidos.length === 0
+                  ? 'nenhum'
+                  : h.reconhecidos.map((v) => `${v.nosso} → "${v.nomeNaCloudbeds}" (${v.valorAtual === null || v.valorAtual === '' ? 'vazio' : JSON.stringify(v.valorAtual)})`).join(' · ')}
+              </div>
+              <div><strong>Campos do governo (como a Cloudbeds devolveu):</strong></div>
+              <pre className="fh-diag-json">{JSON.stringify(h.camposGoverno, null, 2) || 'null'}</pre>
+              {h.camposPersonalizados.length > 0 && (
+                <div><strong>Campos personalizados:</strong> {h.camposPersonalizados.map((c) => `${c.nome} (${c.id})`).join(' · ')}</div>
+              )}
+            </div>
+          ))}
+          <p className="texto-suave" style={{ fontSize: 12 }}>Tire um print desta tela e envie para o suporte do sistema.</p>
+        </div>
+      )}
+    </form>
   );
 }
 
@@ -827,6 +923,7 @@ function EstilosFichasAdmin() {
       }
       .fh-botao-excluir:hover { background: #FBDDDD; }
       .fh-confirmar-exclusao { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-left: auto; }
+      .fh-diag-json { background: #10201B; color: #DFF5EA; border-radius: 8px; padding: 10px; font-size: 12px; overflow-x: auto; max-height: 260px; margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
       .fh-detalhes { background: var(--fundo); border-radius: 10px; padding: 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 
       @media (min-width: 640px) {
