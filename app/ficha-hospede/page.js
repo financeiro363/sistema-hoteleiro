@@ -18,6 +18,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { PAISES_POR_NOME_EN, nomePais } from '../../lib/paises';
+import { RACAS, NECESSIDADE_ESPECIAL } from '../../lib/fnrhOpcoes';
 
 const GENEROS = ['Masculino', 'Feminino', 'Outro', 'Prefiro não informar'];
 const GENEROS_TRI = [
@@ -200,6 +201,10 @@ function FichaHospede() {
   const [dataEntradaPais, setDataEntradaPais] = useState('');
   const [localResidenciaBR, setLocalResidenciaBR] = useState('');
   const [tipoViagem, setTipoViagem] = useState('TURISMO');
+  // Raça e necessidade especial (FNRH) — valem para os dois formulários
+  const [raca, setRaca] = useState('');
+  const [possuiNecessidade, setPossuiNecessidade] = useState('');
+  const [necessidadesEspeciais, setNecessidadesEspeciais] = useState('');
   const [fotoArquivo, setFotoArquivo] = useState(null);
   const [fotoPrevia, setFotoPrevia] = useState('');
   const [processandoFoto, setProcessandoFoto] = useState(false);
@@ -293,6 +298,28 @@ function FichaHospede() {
     setProcessandoFoto(false);
   }
 
+  // Raça e necessidade especial, no formato do banco
+  function camposNecessidade() {
+    return {
+      raca,
+      possui_necessidade_especial: possuiNecessidade,
+      necessidades_especiais: possuiNecessidade === 'SIM' ? necessidadesEspeciais.trim() : null,
+    };
+  }
+
+  // Grava a ficha. Proteção: se o banco ainda não tiver as colunas novas
+  // (raça / necessidade especial — falta rodar o SQL), grava sem elas em
+  // vez de travar o hóspede na frente da tela com um erro.
+  async function inserirFicha(dados) {
+    const resultado = await supabase.from('fichas_fnrh').insert(dados);
+    const msg = resultado.error?.message || '';
+    if (resultado.error && /column/i.test(msg) && /raca|necessidade/i.test(msg)) {
+      const { raca: _r, possui_necessidade_especial: _p, necessidades_especiais: _n, ...semNovos } = dados;
+      return supabase.from('fichas_fnrh').insert(semNovos);
+    }
+    return resultado;
+  }
+
   // ------------------------------------------------------------------------
   // Envio — formulário de PASSAPORTE (estrangeiro)
   // ------------------------------------------------------------------------
@@ -304,6 +331,9 @@ function FichaHospede() {
     if (!dataNascimento) return falha('Informe sua data de nascimento. / Please enter your birth date.');
     if (dataNascimento >= hoje()) return falha('A data de nascimento precisa ser no passado. / The birth date must be in the past.');
     if (!email.trim()) return falha('Informe seu e-mail. / Please enter your e-mail.');
+    if (!raca) return falha('Selecione sua raça (ou "Prefiro não dizer"). / Please select your race (or "Prefer not to say").');
+    if (!possuiNecessidade) return falha('Informe se possui alguma necessidade especial. / Please tell us if you have any special needs.');
+    if (possuiNecessidade === 'SIM' && !necessidadesEspeciais.trim()) return falha('Descreva suas necessidades especiais. / Please describe your special needs.');
     if (!numeroDocumento.trim()) return falha('Informe o número do passaporte. / Please enter your passport number.');
     if (!paisExpedidor) return falha('Selecione o país que emitiu o passaporte. / Please select the country that issued your passport.');
     if (!validadeDocumento) return falha('Informe a validade do passaporte. / Please enter your passport expiry date.');
@@ -339,7 +369,7 @@ function FichaHospede() {
     // 2) Grava a ficha
     const nomePaisOrigem = nomePais(paisOrigem);
     const viagem = TIPOS_VIAGEM_ESTRANGEIRO.find((t) => t.valor === tipoViagem);
-    const { error } = await supabase.from('fichas_fnrh').insert({
+    const { error } = await inserirFicha({
       hotel_id: Number(hotelId),
       nome_completo: nomeCompleto.trim(), email: email.trim(), telefone: null,
       data_nascimento: dataNascimento, genero,
@@ -356,6 +386,7 @@ function FichaHospede() {
       pais_origem: paisOrigem, data_entrada_pais: dataEntradaPais,
       local_residencia_brasil: localResidenciaBR.trim(), tipo_viagem_estrangeiro: tipoViagem,
       foto_passaporte_caminho: caminhoFoto,
+      ...camposNecessidade(),
     });
     setEnviando(false);
 
@@ -374,6 +405,9 @@ function FichaHospede() {
     if (!genero) { setErroForm('Selecione seu gênero.'); return; }
     if (!nacionalidade.trim()) { setErroForm('Informe sua nacionalidade.'); return; }
     if (!profissao.trim()) { setErroForm('Informe sua profissão.'); return; }
+    if (!raca) { setErroForm('Selecione sua raça (ou "Prefiro não dizer").'); return; }
+    if (!possuiNecessidade) { setErroForm('Informe se possui alguma necessidade especial.'); return; }
+    if (possuiNecessidade === 'SIM' && !necessidadesEspeciais.trim()) { setErroForm('Descreva suas necessidades especiais.'); return; }
     if (!numeroDocumento.trim()) { setErroForm('Informe o número do documento.'); return; }
     if (!validarCPF(numeroDocumento)) {
       setErroForm('O CPF informado não é válido — confira os números.'); return;
@@ -397,7 +431,7 @@ function FichaHospede() {
     if (dataCheckout <= dataCheckin) { setErroForm('A data de check-out precisa ser pelo menos 1 dia depois do check-in.'); return; }
 
     setEnviando(true);
-    const { error } = await supabase.from('fichas_fnrh').insert({
+    const { error } = await inserirFicha({
       hotel_id: Number(hotelId),
       nome_completo: nomeCompleto.trim(), email: email.trim(), telefone: telefone.trim(),
       data_nascimento: dataNascimento || null, genero: genero || null,
@@ -412,6 +446,7 @@ function FichaHospede() {
       destino_pais: destinoPais.trim() || null, destino_estado: destinoEstado.trim() || null,
       destino_cidade: destinoCidade.trim() || null,
       data_checkin: dataCheckin, data_checkout: dataCheckout,
+      ...camposNecessidade(),
     });
     setEnviando(false);
 
@@ -526,6 +561,10 @@ function FichaHospede() {
               <RotuloTri pt="E-mail" obrigatorio />
               <input className="campo" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail" />
 
+              <CamposRacaNecessidade tri raca={raca} setRaca={setRaca}
+                possuiNecessidade={possuiNecessidade} setPossuiNecessidade={setPossuiNecessidade}
+                necessidadesEspeciais={necessidadesEspeciais} setNecessidadesEspeciais={setNecessidadesEspeciais} />
+
               <div className="fnrh-secao">Documento de viagem <span className="fnrh-tri">(Travel document) (Document de voyage)</span></div>
 
               <RotuloTri pt="Número do Documento de Viagem" en="Travel Document Number" fr="Le numéro de son document de voyage" obrigatorio />
@@ -637,6 +676,10 @@ function FichaHospede() {
                 </div>
               </div>
 
+              <CamposRacaNecessidade raca={raca} setRaca={setRaca}
+                possuiNecessidade={possuiNecessidade} setPossuiNecessidade={setPossuiNecessidade}
+                necessidadesEspeciais={necessidadesEspeciais} setNecessidadesEspeciais={setNecessidadesEspeciais} />
+
               <div className="fnrh-secao">Residência permanente</div>
               <div className="fnrh-duas">
                 <div>
@@ -733,6 +776,47 @@ function FichaHospede() {
         </form>
       </div>
     </main>
+  );
+}
+
+// Raça + "Possui uma necessidade especial?" + (se Sim) quais são.
+// "tri" = formulário do estrangeiro, com o texto também em inglês.
+function CamposRacaNecessidade({ tri, raca, setRaca, possuiNecessidade, setPossuiNecessidade, necessidadesEspeciais, setNecessidadesEspeciais }) {
+  const rotulo = (o) => (tri ? `${o.rotulo} (${o.en})` : o.rotulo);
+  return (
+    <>
+      <div className="fnrh-duas">
+        <div>
+          {tri
+            ? <RotuloTri pt="Raça" en="Race" fr="Race" obrigatorio />
+            : <label className="rotulo" htmlFor="fnrh-raca">Raça *</label>}
+          <select id="fnrh-raca" className="campo" value={raca} onChange={(e) => setRaca(e.target.value)}>
+            <option value="">{tri ? 'Escolha / Choose an option…' : 'Selecione…'}</option>
+            {RACAS.map((r) => <option key={r.valor} value={r.valor}>{rotulo(r)}</option>)}
+          </select>
+        </div>
+        <div>
+          {tri
+            ? <RotuloTri pt="Possui uma necessidade especial?" en="Do you have any special needs?" fr="Avez-vous des besoins particuliers ?" obrigatorio />
+            : <label className="rotulo" htmlFor="fnrh-possui-necessidade">Possui uma necessidade especial? *</label>}
+          <select id="fnrh-possui-necessidade" className="campo" value={possuiNecessidade}
+            onChange={(e) => { setPossuiNecessidade(e.target.value); if (e.target.value !== 'SIM') setNecessidadesEspeciais(''); }}>
+            <option value="">{tri ? 'Escolha / Choose an option…' : 'Selecione…'}</option>
+            {NECESSIDADE_ESPECIAL.map((n) => <option key={n.valor} value={n.valor}>{rotulo(n)}</option>)}
+          </select>
+        </div>
+      </div>
+      {possuiNecessidade === 'SIM' && (
+        <>
+          {tri
+            ? <RotuloTri pt="Necessidades especiais" en="Special needs" fr="Besoins particuliers" obrigatorio />
+            : <label className="rotulo" htmlFor="fnrh-necessidades">Necessidades especiais *</label>}
+          <input id="fnrh-necessidades" className="campo" type="text" maxLength={300} value={necessidadesEspeciais}
+            onChange={(e) => setNecessidadesEspeciais(e.target.value)}
+            placeholder={tri ? 'Ex.: cadeirante, deficiência visual… / e.g. wheelchair user, visual impairment…' : 'Ex.: cadeirante, deficiência visual, auditiva…'} />
+        </>
+      )}
+    </>
   );
 }
 
