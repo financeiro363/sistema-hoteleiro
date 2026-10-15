@@ -17,6 +17,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { descriptografar } from '../../../lib/cloudbedsCrypto';
 import { nomePais, paisValido } from '../../../lib/paises';
+import { rotuloRaca, rotuloNecessidade } from '../../../lib/fnrhOpcoes';
+import { montarRequisitos, conferirRequisitos, NOME_CAMPO_PT } from '../../../lib/cloudbedsRequisitos';
 
 const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 
@@ -80,6 +82,52 @@ function paraSiglaPais(nomePais) {
   // Já é uma sigla de 2 letras? usa direto (deixa maiúscula)
   if (/^[a-z]{2}$/i.test(chave)) return chave.toUpperCase();
   return PAIS_PARA_SIGLA[chave] || 'BR';
+}
+
+// ---- Campos do governo (guestRequirements) ---------------------------------
+// Lê o bloco de campos do governo de um hóspede na Cloudbeds.
+async function lerRequisitosHospede(guestId, cabecalhos) {
+  try {
+    const resposta = await fetch(
+      `${CLOUDBEDS_BASE_URL}/getGuest?guestID=${encodeURIComponent(guestId)}&includeGuestRequirements=true`,
+      { method: 'GET', headers: cabecalhos }
+    );
+    const dados = await resposta.json().catch(() => null);
+    if (!resposta.ok || dados?.success === false) return { ok: false, requisitos: null };
+    return { ok: true, requisitos: dados?.data?.guestRequirements ?? null };
+  } catch (e) {
+    return { ok: false, requisitos: null };
+  }
+}
+
+// Coloca o bloco no corpo do envio em dois formatos (texto JSON e com
+// colchetes numerados) — o mesmo reforço usado nos campos personalizados.
+function anexarRequisitos(corpo, envio) {
+  if (!envio) return;
+  corpo.set('guestRequirements', JSON.stringify(envio));
+  envio.forEach((item, indice) => {
+    Object.entries(item).forEach(([chave, valor]) => {
+      corpo.set(`guestRequirements[${indice}][${chave}]`, typeof valor === 'boolean' ? (valor ? 'true' : 'false') : String(valor));
+    });
+  });
+}
+
+// Resultado para a tela: o que gravou, o que não gravou e o que não foi
+// encontrado na Cloudbeds.
+function resumoCamposGoverno(ficha, montagem, conferencia, leituraOk) {
+  const esperados = ['raca', 'possuiNecessidade'];
+  if (ficha.possui_necessidade_especial === 'SIM') esperados.push('necessidades');
+  const tratados = new Set((montagem?.enviados || []).map((e) => e.campo));
+  const naoEncontrados = ficha.raca || ficha.possui_necessidade_especial
+    ? esperados.filter((c) => !tratados.has(c)).map((c) => NOME_CAMPO_PT[c])
+    : [];
+  return {
+    leituraOk,
+    gravados: (conferencia || []).filter((c) => c.ok).map((c) => NOME_CAMPO_PT[c.campo]),
+    naoConfirmados: (conferencia || []).filter((c) => !c.ok).map((c) => NOME_CAMPO_PT[c.campo]),
+    naoEncontrados,
+    tecnico: { enviados: montagem?.enviados || [], conferencia: conferencia || [] },
+  };
 }
 
 export async function POST(request) {
@@ -269,6 +317,10 @@ export async function POST(request) {
       gender: GENERO_CLOUDBEDS[ficha.genero] || '',
       guestGender: GENERO_CLOUDBEDS[ficha.genero] || '',
       guestNationality: siglaNacionalidade, nationality: siglaNacionalidade,
+      // "Número de Identificação Fiscal do Hóspede" na Cloudbeds = CPF
+      ...(ficha.tipo_documento === 'CPF' && ficha.numero_documento
+        ? { guestTaxId: String(ficha.numero_documento).replace(/\D/g, '') }
+        : {}),
     };
 
     const corpoGuest = new URLSearchParams(camposComuns);
@@ -282,6 +334,18 @@ export async function POST(request) {
       // ATUALIZAR o primeiro hóspede (o "placeholder" que já existe
       // desde que a reserva foi criada)
       corpoGuest.set('guestID', guestIdReal);
+    }
+
+    // Campos do governo (Raça, Necessidade especial...): lê como a Cloudbeds
+    // guarda esse hóspede e manda nos mesmos nomes. Hóspede adicional ainda
+    // não existe — para ele isso é feito no reforço, logo após a criação.
+    let montagemGoverno = null;
+    let leituraGovernoOk = false;
+    if (!ehHospedeAdicional) {
+      const leitura = await lerRequisitosHospede(guestIdReal, cabecalhosCloudbeds);
+      leituraGovernoOk = leitura.ok;
+      montagemGoverno = montarRequisitos(leitura.requisitos, ficha);
+      anexarRequisitos(corpoGuest, montagemGoverno.envio);
     }
 
     // Campos personalizados deste hotel — nomes/IDs exatos confirmados
@@ -326,6 +390,7 @@ export async function POST(request) {
     // segunda chamada de ATUALIZAÇÃO (putGuest) nesse mesmo hóspede
     // recém-criado, repetindo tudo — isso garante que os personalizados
     // realmente gravem.
+    let guestIdParaConferir = ehHospedeAdicional ? null : guestIdReal;
     if (ehHospedeAdicional) {
       const guestIdRecemCriado =
         dadosGuest?.data?.guestID || dadosGuest?.data?.newGuestID || dadosGuest?.guestID || dadosGuest?.newGuestID || null;
@@ -334,6 +399,11 @@ export async function POST(request) {
         corpoReforco.delete('reservationID');
         corpoReforco.delete('roomID');
         corpoReforco.set('guestID', guestIdRecemCriado);
+        const leitura = await lerRequisitosHospede(guestIdRecemCriado, cabecalhosCloudbeds);
+        leituraGovernoOk = leitura.ok;
+        montagemGoverno = montarRequisitos(leitura.requisitos, ficha);
+        anexarRequisitos(corpoReforco, montagemGoverno.envio);
+        guestIdParaConferir = guestIdRecemCriado;
         try {
           await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
             method: 'PUT',
@@ -343,6 +413,14 @@ export async function POST(request) {
         } catch (e) { /* melhor esforço — o hóspede já foi criado de qualquer forma */ }
       }
     }
+
+    // Confere, lendo de novo na Cloudbeds, se os campos do governo gravaram
+    let conferenciaGoverno = [];
+    if (guestIdParaConferir && montagemGoverno?.enviados?.length) {
+      const depois = await lerRequisitosHospede(guestIdParaConferir, cabecalhosCloudbeds);
+      conferenciaGoverno = conferirRequisitos(depois.requisitos, montagemGoverno.enviados);
+    }
+    const camposGoverno = resumoCamposGoverno(ficha, montagemGoverno, conferenciaGoverno, leituraGovernoOk);
 
     // Sucesso de verdade — segue em frente para marcar a ficha como
     // exportada (mais abaixo).
@@ -366,6 +444,9 @@ export async function POST(request) {
         ficha.profissao ? `Profissão: ${ficha.profissao}` : null,
         ficha.motivo_viagem ? `Motivo da viagem: ${ficha.motivo_viagem}` : null,
         ficha.meio_transporte ? `Meio de transporte: ${ficha.meio_transporte}` : null,
+        ficha.raca ? `Raça: ${rotuloRaca(ficha.raca)}` : null,
+        ficha.possui_necessidade_especial ? `Possui necessidade especial: ${rotuloNecessidade(ficha.possui_necessidade_especial)}` : null,
+        ficha.possui_necessidade_especial === 'SIM' && ficha.necessidades_especiais ? `Necessidades especiais: ${ficha.necessidades_especiais}` : null,
       ].filter(Boolean).join(' | ');
 
       await fetch(`${CLOUDBEDS_BASE_URL}/postReservationNote`, {
@@ -396,7 +477,7 @@ export async function POST(request) {
       });
     } catch (e) { /* silencioso */ }
 
-    return Response.json({ sucesso: true });
+    return Response.json({ sucesso: true, camposGoverno });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
   }
