@@ -13,7 +13,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { nomePais } from '../../lib/paises';
-import { rotuloRaca, rotuloNecessidade } from '../../lib/fnrhOpcoes';
+import { rotuloRaca, rotuloNecessidade, rotuloDeficiencia, rotuloMotivo, rotuloTransporte } from '../../lib/fnrhOpcoes';
 
 function formatarData(valor) {
   if (!valor) return '—';
@@ -27,7 +27,6 @@ function formatarDataHora(valor) {
   } catch (e) { return String(valor); }
 }
 
-const MOTIVO_LABEL = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
 const TIPO_VIAGEM_ESTRANGEIRO_LABEL = { TURISMO: 'Turismo', TRABALHO_NEGOCIOS: 'Trabalho ou Negócios', ESTUDO_CONGRESSO: 'Estudo ou congresso', OUTROS: 'Outros' };
 function rotuloTipoDocumento(tipo) {
   return { CPF: 'CPF', RG: 'RG', PASSAPORTE: 'Passaporte' }[tipo] || tipo || '—';
@@ -436,7 +435,7 @@ function LinhaRacaNecessidade({ f }) {
   return (
     <div>
       <strong>Raça:</strong> {rotuloRaca(f.raca) || '—'} · <strong>Necessidade especial:</strong> {rotuloNecessidade(f.possui_necessidade_especial) || '—'}
-      {f.possui_necessidade_especial === 'SIM' && f.necessidades_especiais && <> · <strong>Quais:</strong> {f.necessidades_especiais}</>}
+      {f.possui_necessidade_especial === 'SIM' && f.necessidades_especiais && <> · <strong>Quais:</strong> {rotuloDeficiencia(f.necessidades_especiais)}</>}
     </div>
   );
 }
@@ -473,7 +472,7 @@ function DetalhesFicha({ ficha: f }) {
         <div><strong>País de procedência:</strong> {nomePais(f.pais_origem) || f.procedencia_pais || '—'}</div>
         <div><strong>Endereço residencial (país de procedência):</strong> {f.endereco || '—'}</div>
         <div><strong>Data de entrada no país:</strong> {formatarData(f.data_entrada_pais)} · <strong>Local de residência no Brasil:</strong> {f.local_residencia_brasil || '—'}</div>
-        <div><strong>Tipo de viagem:</strong> {TIPO_VIAGEM_ESTRANGEIRO_LABEL[f.tipo_viagem_estrangeiro] || MOTIVO_LABEL[f.motivo_viagem] || '—'}</div>
+        <div><strong>Tipo de viagem:</strong> {TIPO_VIAGEM_ESTRANGEIRO_LABEL[f.tipo_viagem_estrangeiro] || rotuloMotivo(f.motivo_viagem) || '—'}</div>
         <LinhaRacaNecessidade f={f} />
         <div>
           {f.foto_passaporte_caminho ? (
@@ -512,7 +511,7 @@ function DetalhesFicha({ ficha: f }) {
       <div><strong>Órgão expedidor:</strong> {f.orgao_expedidor || '—'}</div>
       <div><strong>Endereço:</strong> {[f.endereco, f.numero_endereco, f.complemento].filter(Boolean).join(', ') || '—'}</div>
       <div><strong>Bairro/Cidade/UF:</strong> {[f.bairro, f.cidade, f.estado].filter(Boolean).join(' · ') || '—'} · <strong>CEP:</strong> {f.cep || '—'} · {f.pais || '—'}</div>
-      <div><strong>Motivo da viagem:</strong> {MOTIVO_LABEL[f.motivo_viagem] || '—'} · <strong>Transporte:</strong> {f.meio_transporte || '—'}</div>
+      <div><strong>Motivo da viagem:</strong> {rotuloMotivo(f.motivo_viagem) || '—'} · <strong>Transporte:</strong> {rotuloTransporte(f.meio_transporte) || '—'}</div>
       <div><strong>Procedência:</strong> {[f.procedencia_cidade, f.procedencia_estado, f.procedencia_pais].filter(Boolean).join(' - ') || '—'}</div>
       <div><strong>Destino:</strong> {[f.destino_cidade, f.destino_estado, f.destino_pais].filter(Boolean).join(' - ') || '—'}</div>
     </div>
