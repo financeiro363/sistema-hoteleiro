@@ -98,16 +98,44 @@ async function lerRequisitosHospede(guestId, cabecalhos) {
   }
 }
 
-// Coloca o bloco no corpo do envio em dois formatos (texto JSON e com
-// colchetes numerados) — o mesmo reforço usado nos campos personalizados.
-function anexarRequisitos(corpo, envio) {
-  if (!envio) return;
-  corpo.set('guestRequirements', JSON.stringify(envio));
-  envio.forEach((item, indice) => {
-    Object.entries(item).forEach(([chave, valor]) => {
-      corpo.set(`guestRequirements[${indice}][${chave}]`, typeof valor === 'boolean' ? (valor ? 'true' : 'false') : String(valor));
+// Formatos de envio do bloco dos campos do governo, na ordem em que são
+// tentados. A Cloudbeds recusou o formato "aninhado"
+// (guestRequirements[0][race]) com "Cannot convert 'Array' to string" —
+// ela espera cada campo direto: guestRequirements[race]=PARDA.
+// Se um formato for recusado, tenta o próximo; o último ("nenhum") manda
+// a ficha SEM os campos do governo, para a exportação nunca travar por
+// causa deles (os dados continuam na anotação da reserva).
+const FORMATOS_REQUISITOS = ['colchetes', 'json', 'nenhum'];
+
+// Devolve uma CÓPIA do corpo com o bloco no formato pedido
+function corpoComRequisitos(corpoBase, envio, formato) {
+  const corpo = new URLSearchParams(corpoBase);
+  const campos = envio?.[0];
+  if (!campos || formato === 'nenhum') return corpo;
+  if (formato === 'colchetes') {
+    Object.entries(campos).forEach(([chave, valor]) => corpo.set(`guestRequirements[${chave}]`, String(valor)));
+  } else if (formato === 'json') {
+    corpo.set('guestRequirements', JSON.stringify(campos));
+  }
+  return corpo;
+}
+
+// Envia para a Cloudbeds tentando os formatos em ordem. Devolve a última
+// resposta e qual formato foi aceito.
+async function enviarComRequisitos(url, metodo, cabecalhos, corpoBase, envio) {
+  const formatos = envio ? FORMATOS_REQUISITOS : ['nenhum'];
+  let ultima = null;
+  for (const formato of formatos) {
+    const resposta = await fetch(url, {
+      method: metodo,
+      headers: { ...cabecalhos, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: corpoComRequisitos(corpoBase, envio, formato).toString(),
     });
-  });
+    const dados = await resposta.json().catch(() => null);
+    ultima = { resposta, dados, formato };
+    if (resposta.ok && dados?.success !== false) return ultima;
+  }
+  return ultima;
 }
 
 // Consulta o CEP (ViaCEP) para descobrir a sigla do estado e o código IBGE
@@ -346,7 +374,6 @@ export async function POST(request) {
     // não existe — para ele isso é feito no reforço, logo após a criação.
     const enderecoCep = ehPassaporte ? {} : await consultarCep(ficha.cep);
     const montagemGoverno = montarRequisitos(ficha, enderecoCep);
-    if (!ehHospedeAdicional) anexarRequisitos(corpoGuest, montagemGoverno.envio);
 
     // Campos personalizados deste hotel — nomes/IDs exatos confirmados
     // via getCustomFields. Mandando em DOIS formatos possíveis: como
@@ -369,12 +396,16 @@ export async function POST(request) {
     });
 
     const metodoUsado = ehHospedeAdicional ? 'postGuest' : 'putGuest';
-    const respostaGuest = await fetch(`${CLOUDBEDS_BASE_URL}/${metodoUsado}`, {
-      method: ehHospedeAdicional ? 'POST' : 'PUT',
-      headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: corpoGuest.toString(),
-    });
-    const dadosGuest = await respostaGuest.json().catch(() => null);
+    // Primeiro hóspede: já vai com os campos do governo (tentando os formatos).
+    // Hóspede adicional: é criado primeiro, e os campos do governo vão no
+    // reforço logo abaixo (o hóspede precisa existir antes).
+    const envioPrincipal = await enviarComRequisitos(
+      `${CLOUDBEDS_BASE_URL}/${metodoUsado}`, ehHospedeAdicional ? 'POST' : 'PUT',
+      cabecalhosCloudbeds, corpoGuest, ehHospedeAdicional ? null : montagemGoverno.envio,
+    );
+    const respostaGuest = envioPrincipal.resposta;
+    const dadosGuest = envioPrincipal.dados;
+    let formatoRequisitos = ehHospedeAdicional ? null : envioPrincipal.formato;
     if (!respostaGuest.ok || dadosGuest?.success === false) {
       const mensagemCloudbeds = dadosGuest?.message || 'não foi possível salvar os dados do hóspede';
       const contexto = ehHospedeAdicional
@@ -399,14 +430,12 @@ export async function POST(request) {
         corpoReforco.delete('reservationID');
         corpoReforco.delete('roomID');
         corpoReforco.set('guestID', guestIdRecemCriado);
-        anexarRequisitos(corpoReforco, montagemGoverno.envio);
         guestIdParaConferir = guestIdRecemCriado;
         try {
-          await fetch(`${CLOUDBEDS_BASE_URL}/putGuest`, {
-            method: 'PUT',
-            headers: { ...cabecalhosCloudbeds, 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: corpoReforco.toString(),
-          });
+          const reforco = await enviarComRequisitos(
+            `${CLOUDBEDS_BASE_URL}/putGuest`, 'PUT', cabecalhosCloudbeds, corpoReforco, montagemGoverno.envio,
+          );
+          formatoRequisitos = reforco?.formato || null;
         } catch (e) { /* melhor esforço — o hóspede já foi criado de qualquer forma */ }
       }
     }
@@ -417,7 +446,7 @@ export async function POST(request) {
       const depois = await lerRequisitosHospede(guestIdParaConferir, cabecalhosCloudbeds);
       conferenciaGoverno = conferirRequisitos(depois.requisitos, montagemGoverno.enviados);
     }
-    const camposGoverno = resumoCamposGoverno(montagemGoverno, conferenciaGoverno);
+    const camposGoverno = { ...resumoCamposGoverno(montagemGoverno, conferenciaGoverno), formatoAceito: formatoRequisitos };
 
     // Sucesso de verdade — segue em frente para marcar a ficha como
     // exportada (mais abaixo).
