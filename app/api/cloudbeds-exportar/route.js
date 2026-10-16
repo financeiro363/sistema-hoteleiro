@@ -105,7 +105,6 @@ async function lerRequisitosHospede(guestId, cabecalhos) {
 // Se um formato for recusado, tenta o próximo; o último ("nenhum") manda
 // a ficha SEM os campos do governo, para a exportação nunca travar por
 // causa deles (os dados continuam na anotação da reserva).
-const FORMATOS_REQUISITOS = ['colchetes', 'json', 'nenhum'];
 
 // Devolve uma CÓPIA do corpo com o bloco no formato pedido
 function corpoComRequisitos(corpoBase, envio, formato) {
@@ -122,17 +121,33 @@ function corpoComRequisitos(corpoBase, envio, formato) {
 
 // Envia para a Cloudbeds tentando os formatos em ordem. Devolve a última
 // resposta e qual formato foi aceito.
+// Campos de documento dentro do bloco do governo — se a Cloudbeds recusar
+// por causa deles (ex.: exigir data de emissão), reenvia sem eles para não
+// perder os outros campos (raça, motivo, estado...).
+const CAMPOS_DOCUMENTO = ['documentType', 'documentNumber', 'documentIssuingCountry', 'documentExpirationDate'];
+
 async function enviarComRequisitos(url, metodo, cabecalhos, corpoBase, envio) {
-  const formatos = envio ? FORMATOS_REQUISITOS : ['nenhum'];
+  const campos = envio?.[0];
+  const semDocumento = campos
+    ? [Object.fromEntries(Object.entries(campos).filter(([k]) => !CAMPOS_DOCUMENTO.includes(k)))]
+    : null;
+  const tentativas = envio
+    ? [
+      { formato: 'colchetes', envio },
+      { formato: 'json', envio },
+      { formato: 'colchetes', envio: semDocumento, rotulo: 'colchetes-sem-documento' },
+      { formato: 'nenhum', envio: null },
+    ]
+    : [{ formato: 'nenhum', envio: null }];
   let ultima = null;
-  for (const formato of formatos) {
+  for (const t of tentativas) {
     const resposta = await fetch(url, {
       method: metodo,
       headers: { ...cabecalhos, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: corpoComRequisitos(corpoBase, envio, formato).toString(),
+      body: corpoComRequisitos(corpoBase, t.envio, t.formato).toString(),
     });
     const dados = await resposta.json().catch(() => null);
-    ultima = { resposta, dados, formato };
+    ultima = { resposta, dados, formato: t.rotulo || t.formato };
     if (resposta.ok && dados?.success !== false) return ultima;
   }
   return ultima;
