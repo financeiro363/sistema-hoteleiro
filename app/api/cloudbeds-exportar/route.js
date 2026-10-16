@@ -17,7 +17,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { descriptografar } from '../../../lib/cloudbedsCrypto';
 import { nomePais, paisValido } from '../../../lib/paises';
-import { rotuloRaca, rotuloNecessidade } from '../../../lib/fnrhOpcoes';
+import { rotuloRaca, rotuloNecessidade, rotuloDeficiencia, rotuloMotivo, rotuloTransporte } from '../../../lib/fnrhOpcoes';
 import { montarRequisitos, conferirRequisitos, NOME_CAMPO_PT } from '../../../lib/cloudbedsRequisitos';
 
 const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
@@ -41,9 +41,7 @@ function paraNomeEstado(siglaOuNome) {
 
 // Nossos códigos internos → texto em português (os campos da Cloudbeds
 // são de texto livre, não códigos)
-const MOTIVO_VIAGEM_TEXTO = { LAZER: 'Lazer', NEGOCIOS: 'Negócios', EVENTOS: 'Eventos', PARENTES: 'Visita a parentes', SAUDE: 'Saúde', OUTRO: 'Outro' };
 const TIPO_VIAGEM_ESTRANGEIRO_TEXTO = { TURISMO: 'Turismo', TRABALHO_NEGOCIOS: 'Trabalho ou Negócios', ESTUDO_CONGRESSO: 'Estudo ou congresso', OUTROS: 'Outros' };
-const MEIO_TRANSPORTE_TEXTO = { AVIAO: 'Avião', AUTOMOVEL: 'Automóvel', ONIBUS: 'Ônibus', TREM: 'Trem', OUTRO: 'Outro' };
 // Códigos confirmados na documentação oficial da Cloudbeds para o tipo de
 // documento (só vimos 4 dos 8 valores possíveis — "dni" e "passport" são
 // a melhor aposta para RG/Passaporte, podem precisar de ajuste)
@@ -112,20 +110,27 @@ function anexarRequisitos(corpo, envio) {
   });
 }
 
-// Resultado para a tela: o que gravou, o que não gravou e o que não foi
-// encontrado na Cloudbeds.
-function resumoCamposGoverno(ficha, montagem, conferencia, leituraOk) {
-  const esperados = ['raca', 'possuiNecessidade'];
-  if (ficha.possui_necessidade_especial === 'SIM') esperados.push('necessidades');
-  const tratados = new Set((montagem?.enviados || []).map((e) => e.campo));
-  const naoEncontrados = ficha.raca || ficha.possui_necessidade_especial
-    ? esperados.filter((c) => !tratados.has(c)).map((c) => NOME_CAMPO_PT[c])
-    : [];
+// Consulta o CEP (ViaCEP) para descobrir a sigla do estado e o código IBGE
+// da cidade — é assim que a FNRH oficial (e a Cloudbeds) identifica o
+// Estado e a Cidade. Se a consulta falhar, segue sem eles.
+async function consultarCep(cep) {
+  const digitos = String(cep || '').replace(/\D/g, '');
+  if (digitos.length !== 8) return {};
+  try {
+    const resposta = await fetch(`https://viacep.com.br/ws/${digitos}/json/`, { signal: AbortSignal.timeout(5000) });
+    const d = await resposta.json().catch(() => null);
+    if (!resposta.ok || !d || d.erro) return {};
+    return { uf: d.uf || '', ibge: d.ibge || '', cidade: d.localidade || '', bairro: d.bairro || '' };
+  } catch (e) {
+    return {};
+  }
+}
+
+// Resultado para a tela: o que gravou e o que não gravou nos campos do governo.
+function resumoCamposGoverno(montagem, conferencia) {
   return {
-    leituraOk,
     gravados: (conferencia || []).filter((c) => c.ok).map((c) => NOME_CAMPO_PT[c.campo]),
     naoConfirmados: (conferencia || []).filter((c) => !c.ok).map((c) => NOME_CAMPO_PT[c.campo]),
-    naoEncontrados,
     tecnico: { enviados: montagem?.enviados || [], conferencia: conferencia || [] },
   };
 }
@@ -339,14 +344,9 @@ export async function POST(request) {
     // Campos do governo (Raça, Necessidade especial...): lê como a Cloudbeds
     // guarda esse hóspede e manda nos mesmos nomes. Hóspede adicional ainda
     // não existe — para ele isso é feito no reforço, logo após a criação.
-    let montagemGoverno = null;
-    let leituraGovernoOk = false;
-    if (!ehHospedeAdicional) {
-      const leitura = await lerRequisitosHospede(guestIdReal, cabecalhosCloudbeds);
-      leituraGovernoOk = leitura.ok;
-      montagemGoverno = montarRequisitos(leitura.requisitos, ficha);
-      anexarRequisitos(corpoGuest, montagemGoverno.envio);
-    }
+    const enderecoCep = ehPassaporte ? {} : await consultarCep(ficha.cep);
+    const montagemGoverno = montarRequisitos(ficha, enderecoCep);
+    if (!ehHospedeAdicional) anexarRequisitos(corpoGuest, montagemGoverno.envio);
 
     // Campos personalizados deste hotel — nomes/IDs exatos confirmados
     // via getCustomFields. Mandando em DOIS formatos possíveis: como
@@ -357,8 +357,8 @@ export async function POST(request) {
       // passaporte NÃO pode ir pra cá (ele já vai no campo de documento).
       { customFieldID: '33748', customFieldName: 'CPF', customFieldValue: ficha.tipo_documento === 'CPF' ? (ficha.numero_documento || '').replace(/\D/g, '') : '' },
       { customFieldID: '33749', customFieldName: 'Profissao', customFieldValue: ficha.profissao || '' },
-      { customFieldID: '48195', customFieldName: 'motivo_da_viagem', customFieldValue: (ehPassaporte && TIPO_VIAGEM_ESTRANGEIRO_TEXTO[ficha.tipo_viagem_estrangeiro]) || MOTIVO_VIAGEM_TEXTO[ficha.motivo_viagem] || ficha.motivo_viagem || '' },
-      { customFieldID: '48196', customFieldName: 'meio_de_transporte', customFieldValue: MEIO_TRANSPORTE_TEXTO[ficha.meio_transporte] || ficha.meio_transporte || '' },
+      { customFieldID: '48195', customFieldName: 'motivo_da_viagem', customFieldValue: (ehPassaporte && TIPO_VIAGEM_ESTRANGEIRO_TEXTO[ficha.tipo_viagem_estrangeiro]) || rotuloMotivo(ficha.motivo_viagem) || '' },
+      { customFieldID: '48196', customFieldName: 'meio_de_transporte', customFieldValue: rotuloTransporte(ficha.meio_transporte) || '' },
     ];
     // Nome do campo CONFIRMADO na documentação oficial: "guestCustomFields"
     corpoGuest.set('guestCustomFields', JSON.stringify(listaCamposPersonalizados));
@@ -399,9 +399,6 @@ export async function POST(request) {
         corpoReforco.delete('reservationID');
         corpoReforco.delete('roomID');
         corpoReforco.set('guestID', guestIdRecemCriado);
-        const leitura = await lerRequisitosHospede(guestIdRecemCriado, cabecalhosCloudbeds);
-        leituraGovernoOk = leitura.ok;
-        montagemGoverno = montarRequisitos(leitura.requisitos, ficha);
         anexarRequisitos(corpoReforco, montagemGoverno.envio);
         guestIdParaConferir = guestIdRecemCriado;
         try {
@@ -420,7 +417,7 @@ export async function POST(request) {
       const depois = await lerRequisitosHospede(guestIdParaConferir, cabecalhosCloudbeds);
       conferenciaGoverno = conferirRequisitos(depois.requisitos, montagemGoverno.enviados);
     }
-    const camposGoverno = resumoCamposGoverno(ficha, montagemGoverno, conferenciaGoverno, leituraGovernoOk);
+    const camposGoverno = resumoCamposGoverno(montagemGoverno, conferenciaGoverno);
 
     // Sucesso de verdade — segue em frente para marcar a ficha como
     // exportada (mais abaixo).
@@ -442,11 +439,11 @@ export async function POST(request) {
         ehPassaporte && ficha.pais_origem ? `País de procedência: ${nomePais(ficha.pais_origem)}` : null,
         ficha.nacionalidade ? `Nacionalidade: ${ficha.nacionalidade}` : null,
         ficha.profissao ? `Profissão: ${ficha.profissao}` : null,
-        ficha.motivo_viagem ? `Motivo da viagem: ${ficha.motivo_viagem}` : null,
-        ficha.meio_transporte ? `Meio de transporte: ${ficha.meio_transporte}` : null,
+        ficha.motivo_viagem ? `Motivo da viagem: ${rotuloMotivo(ficha.motivo_viagem)}` : null,
+        ficha.meio_transporte ? `Meio de transporte: ${rotuloTransporte(ficha.meio_transporte)}` : null,
         ficha.raca ? `Raça: ${rotuloRaca(ficha.raca)}` : null,
         ficha.possui_necessidade_especial ? `Possui necessidade especial: ${rotuloNecessidade(ficha.possui_necessidade_especial)}` : null,
-        ficha.possui_necessidade_especial === 'SIM' && ficha.necessidades_especiais ? `Necessidades especiais: ${ficha.necessidades_especiais}` : null,
+        ficha.possui_necessidade_especial === 'SIM' && ficha.necessidades_especiais ? `Necessidades especiais: ${rotuloDeficiencia(ficha.necessidades_especiais)}` : null,
       ].filter(Boolean).join(' | ');
 
       await fetch(`${CLOUDBEDS_BASE_URL}/postReservationNote`, {
