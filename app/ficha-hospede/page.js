@@ -18,7 +18,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { PAISES_POR_NOME_EN, nomePais } from '../../lib/paises';
-import { RACAS, NECESSIDADE_ESPECIAL } from '../../lib/fnrhOpcoes';
+import { RACAS, NECESSIDADE_ESPECIAL, TIPOS_DEFICIENCIA, MOTIVOS_VIAGEM, MEIOS_TRANSPORTE } from '../../lib/fnrhOpcoes';
 
 const GENEROS = ['Masculino', 'Feminino', 'Outro', 'Prefiro não informar'];
 const GENEROS_TRI = [
@@ -27,22 +27,15 @@ const GENEROS_TRI = [
   { valor: 'Outro', rotulo: 'Outro (Other)' },
   { valor: 'Prefiro não informar', rotulo: 'Prefiro não informar (Prefer not to say)' },
 ];
-const MOTIVOS_VIAGEM = [
-  { valor: 'LAZER', rotulo: 'Lazer' }, { valor: 'NEGOCIOS', rotulo: 'Negócios' },
-  { valor: 'EVENTOS', rotulo: 'Eventos' }, { valor: 'PARENTES', rotulo: 'Visita a parentes' },
-  { valor: 'SAUDE', rotulo: 'Saúde' }, { valor: 'OUTRO', rotulo: 'Outro' },
-];
-const MEIOS_TRANSPORTE = [
-  { valor: 'AVIAO', rotulo: 'Avião' }, { valor: 'AUTOMOVEL', rotulo: 'Automóvel' },
-  { valor: 'ONIBUS', rotulo: 'Ônibus' }, { valor: 'TREM', rotulo: 'Trem' }, { valor: 'OUTRO', rotulo: 'Outro' },
-];
+// Motivo da viagem e meio de transporte: as mesmas opções da Cloudbeds
+// (lista oficial da FNRH) — ficam em lib/fnrhOpcoes.js
 
 // Tipo de viagem do hóspede estrangeiro — e o "motivo de viagem" equivalente
 // já usado no resto do sistema (impressão, exportação, filtros).
 const TIPOS_VIAGEM_ESTRANGEIRO = [
-  { valor: 'TURISMO', pt: 'Turismo', en: 'Tourism', motivoEquivalente: 'LAZER' },
+  { valor: 'TURISMO', pt: 'Turismo', en: 'Tourism', motivoEquivalente: 'LAZER_FERIAS' },
   { valor: 'TRABALHO_NEGOCIOS', pt: 'Trabalho ou Negócios', en: 'Work or business', motivoEquivalente: 'NEGOCIOS' },
-  { valor: 'ESTUDO_CONGRESSO', pt: 'Estudo ou congresso', en: 'Study or Congress', motivoEquivalente: 'EVENTOS' },
+  { valor: 'ESTUDO_CONGRESSO', pt: 'Estudo ou congresso', en: 'Study or Congress', motivoEquivalente: 'ESTUDOS_CURSOS' },
   { valor: 'OUTROS', pt: 'Outros', en: 'Others', motivoEquivalente: 'OUTRO' },
 ];
 
@@ -184,7 +177,7 @@ function FichaHospede() {
   const [cidade, setCidade] = useState('');
   const [estado, setEstado] = useState('');
   const [pais, setPais] = useState('Brasil');
-  const [motivoViagem, setMotivoViagem] = useState('LAZER');
+  const [motivoViagem, setMotivoViagem] = useState('LAZER_FERIAS');
   const [meioTransporte, setMeioTransporte] = useState('AUTOMOVEL');
   const [procedenciaPais, setProcedenciaPais] = useState('Brasil');
   const [procedenciaEstado, setProcedenciaEstado] = useState('');
@@ -303,7 +296,7 @@ function FichaHospede() {
     return {
       raca,
       possui_necessidade_especial: possuiNecessidade,
-      necessidades_especiais: possuiNecessidade === 'SIM' ? necessidadesEspeciais.trim() : null,
+      necessidades_especiais: possuiNecessidade === 'SIM' ? necessidadesEspeciais : null,
     };
   }
 
@@ -333,7 +326,7 @@ function FichaHospede() {
     if (!email.trim()) return falha('Informe seu e-mail. / Please enter your e-mail.');
     if (!raca) return falha('Selecione sua raça (ou "Prefiro não dizer"). / Please select your race (or "Prefer not to say").');
     if (!possuiNecessidade) return falha('Informe se possui alguma necessidade especial. / Please tell us if you have any special needs.');
-    if (possuiNecessidade === 'SIM' && !necessidadesEspeciais.trim()) return falha('Descreva suas necessidades especiais. / Please describe your special needs.');
+    if (possuiNecessidade === 'SIM' && !necessidadesEspeciais) return falha('Selecione qual é a sua necessidade especial. / Please select your special need.');
     if (!numeroDocumento.trim()) return falha('Informe o número do passaporte. / Please enter your passport number.');
     if (!paisExpedidor) return falha('Selecione o país que emitiu o passaporte. / Please select the country that issued your passport.');
     if (!validadeDocumento) return falha('Informe a validade do passaporte. / Please enter your passport expiry date.');
@@ -407,7 +400,7 @@ function FichaHospede() {
     if (!profissao.trim()) { setErroForm('Informe sua profissão.'); return; }
     if (!raca) { setErroForm('Selecione sua raça (ou "Prefiro não dizer").'); return; }
     if (!possuiNecessidade) { setErroForm('Informe se possui alguma necessidade especial.'); return; }
-    if (possuiNecessidade === 'SIM' && !necessidadesEspeciais.trim()) { setErroForm('Descreva suas necessidades especiais.'); return; }
+    if (possuiNecessidade === 'SIM' && !necessidadesEspeciais) { setErroForm('Selecione qual é a sua necessidade especial.'); return; }
     if (!numeroDocumento.trim()) { setErroForm('Informe o número do documento.'); return; }
     if (!validarCPF(numeroDocumento)) {
       setErroForm('O CPF informado não é válido — confira os números.'); return;
@@ -811,9 +804,11 @@ function CamposRacaNecessidade({ tri, raca, setRaca, possuiNecessidade, setPossu
           {tri
             ? <RotuloTri pt="Necessidades especiais" en="Special needs" fr="Besoins particuliers" obrigatorio />
             : <label className="rotulo" htmlFor="fnrh-necessidades">Necessidades especiais *</label>}
-          <input id="fnrh-necessidades" className="campo" type="text" maxLength={300} value={necessidadesEspeciais}
-            onChange={(e) => setNecessidadesEspeciais(e.target.value)}
-            placeholder={tri ? 'Ex.: cadeirante, deficiência visual… / e.g. wheelchair user, visual impairment…' : 'Ex.: cadeirante, deficiência visual, auditiva…'} />
+          <select id="fnrh-necessidades" className="campo" value={necessidadesEspeciais}
+            onChange={(e) => setNecessidadesEspeciais(e.target.value)}>
+            <option value="">{tri ? 'Escolha / Choose an option…' : 'Selecione…'}</option>
+            {TIPOS_DEFICIENCIA.map((d) => <option key={d.valor} value={d.valor}>{rotulo(d)}</option>)}
+          </select>
         </>
       )}
     </>
