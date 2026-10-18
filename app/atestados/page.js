@@ -631,7 +631,9 @@ function BlocoDadosRecibo({ atestado, usuario, nomeHotel }) {
       )}
       <div><strong>Profissional emissor:</strong> {atestado.profissional_nome} — {atestado.profissional_tipo === 'MEDICO' ? 'CRM' : 'CRO'} {atestado.profissional_conselho}/{atestado.profissional_uf}</div>
       <div><strong>Data de emissão:</strong> {formatarData(atestado.data_emissao)} &nbsp;·&nbsp; <strong>Dias de afastamento:</strong> {atestado.dias_afastamento}</div>
-      {atestado.cid && <div><strong>CID:</strong> {atestado.cid}</div>}
+      {/* O CID (código da doença) NÃO sai no recibo impresso — nem na via do
+          colaborador nem na do hotel. É dado de saúde (sensível pela LGPD) e
+          continua só no cadastro do atestado, para o administrador. */}
       <div><strong>Registrado por:</strong> {usuario.nome} — {nomeHotel}</div>
     </div>
   );
