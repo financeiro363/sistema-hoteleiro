@@ -51,6 +51,7 @@ const CATEGORIAS_MENU = [
       { href: '/ponto', rotulo: 'Ponto', soAdmin: true },
       { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
       { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
+      { href: '/contratos-trabalho', rotulo: 'Contratos de Trabalho', soAdmin: true },
       { href: '/atestados', rotulo: 'Atestados', soAdminOuContador: true, contadorVe: true },
     ],
   },
