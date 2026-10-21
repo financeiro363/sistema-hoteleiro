@@ -12,6 +12,17 @@ import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { buscarTodos } from '../../lib/buscarTodos';
 
+// Formas do pagamento avulso (código no banco -> nome na tela).
+// "CARTAO" é das vendas antigas, de antes de separar crédito e débito.
+const FORMAS_AVULSO = {
+  DINHEIRO: 'Dinheiro',
+  PIX: 'Pix',
+  CARTAO_CREDITO: 'Cartão de crédito',
+  CARTAO_DEBITO: 'Cartão de débito',
+  CARTAO: 'Cartão',
+};
+const FORMAS_AVULSO_NOVAS = ['DINHEIRO', 'PIX', 'CARTAO_CREDITO', 'CARTAO_DEBITO'];
+
 function formatarMoeda(valor) {
   return (Number(valor) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -74,7 +85,9 @@ function montarHtmlFechamentoTurno({ nomeHotel, nomeOperador, abertoEm, fechadoE
   <table>
     <tr><td>Dinheiro</td><td class="num">${formatarMoeda(resumo.pagamentos.DINHEIRO)}</td></tr>
     <tr><td>Pix</td><td class="num">${formatarMoeda(resumo.pagamentos.PIX)}</td></tr>
-    <tr><td>Cartão</td><td class="num">${formatarMoeda(resumo.pagamentos.CARTAO)}</td></tr>
+    <tr><td>Cartão de crédito</td><td class="num">${formatarMoeda(resumo.pagamentos.CARTAO_CREDITO)}</td></tr>
+    <tr><td>Cartão de débito</td><td class="num">${formatarMoeda(resumo.pagamentos.CARTAO_DEBITO)}</td></tr>
+    ${resumo.pagamentos.CARTAO ? `<tr><td>Cartão (vendas antigas)</td><td class="num">${formatarMoeda(resumo.pagamentos.CARTAO)}</td></tr>` : ''}
     <tr class="linha-total"><td>Subtotal em caixa</td><td class="num">${formatarMoeda(resumo.subtotalCaixa)}</td></tr>
     <tr><td>Lançado no quarto (não entra no caixa físico)</td><td class="num">${formatarMoeda(resumo.pagamentos.quarto)}</td></tr>
     <tr class="linha-total"><td>TOTAL GERAL DE VENDAS DO TURNO</td><td class="num">${formatarMoeda(resumo.totalGeral)}</td></tr>
@@ -376,14 +389,14 @@ function PainelVender({ usuario }) {
       .select('tipo_pagamento, forma_pagamento_avulso, valor_total')
       .eq('turno_id', turno.id).eq('status', 'CONCLUIDA');
 
-    const pagamentos = { DINHEIRO: 0, PIX: 0, CARTAO: 0, quarto: 0 };
+    const pagamentos = { DINHEIRO: 0, PIX: 0, CARTAO_CREDITO: 0, CARTAO_DEBITO: 0, CARTAO: 0, quarto: 0 };
     (vendasDoTurno || []).forEach((v) => {
       if (v.tipo_pagamento === 'QUARTO') { pagamentos.quarto += Number(v.valor_total); }
       else if (v.forma_pagamento_avulso && pagamentos[v.forma_pagamento_avulso] != null) {
         pagamentos[v.forma_pagamento_avulso] += Number(v.valor_total);
       }
     });
-    const subtotalCaixa = pagamentos.DINHEIRO + pagamentos.PIX + pagamentos.CARTAO;
+    const subtotalCaixa = pagamentos.DINHEIRO + pagamentos.PIX + pagamentos.CARTAO_CREDITO + pagamentos.CARTAO_DEBITO + pagamentos.CARTAO;
     const totalGeral = subtotalCaixa + pagamentos.quarto;
 
     // 2) Quantidade recebida na abertura deste turno, para comparar com o
@@ -541,7 +554,8 @@ function PainelVender({ usuario }) {
       nome_hospede: tipoPagamento === 'QUARTO' ? nomeHospede.trim() : null,
       valor_total: total,
       vendido_por_id: usuario.id,
-      cloudbeds_status: tipoPagamento === 'QUARTO' ? 'PENDENTE' : 'NAO_APLICAVEL',
+      // Quarto → conta do hóspede; avulsa → Conta da Casa "Conveniência – Vendas Avulsas"
+      cloudbeds_status: 'PENDENTE',
     }).select().single();
 
     if (erroVenda || !venda) {
@@ -561,26 +575,25 @@ function PainelVender({ usuario }) {
       return;
     }
 
-    // Se for lançamento no quarto, chama a Cloudbeds
-    if (tipoPagamento === 'QUARTO') {
-      const { data: sessao } = await supabase.auth.getSession();
-      try {
-        const resposta = await fetch('/api/pdv-lancar-cloudbeds', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
-          body: JSON.stringify({ vendaId: venda.id }),
-        });
-        const resultado = await resposta.json();
-        if (!resposta.ok || resultado.erro) {
-          mostrarAviso(`Venda #${numeroVenda} registrada, mas a Cloudbeds recusou: ${resultado.erro || 'erro desconhecido'}. Você pode tentar lançar de novo depois.`);
-        } else {
-          mostrarAviso(`Venda #${numeroVenda} concluída e lançada na Cloudbeds!`);
-        }
-      } catch (e) {
-        mostrarAviso(`Venda #${numeroVenda} registrada, mas houve falha de conexão ao enviar para a Cloudbeds. Você pode tentar de novo depois.`);
+    // Envia para a Cloudbeds: no quarto (conta do hóspede) ou avulsa (Conta da Casa)
+    const ondeVai = tipoPagamento === 'QUARTO' ? 'na conta do quarto' : 'no caixa da Cloudbeds';
+    const { data: sessao } = await supabase.auth.getSession();
+    try {
+      const resposta = await fetch('/api/pdv-lancar-cloudbeds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ vendaId: venda.id }),
+      });
+      const resultado = await resposta.json();
+      if (!resposta.ok || resultado.erro) {
+        mostrarAviso(`Venda #${numeroVenda} registrada, mas não foi ${ondeVai}: ${resultado.erro || 'erro desconhecido'}. Ela fica em "Vendas aguardando envio" para tentar de novo.`);
+      } else if (resultado.ignorado) {
+        mostrarAviso(`Venda #${numeroVenda} concluída!`);
+      } else {
+        mostrarAviso(`Venda #${numeroVenda} concluída e lançada ${ondeVai}!`);
       }
-    } else {
-      mostrarAviso(`Venda #${numeroVenda} concluída!`);
+    } catch (e) {
+      mostrarAviso(`Venda #${numeroVenda} registrada, mas houve falha de conexão ao enviar para a Cloudbeds. Você pode tentar de novo depois.`);
     }
 
     setCarrinho([]); setMostrarCheckout(false);
@@ -696,16 +709,23 @@ function PainelVender({ usuario }) {
           {vendasPendentes.map((v) => (
             <div key={v.id} className="pdv-pendente-item">
               <div>
-                <span>Venda #{v.numero_venda} · {v.nome_hospede || 'Hóspede'} · reserva {v.cloudbeds_reservation_id}</span>
+                <span>
+                  {v.tipo_pagamento === 'AVULSO'
+                    ? <>Venda #{v.numero_venda} · avulsa ({FORMAS_AVULSO[v.forma_pagamento_avulso] || v.forma_pagamento_avulso}) · {formatarMoeda(v.valor_total)}</>
+                    : <>Venda #{v.numero_venda} · {v.nome_hospede || 'Hóspede'} · reserva {v.cloudbeds_reservation_id}</>}
+                </span>
                 {v.cloudbeds_erro && <div className="texto-suave" style={{ fontSize: 11 }}>Erro: {v.cloudbeds_erro}</div>}
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <button type="button" className="botao botao-suave" onClick={() => reenviarParaCloudbeds(v)} disabled={reenviando === v.id}>
                   {reenviando === v.id ? 'Enviando…' : '🔄 Tentar de novo'}
                 </button>
-                <button type="button" className="botao botao-perigo" onClick={() => cancelarVendaPendente(v)} disabled={reenviando === v.id}>
-                  🗑️ Cancelar
-                </button>
+                {/* Venda avulsa já foi paga: não se cancela aqui, só se tenta enviar de novo */}
+                {v.tipo_pagamento !== 'AVULSO' && (
+                  <button type="button" className="botao botao-perigo" onClick={() => cancelarVendaPendente(v)} disabled={reenviando === v.id}>
+                    🗑️ Cancelar
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -763,9 +783,9 @@ function ModalCheckout({ total, carrinho, onFechar, onConfirmar }) {
 
         {tipoPagamento === 'AVULSO' ? (
           <div className="pdv-formas">
-            {['DINHEIRO', 'PIX', 'CARTAO'].map((forma) => (
+            {FORMAS_AVULSO_NOVAS.map((forma) => (
               <button key={forma} type="button" className={formaPagamentoAvulso === forma ? 'pdv-forma-botao pdv-forma-ativa' : 'pdv-forma-botao'} onClick={() => setFormaPagamentoAvulso(forma)}>
-                {forma === 'DINHEIRO' ? 'Dinheiro' : forma === 'PIX' ? 'Pix' : 'Cartão'}
+                {FORMAS_AVULSO[forma]}
               </button>
             ))}
           </div>
@@ -780,6 +800,12 @@ function ModalCheckout({ total, carrinho, onFechar, onConfirmar }) {
                 ⚠️ {itensSemIdCloudbeds.join(', ')} ainda não {itensSemIdCloudbeds.length > 1 ? 'têm' : 'tem'} o "ID do item na Cloudbeds" cadastrado — a venda será registrada aqui, mas pode não conseguir ser lançada na conta do quarto até isso ser configurado (aba Preços e Estoque).
               </div>
             )}
+          </div>
+        )}
+
+        {tipoPagamento === 'AVULSO' && itensSemIdCloudbeds.length > 0 && (
+          <div className="aviso-erro" style={{ fontSize: 12 }}>
+            ⚠️ {itensSemIdCloudbeds.join(', ')} ainda não {itensSemIdCloudbeds.length > 1 ? 'têm' : 'tem'} o "ID do item na Cloudbeds" cadastrado — o pagamento vai para a Cloudbeds, mas {itensSemIdCloudbeds.length > 1 ? 'esses produtos ficam pendentes' : 'esse produto fica pendente'} até o ID ser cadastrado (aba Preços e Estoque).
           </div>
         )}
 
@@ -823,7 +849,11 @@ function ModalFechamento({ resumo, carregando, fechando, modo, acaoFechamento, s
             <div className="pdv-extrato">
               <div className="pdv-extrato-linha"><span>Dinheiro</span><strong>{formatarMoeda(resumo.pagamentos.DINHEIRO)}</strong></div>
               <div className="pdv-extrato-linha"><span>Pix</span><strong>{formatarMoeda(resumo.pagamentos.PIX)}</strong></div>
-              <div className="pdv-extrato-linha"><span>Cartão</span><strong>{formatarMoeda(resumo.pagamentos.CARTAO)}</strong></div>
+              <div className="pdv-extrato-linha"><span>Cartão de crédito</span><strong>{formatarMoeda(resumo.pagamentos.CARTAO_CREDITO)}</strong></div>
+              <div className="pdv-extrato-linha"><span>Cartão de débito</span><strong>{formatarMoeda(resumo.pagamentos.CARTAO_DEBITO)}</strong></div>
+              {resumo.pagamentos.CARTAO > 0 && (
+                <div className="pdv-extrato-linha"><span>Cartão (vendas antigas)</span><strong>{formatarMoeda(resumo.pagamentos.CARTAO)}</strong></div>
+              )}
               <div className="pdv-extrato-linha" style={{ borderTop: '1px solid #ccc', paddingTop: 6, marginTop: 4 }}>
                 <span>Subtotal em caixa</span><strong>{formatarMoeda(resumo.subtotalCaixa)}</strong>
               </div>
@@ -1450,7 +1480,7 @@ function PainelRelatorios({ usuario }) {
                       <td style={{ fontSize: 12 }}>
                         {(v.pdv_venda_itens || []).map((it) => `${it.quantidade}× ${it.nome_produto}`).join(', ')}
                       </td>
-                      <td>{v.tipo_pagamento === 'QUARTO' ? `Quarto (${v.nome_hospede || 's/nome'})` : (v.forma_pagamento_avulso || '—')}</td>
+                      <td>{v.tipo_pagamento === 'QUARTO' ? `Quarto (${v.nome_hospede || 's/nome'})` : (FORMAS_AVULSO[v.forma_pagamento_avulso] || v.forma_pagamento_avulso || '—')}</td>
                       <td>{formatarMoeda(v.valor_total)}</td>
                     </tr>
                   ))}
@@ -1500,7 +1530,7 @@ function EstilosPDV() {
       .pdv-tipo-pagamento { display: flex; gap: 8px; margin-bottom: 16px; }
       .pdv-tipo-botao { flex: 1; padding: 14px 8px; border: 1px solid var(--borda); background: var(--branco); border-radius: 10px; font-weight: 600; cursor: pointer; }
       .pdv-tipo-ativo { background: var(--marca); border-color: var(--marca); color: var(--branco); }
-      .pdv-formas { display: flex; gap: 8px; margin-bottom: 12px; }
+      .pdv-formas { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
       .pdv-forma-botao { flex: 1; padding: 10px; border: 1px solid var(--borda); background: var(--branco); border-radius: 8px; cursor: pointer; }
       .pdv-forma-ativa { background: var(--marca-clara); border-color: var(--marca); font-weight: 700; }
 
