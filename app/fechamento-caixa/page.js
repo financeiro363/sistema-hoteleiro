@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import ConfigCloudbedsCaixa from '../components/ConfigCloudbedsCaixa';
 
 // "Hoje" e "ontem" sempre no horário de Fortaleza/Paraíba (UTC-3), igual
 // para a tela e para o servidor — assim os dois nunca discordam, não
@@ -24,6 +25,18 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
+// Situação de um pagamento da Sala de Reunião na Cloudbeds
+function situacaoSala(l) {
+  if (l.naCloudbeds) {
+    if (l.anulado && l.cloudbedsStatus === 'ANULADO') return <span className="fc-ok">✓ Anulado lá também</span>;
+    if (l.anulado) return <span className="fc-alerta">⚠️ Anular na Cloudbeds</span>;
+    return <span className="fc-ok">✓ Na Cloudbeds</span>;
+  }
+  if (l.anulado) return '—';
+  if (l.cloudbedsStatus === 'FALHOU') return <span className="fc-alerta" title={l.cloudbedsErro || ''}>⚠️ Falhou — somado à parte</span>;
+  return <span className="fc-neutro" title={l.cloudbedsErro || ''}>Só no sistema — somado à parte</span>;
+}
+
 export default function FechamentoCaixa() {
   const router = useRouter();
   const [verificandoLogin, setVerificandoLogin] = useState(true);
@@ -34,6 +47,7 @@ export default function FechamentoCaixa() {
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState('');
   const [resultado, setResultado] = useState(null);
+  const [configAberta, setConfigAberta] = useState(false);
 
   useEffect(() => {
     let ativo = true;
@@ -122,7 +136,14 @@ export default function FechamentoCaixa() {
           {!souAdmin && (
             <span className="texto-suave" style={{ fontSize: 12 }}>Você só pode consultar hoje ou ontem.</span>
           )}
+          {souAdmin && (
+            <button type="button" className="botao botao-contorno" onClick={() => setConfigAberta(true)} style={{ marginLeft: 'auto' }}>
+              ⚙️ Configurar Cloudbeds
+            </button>
+          )}
         </div>
+
+        {configAberta && <ConfigCloudbedsCaixa onFechar={() => setConfigAberta(false)} />}
 
         {erro && <div className="aviso-erro" style={{ marginTop: 14 }}>{erro}</div>}
       </div>
@@ -138,7 +159,20 @@ export default function FechamentoCaixa() {
           {resultado.avisoCloudbeds && (
             <div className="aviso-erro" style={{ marginBottom: 12 }}>
               <strong>Atenção — os valores da Cloudbeds não foram carregados:</strong> {resultado.avisoCloudbeds}{' '}
-              O total abaixo inclui apenas os pagamentos da Sala de Reunião.
+              O total abaixo inclui apenas os pagamentos da Sala de Reunião e da Conveniência registrados só no sistema.
+            </div>
+          )}
+          {resultado.avisoPdv && (
+            <div className="aviso-erro fc-somente-tela" style={{ marginBottom: 12 }}>
+              <strong>Atenção:</strong> {resultado.avisoPdv}
+            </div>
+          )}
+          {(resultado.salaAnuladosAindaNaCloudbeds || []).length > 0 && (
+            <div className="aviso-erro" style={{ marginBottom: 12 }}>
+              <strong>Atenção:</strong> {resultado.salaAnuladosAindaNaCloudbeds.length === 1 ? 'um pagamento' : `${resultado.salaAnuladosAindaNaCloudbeds.length} pagamentos`} da
+              Sala de Reunião foi anulado no sistema, mas continua na Cloudbeds
+              ({resultado.salaAnuladosAindaNaCloudbeds.map((p) => `recibo ${p.recibo}`).join(', ')}).
+              Anule também na Conta da Casa “Sala de Reunião” da Cloudbeds.
             </div>
           )}
           {resultado.avisoSalaReuniao && (
@@ -153,8 +187,12 @@ export default function FechamentoCaixa() {
               <span className="fc-card-rotulo">Total recebido no dia</span>
             </div>
             <div className="fc-card-resumo">
-              <span className="fc-card-numero">{dinheiro(resultado.totalSalaReuniao)}</span>
+              <span className="fc-card-numero">{dinheiro(resultado.totalSalaDoDia ?? resultado.totalSalaReuniao)}</span>
               <span className="fc-card-rotulo">Sala de Reunião (já incluído no total)</span>
+            </div>
+            <div className="fc-card-resumo">
+              <span className="fc-card-numero">{dinheiro((resultado.totalPdvNaCloudbeds || 0) + (resultado.totalPdvFora || 0))}</span>
+              <span className="fc-card-rotulo">Conveniência avulsa (já incluído no total)</span>
             </div>
             <div className="fc-card-resumo">
               <span className="fc-card-numero">{dinheiro(resultado.totalEstornos)}</span>
@@ -173,11 +211,18 @@ export default function FechamentoCaixa() {
               ))}
               {Object.entries(resultado.totaisSalaPorForma || {}).sort((a, b) => b[1] - a[1]).map(([forma, total]) => (
                 <tr key={`sala-${forma}`} className="fc-linha-sala">
-                  <td><span className="fc-selo-sala">Sala de Reunião</span> {forma}</td>
+                  <td><span className="fc-selo-sala">Sala de Reunião · fora da Cloudbeds</span> {forma}</td>
                   <td style={{ textAlign: 'right' }}>{dinheiro(total)}</td>
                 </tr>
               ))}
-              {Object.keys(resultado.totaisPorForma).length === 0 && Object.keys(resultado.totaisSalaPorForma || {}).length === 0 && (
+              {Object.entries(resultado.totaisPdvPorForma || {}).sort((a, b) => b[1] - a[1]).map(([forma, total]) => (
+                <tr key={`pdv-${forma}`} className="fc-linha-sala">
+                  <td><span className="fc-selo-sala">Conveniência · fora da Cloudbeds</span> {forma}</td>
+                  <td style={{ textAlign: 'right' }}>{dinheiro(total)}</td>
+                </tr>
+              ))}
+              {Object.keys(resultado.totaisPorForma).length === 0 && Object.keys(resultado.totaisSalaPorForma || {}).length === 0
+                && Object.keys(resultado.totaisPdvPorForma || {}).length === 0 && (
                 <tr><td colSpan={2} style={{ textAlign: 'center', color: '#888' }}>Nenhum pagamento nesse dia.</td></tr>
               )}
             </tbody>
@@ -186,7 +231,7 @@ export default function FechamentoCaixa() {
             </tfoot>
           </table>
 
-          <h3>Lançamentos detalhados</h3>
+          <h3>Lançamentos detalhados (Cloudbeds)</h3>
           <table className="fc-tabela fc-tabela-detalhe">
             <thead>
               <tr><th>Horário</th><th>Forma de pagamento</th><th>Apartamento</th><th>Usuário</th><th style={{ textAlign: 'right' }}>Valor</th></tr>
@@ -196,7 +241,7 @@ export default function FechamentoCaixa() {
                 <tr key={l.id} style={l.tipo === 'ANULADO' ? { color: '#A31212', textDecoration: 'line-through' } : undefined}>
                   <td>{l.horario}</td>
                   <td>{l.formaPagamento}{l.tipo === 'ANULADO' ? ' (anulado)' : ''}</td>
-                  <td>{l.apartamento}</td>
+                  <td>{l.origem === 'SALA' || l.origem === 'PDV' ? <span className="fc-selo-sala">{l.apartamento}</span> : l.apartamento}</td>
                   <td>{l.usuario}</td>
                   <td style={{ textAlign: 'right' }}>{dinheiro(l.valor)}</td>
                 </tr>
@@ -210,7 +255,7 @@ export default function FechamentoCaixa() {
           <h3>🏛️ Sala de Reunião — pagamentos do dia</h3>
           <table className="fc-tabela fc-tabela-detalhe">
             <thead>
-              <tr><th>Horário</th><th>Forma de pagamento</th><th>Sala / Cliente</th><th>Recibo</th><th>Usuário</th><th style={{ textAlign: 'right' }}>Valor</th></tr>
+              <tr><th>Horário</th><th>Forma de pagamento</th><th>Sala / Cliente</th><th>Recibo</th><th>Usuário</th><th>Cloudbeds</th><th style={{ textAlign: 'right' }}>Valor</th></tr>
             </thead>
             <tbody>
               {(resultado.salaReuniao || []).map((l) => (
@@ -220,21 +265,53 @@ export default function FechamentoCaixa() {
                   <td>{l.sala} — {l.cliente}</td>
                   <td>{l.recibo}</td>
                   <td>{l.usuario}</td>
+                  <td style={{ textDecoration: 'none' }}>{situacaoSala(l)}</td>
                   <td style={{ textAlign: 'right' }}>{dinheiro(l.valor)}</td>
                 </tr>
               ))}
               {(resultado.salaReuniao || []).length === 0 && (
-                <tr><td colSpan={6} style={{ textAlign: 'center', color: '#888' }}>Nenhum pagamento da Sala de Reunião nesse dia.</td></tr>
+                <tr><td colSpan={7} style={{ textAlign: 'center', color: '#888' }}>Nenhum pagamento da Sala de Reunião nesse dia.</td></tr>
               )}
             </tbody>
             <tfoot>
-              <tr><td colSpan={5}><strong>Total Sala de Reunião</strong></td><td style={{ textAlign: 'right' }}><strong>{dinheiro(resultado.totalSalaReuniao)}</strong></td></tr>
+              <tr><td colSpan={6}><strong>Total Sala de Reunião no dia</strong></td><td style={{ textAlign: 'right' }}><strong>{dinheiro(resultado.totalSalaDoDia ?? resultado.totalSalaReuniao)}</strong></td></tr>
+              {(resultado.salaReuniao || []).some((l) => l.naCloudbeds) && (
+                <tr><td colSpan={6} style={{ borderTop: 'none', paddingTop: 2 }}>Somado à parte (só no sistema, fora da Cloudbeds)</td><td style={{ textAlign: 'right', borderTop: 'none', paddingTop: 2 }}>{dinheiro(resultado.totalSalaReuniao)}</td></tr>
+              )}
             </tfoot>
           </table>
-          {(resultado.salaReuniao || []).some((l) => l.anulado) && (
-            <p style={{ fontSize: 12, color: '#666', marginTop: -12 }}>
-              Pagamentos riscados foram anulados pelo administrador e não entram no total.
-            </p>
+          <p style={{ fontSize: 12, color: '#666', marginTop: -12 }}>
+            {(resultado.salaReuniao || []).some((l) => l.anulado) && 'Pagamentos riscados foram anulados e não entram no total. '}
+            {(resultado.salaReuniao || []).some((l) => l.naCloudbeds) && 'Os marcados “Na Cloudbeds” já estão nos lançamentos da Cloudbeds acima e não são somados de novo.'}
+          </p>
+
+          {(resultado.pdvForaCloudbeds || []).length > 0 && (
+            <>
+              <h3>🛒 Conveniência — vendas avulsas que não foram para a Cloudbeds</h3>
+              <table className="fc-tabela fc-tabela-detalhe">
+                <thead>
+                  <tr><th>Horário</th><th>Venda</th><th>Forma de pagamento</th><th>Usuário</th><th>Motivo</th><th style={{ textAlign: 'right' }}>Valor</th></tr>
+                </thead>
+                <tbody>
+                  {resultado.pdvForaCloudbeds.map((v) => (
+                    <tr key={v.id}>
+                      <td>{v.horario}</td>
+                      <td>#{v.numero}</td>
+                      <td>{v.formaPagamento}</td>
+                      <td>{v.usuario}</td>
+                      <td style={{ fontSize: 12 }}>{v.erro || 'Aguardando envio'}</td>
+                      <td style={{ textAlign: 'right' }}>{dinheiro(v.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr><td colSpan={5}><strong>Total somado à parte</strong></td><td style={{ textAlign: 'right' }}><strong>{dinheiro(resultado.totalPdvFora)}</strong></td></tr>
+                </tfoot>
+              </table>
+              <p className="fc-somente-tela" style={{ fontSize: 12, color: '#666', marginTop: -12 }}>
+                Para enviar, abra o PDV — Conveniência e clique em “🔄 Tentar de novo” na venda.
+              </p>
+            </>
           )}
 
           <h3>🚫 Abatimentos e estornos</h3>
@@ -271,7 +348,10 @@ export default function FechamentoCaixa() {
 function EstilosFechamento() {
   return (
     <style>{`
-      .fc-cards-resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }
+      .fc-cards-resumo { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
+      .fc-ok { color: var(--sucesso-texto, #1E6B3C); font-weight: 600; font-size: 12px; }
+      .fc-alerta { color: var(--erro-texto, #A31212); font-weight: 600; font-size: 12px; }
+      .fc-neutro { color: #666; font-size: 12px; }
       @media (max-width: 640px) { .fc-cards-resumo { grid-template-columns: 1fr 1fr; } }
       .fc-selo-sala {
         display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px;
