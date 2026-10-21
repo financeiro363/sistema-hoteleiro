@@ -229,6 +229,7 @@ export default function SalaReuniao() {
   // Pagamentos
   const [pagamentos, setPagamentos] = useState([]);
   const [pagamentosIndisponiveis, setPagamentosIndisponiveis] = useState('');
+  const [enviandoCloudbeds, setEnviandoCloudbeds] = useState(null); // id do pagamento sendo enviado
   const [pagForm, setPagForm] = useState(null); // null = fechado
   const [erroPag, setErroPag] = useState('');
   const [reciboAberto, setReciboAberto] = useState(null); // { pagamento, reimpressao }
@@ -367,6 +368,44 @@ export default function SalaReuniao() {
     setAnulando(null);
     setErroPag('');
   }, [detalhe]);
+
+  // Leva o pagamento para a Conta da Casa "Sala de Reunião" da Cloudbeds (ou
+  // anula lá). Nunca impede o lançamento no sistema: se falhar, a tela mostra
+  // o aviso e o botão "Tentar de novo", e o Fechamento de Caixa soma à parte.
+  async function sincronizarCloudbeds(pagamento, acao = 'enviar') {
+    if (!pagamento?.id && !pagamento?.numero_recibo) return null;
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/sala-pagamento-cloudbeds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ pagamentoId: pagamento.id, numeroRecibo: pagamento.numero_recibo, acao }),
+      });
+      const json = await resposta.json().catch(() => ({}));
+      if (json.pagamento) {
+        setPagamentos((lista) => lista.map((p) => (p.id === json.pagamento.id ? json.pagamento : p)));
+      }
+      if (!resposta.ok || json.erro) return { erro: json.erro || 'erro desconhecido' };
+      return json;
+    } catch (e) {
+      return { erro: 'falha de conexão com o servidor' };
+    }
+  }
+
+  function textoCloudbeds(envio) {
+    if (!envio) return '';
+    if (envio.erro) return ` ⚠️ Não foi para a Cloudbeds: ${envio.erro} Use "Tentar de novo" no pagamento.`;
+    if (envio.ignorado) return envio.motivo ? ` (${envio.motivo})` : '';
+    return ' Também lançado na Cloudbeds.';
+  }
+
+  async function tentarCloudbedsDeNovo(p) {
+    setEnviandoCloudbeds(p.id);
+    const envio = await sincronizarCloudbeds(p, p.anulado_em ? 'anular' : 'enviar');
+    setEnviandoCloudbeds(null);
+    if (envio?.erro) setErro(`Recibo ${p.numero_recibo}: ${envio.erro}`);
+    else mostrarAviso(`Recibo ${p.numero_recibo}: ${p.anulado_em ? 'anulado na Cloudbeds.' : 'lançado na Cloudbeds.'}`);
+  }
 
   async function registrarLog(acao, detalhe) {
     await supabase.from('salas_reuniao_log').insert({
@@ -529,7 +568,8 @@ export default function SalaReuniao() {
           pagamentoNovo = pagNovo;
           await registrarLog('Lançou Pagamento',
             `${nomeDaSala(salvo.sala_id)} · ${formatarData(salvo.data)} · ${salvo.responsavel} · ${dinheiro(pagNovo.valor)} em ${FORMAS_PAGAMENTO[pagNovo.forma_pagamento]} · Recibo ${pagNovo.numero_recibo}.`);
-          mostrarAviso(`Reserva criada e pagamento lançado! Recibo ${pagNovo.numero_recibo} aberto para impressão.`);
+          const envio = await sincronizarCloudbeds(pagNovo);
+          mostrarAviso(`Reserva criada e pagamento lançado! Recibo ${pagNovo.numero_recibo} aberto para impressão.${textoCloudbeds(envio)}`);
         }
       }
     }
@@ -604,7 +644,8 @@ export default function SalaReuniao() {
     await registrarLog('Lançou Pagamento',
       `${nomeDaSala(detalhe.sala_id)} · ${formatarData(detalhe.data)} · ${detalhe.responsavel} · ${dinheiro(pagNovo.valor)} em ${FORMAS_PAGAMENTO[pagNovo.forma_pagamento]} · Recibo ${pagNovo.numero_recibo}.`);
     setPagForm(null);
-    mostrarAviso(`Pagamento lançado! Recibo ${pagNovo.numero_recibo} aberto para impressão.`);
+    const envio = await sincronizarCloudbeds(pagNovo);
+    mostrarAviso(`Pagamento lançado! Recibo ${pagNovo.numero_recibo} aberto para impressão.${textoCloudbeds(envio)}`);
     await carregarTudo(usuario);
     setReciboAberto({ pagamento: pagNovo, reimpressao: false });
   }
@@ -631,7 +672,8 @@ export default function SalaReuniao() {
       `Recibo ${anulado.numero_recibo} · ${dinheiro(anulado.valor)} em ${FORMAS_PAGAMENTO[anulado.forma_pagamento]} · ${anulado.pagador_nome} · Motivo: ${anulado.motivo_anulacao}.`);
     setAnulando(null);
     setErroPag('');
-    mostrarAviso(`Pagamento ${anulado.numero_recibo} anulado.`);
+    const envio = await sincronizarCloudbeds(anulado, 'anular');
+    mostrarAviso(`Pagamento ${anulado.numero_recibo} anulado.${envio?.erro ? ` ⚠️ ${envio.erro}` : envio?.nadaAFazer ? '' : envio ? ' Também anulado na Cloudbeds.' : ''}`);
     carregarTudo(usuario);
   }
 
@@ -1188,10 +1230,16 @@ export default function SalaReuniao() {
                               ANULADO em {formatarDataHora(p.anulado_em)} por {nomeDe(p.anulado_por_id)} — {p.motivo_anulacao}
                             </div>
                           )}
+                          <SeloCloudbeds pagamento={p} />
                           <div className="sr-pag-acoes">
                             <button type="button" className="botao botao-suave" onClick={() => reimprimirRecibo(p)}>
                               🖨️ Reimprimir recibo
                             </button>
+                            {podeTentarCloudbeds(p) && (
+                              <button type="button" className="botao botao-contorno" onClick={() => tentarCloudbedsDeNovo(p)} disabled={enviandoCloudbeds === p.id}>
+                                {enviandoCloudbeds === p.id ? 'Enviando…' : p.anulado_em ? '🔄 Anular na Cloudbeds' : '🔄 Enviar para a Cloudbeds'}
+                              </button>
+                            )}
                             {souAdmin && !p.anulado_em && anulando?.id !== p.id && (
                               <button type="button" className="botao botao-suave"
                                 onClick={() => { setErroPag(''); setAnulando({ id: p.id, motivo: '' }); }}>
@@ -1631,6 +1679,37 @@ function FragmentoLinhaSala({ sala, cor, dias, hojeISO, reservas, statusDe, aoCl
   );
 }
 
+// Situação do pagamento na Cloudbeds (Conta da Casa "Sala de Reunião")
+function SeloCloudbeds({ pagamento: p }) {
+  const st = p.cloudbeds_status;
+  if (!st) return null; // pagamentos antigos, de antes do envio automático
+  const selos = {
+    ENVIADO: ['sr-cb-ok', '✓ Lançado na Cloudbeds'],
+    ANULADO: ['sr-cb-ok', '✓ Anulado também na Cloudbeds'],
+    FALHOU: ['sr-cb-erro', '⚠️ Não foi para a Cloudbeds'],
+    FALHA_ANULACAO: ['sr-cb-erro', '⚠️ Anulado aqui, mas ainda está na Cloudbeds'],
+    NAO_ENVIADO: ['sr-cb-neutro', 'Só no sistema (pagamento com data passada)'],
+    PENDENTE: ['sr-cb-neutro', 'Aguardando envio para a Cloudbeds'],
+  };
+  const [classe, texto] = selos[st] || ['sr-cb-neutro', st];
+  return (
+    <div className={`sr-cb ${classe}`}>
+      {texto}
+      {p.cloudbeds_erro && (st === 'FALHOU' || st === 'FALHA_ANULACAO') && <span className="sr-cb-detalhe"> — {p.cloudbeds_erro}</span>}
+    </div>
+  );
+}
+
+// Mostra o botão "Enviar/Anular na Cloudbeds" quando faz sentido
+function podeTentarCloudbeds(p) {
+  if (p.anulado_em) return !!p.cloudbeds_payment_id && p.cloudbeds_status === 'FALHA_ANULACAO';
+  if (p.cloudbeds_payment_id) return false;
+  if (p.cloudbeds_status === 'FALHOU' || p.cloudbeds_status === 'PENDENTE') return true;
+  // Lançado hoje e ainda sem situação (ex.: a internet caiu na hora do envio)
+  return !p.cloudbeds_status && String(p.data_pagamento).slice(0, 10) === hojeFortaleza()
+    && Date.now() - new Date(p.criado_em).getTime() < 24 * 60 * 60 * 1000 && p.cloudbeds_status !== undefined;
+}
+
 function Linha({ rotulo, valor }) {
   return (
     <div className="sr-linha">
@@ -1846,6 +1925,13 @@ function EstilosSala() {
         ${regrasContratoA4('.contrato-folha')}
         .sr-nao-imprimir { display: none !important; }
       }
+    
+      /* Situação na Cloudbeds */
+      .sr-cb { font-size: 12px; font-weight: 600; margin-top: 4px; }
+      .sr-cb-ok { color: var(--sucesso-texto); }
+      .sr-cb-erro { color: var(--erro-texto); }
+      .sr-cb-neutro { color: var(--texto-suave); }
+      .sr-cb-detalhe { font-weight: 400; }
     `}</style>
   );
 }
