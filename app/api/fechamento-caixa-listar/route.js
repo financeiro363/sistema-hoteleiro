@@ -6,13 +6,25 @@
 // horário, apartamento e usuário), separados dos estornos/abatimentos, e
 // os totais somados por forma de pagamento.
 //
-// Soma também os pagamentos da SALA DE REUNIÃO lançados no sistema naquele
-// dia (Pix, dinheiro, cartão de crédito/débito), sempre identificados como
-// "Sala de Reunião" — e mesmo que a Cloudbeds falhe, eles aparecem.
+// SEM DUPLICIDADE (Sala de Reunião e Conveniência avulsa):
+// - O que já foi enviado para a Cloudbeds (Contas da Casa "Sala de Reunião" e
+//   "Conveniência – Vendas Avulsas") entra UMA vez só, vindo da Cloudbeds,
+//   identificado como "Sala de Reunião" / "Conveniência".
+// - O que NÃO está na Cloudbeds (falhou, data passada, ou é antigo) continua
+//   sendo somado à parte, pelo sistema — e mesmo que a Cloudbeds falhe, aparece.
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
 import { descriptografar } from '../../../lib/cloudbedsCrypto';
+
+// Rótulos das formas de pagamento do PDV avulso (código no banco -> nome)
+const FORMAS_PDV = {
+  DINHEIRO: 'Dinheiro',
+  PIX: 'Pix',
+  CARTAO: 'Cartão',
+  CARTAO_CREDITO: 'Cartão de crédito',
+  CARTAO_DEBITO: 'Cartão de débito',
+};
 
 // 9100=Dinheiro, 9200=Transferência Bancária, 9300=Cartão (processado por
 // gateway), 9000=Pagamento genérico (é o que a maioria dos métodos
@@ -27,6 +39,8 @@ const FORMAS_SALA = {
   CARTAO_CREDITO: 'Cartão de crédito',
   CARTAO_DEBITO: 'Cartão de débito',
 };
+
+const ROTULO_ORIGEM = { SALA: 'Sala de Reunião', PDV: 'Conveniência (avulso)' };
 
 // Sufixo "A" = estorno (dinheiro devolvido/abatido), "V" = lançamento
 // anulado. Isso vale tanto pra pagamento quanto pra item consumido — por
@@ -75,7 +89,7 @@ function extrairFormaPagamento(descricao) {
 // Se algo falhar aqui (integração não configurada, Cloudbeds fora do ar...),
 // quem chama mostra um aviso mas ainda entrega os pagamentos da Sala de
 // Reunião, que não dependem da Cloudbeds.
-async function buscarCloudbeds({ supabaseAdmin, hotelId, dataConsultada, segredoCripto }) {
+async function buscarCloudbeds({ supabaseAdmin, hotelId, dataConsultada, segredoCripto, contasConhecidas }) {
     const { data: credencial, error: erroCred } = await supabaseAdmin
       .from('cloudbeds_credenciais').select('*').eq('hotel_id', hotelId).maybeSingle();
     if (erroCred || !credencial?.api_key_cifrada || !credencial?.cloudbeds_property_id) {
@@ -123,9 +137,37 @@ async function buscarCloudbeds({ supabaseAdmin, hotelId, dataConsultada, segredo
       });
     } catch (e) { /* segue sem nome, mostra o ID */ }
 
+    // ---- 2b) Contas da Casa (Sala de Reunião, Conveniência e outras) ----
+    // As do sistema já vêm da configuração; as demais, pelo nome na Cloudbeds.
+    const nomesContas = {};
+    try {
+      const respostaContas = await fetch(`https://api.cloudbeds.com/api/v1.2/getHouseAccountList?propertyID=${propertyId}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      const dadosContas = await respostaContas.json().catch(() => null);
+      (Array.isArray(dadosContas?.data) ? dadosContas.data : []).forEach((c) => {
+        if (c?.accountID) nomesContas[String(c.accountID)] = c.accountName || `Conta da casa #${c.accountID}`;
+      });
+    } catch (e) { /* segue sem os nomes */ }
+
+    const origemDe = (t) => {
+      const ids = [t.sourceIdentifier, t.sourceId].filter((v) => v !== undefined && v !== null).map(String);
+      for (const id of ids) {
+        if (contasConhecidas?.[id]) return { origem: contasConhecidas[id], idOrigem: id };
+      }
+      for (const id of ids) {
+        if (nomesContas[id]) return { origem: 'CONTA_CASA', idOrigem: id, nomeConta: nomesContas[id] };
+      }
+      if (/house/i.test(String(t.sourceKind || ''))) return { origem: 'CONTA_CASA', idOrigem: ids[0] || '' };
+      return { origem: 'RESERVA', idOrigem: t.sourceIdentifier };
+    };
+
     // ---- 3) Busca o número do apartamento de cada reserva envolvida ----
-    // (uma chamada por reserva ÚNICA, não por lançamento, pra não repetir à toa)
-    const idsReservaUnicos = [...new Set(transacoes.map((t) => t.sourceIdentifier).filter(Boolean))];
+    // (uma chamada por reserva ÚNICA, não por lançamento, pra não repetir à toa;
+    // Contas da Casa não são reserva, então ficam de fora)
+    const idsReservaUnicos = [...new Set(transacoes
+      .filter((t) => origemDe(t).origem === 'RESERVA')
+      .map((t) => t.sourceIdentifier).filter(Boolean))];
     const mapaApartamentoPorReserva = {};
     for (const idReserva of idsReservaUnicos) {
       try {
@@ -148,12 +190,16 @@ async function buscarCloudbeds({ supabaseAdmin, hotelId, dataConsultada, segredo
     // ---- 4) Monta a lista final, já enriquecida ----
     const lancamentos = transacoes.map((t) => {
       const classificacao = classificarTransacao(t.internalTransactionCode);
+      const { origem, nomeConta } = origemDe(t);
       return {
         id: t.id,
         formaPagamento: extrairFormaPagamento(t.description),
         valor: Math.abs(t.amount),
         horario: (t.transactionDatetimePropertyTime || t.transactionDatetime || '').slice(11, 16),
-        apartamento: mapaApartamentoPorReserva[t.sourceIdentifier] || '—',
+        origem,
+        apartamento: ROTULO_ORIGEM[origem]
+          || (origem === 'CONTA_CASA' ? `Conta da casa${nomeConta ? `: ${nomeConta}` : ''}` : null)
+          || mapaApartamentoPorReserva[t.sourceIdentifier] || '—',
         usuario: mapaNomeUsuario[t.userId] || `Usuário #${t.userId}`,
         classificacao,
         // "ANULADO" cobre tanto pagamento anulado quanto item anulado —
@@ -182,12 +228,26 @@ async function buscarCloudbeds({ supabaseAdmin, hotelId, dataConsultada, segredo
     // valor negativo, pra cancelar certinho o lançamento original) — só
     // considera a lista de PAGAMENTOS, os itens cancelados não entram aqui.
     const totaisPorForma = {};
+    const totaisPorOrigem = { SALA: 0, PDV: 0 };
     pagamentos.forEach((l) => {
       const sinal = l.tipo === 'ANULADO' ? -1 : 1;
       totaisPorForma[l.formaPagamento] = (totaisPorForma[l.formaPagamento] || 0) + sinal * l.valor;
+      if (totaisPorOrigem[l.origem] !== undefined) totaisPorOrigem[l.origem] += sinal * l.valor;
     });
 
-    return { pagamentos, estornos, totaisPorForma };
+    return { pagamentos, estornos, totaisPorForma, totaisPorOrigem };
+}
+
+// ---- Contas da Casa configuradas (Sala de Reunião e Conveniência) ----------
+async function buscarContasConhecidas(supabaseAdmin, hotelId) {
+  const contas = {};
+  try {
+    const { data } = await supabaseAdmin.from('cloudbeds_caixa_config')
+      .select('conta_pdv_id, conta_sala_id').eq('hotel_id', hotelId).maybeSingle();
+    if (data?.conta_sala_id) contas[String(data.conta_sala_id)] = 'SALA';
+    if (data?.conta_pdv_id) contas[String(data.conta_pdv_id)] = 'PDV';
+  } catch (e) { /* tabela ainda não criada — segue sem */ }
+  return contas;
 }
 
 // ---- Parte Sala de Reunião (pagamentos lançados no sistema) ----------------
@@ -216,6 +276,10 @@ async function buscarSalaReuniao({ supabaseAdmin, hotelId, dataConsultada }) {
 
   const pagamentos = (linhas || []).map((l) => ({
     id: l.id,
+    // Já está na Cloudbeds → é contado lá (nos lançamentos da Cloudbeds), não aqui
+    naCloudbeds: !!l.cloudbeds_payment_id,
+    cloudbedsStatus: l.cloudbeds_status || null,
+    cloudbedsErro: l.cloudbeds_erro || null,
     horario: new Date(l.criado_em).toLocaleTimeString('pt-BR', { timeZone: FUSO_HOTEL, hour: '2-digit', minute: '2-digit' }),
     forma: l.forma_pagamento,
     formaPagamento: FORMAS_SALA[l.forma_pagamento] || l.forma_pagamento,
@@ -229,12 +293,58 @@ async function buscarSalaReuniao({ supabaseAdmin, hotelId, dataConsultada }) {
     anuladoPor: l.anulado_em ? (nomes[l.anulado_por_id] || `Usuário #${l.anulado_por_id}`) : null,
   }));
 
+  // Somados à parte: só os que NÃO estão na Cloudbeds (e não foram anulados)
   const totaisPorForma = {};
-  pagamentos.filter((p) => !p.anulado).forEach((p) => {
+  pagamentos.filter((p) => !p.anulado && !p.naCloudbeds).forEach((p) => {
     totaisPorForma[p.formaPagamento] = Math.round(((totaisPorForma[p.formaPagamento] || 0) + p.valor) * 100) / 100;
   });
   const total = Math.round(Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0) * 100) / 100;
-  return { pagamentos, totaisPorForma, total, aviso: null };
+  const totalDoDia = Math.round(pagamentos.filter((p) => !p.anulado).reduce((soma, p) => soma + p.valor, 0) * 100) / 100;
+  const anuladosAindaNaCloudbeds = pagamentos.filter((p) => p.anulado && p.cloudbedsStatus === 'FALHA_ANULACAO');
+  return { pagamentos, totaisPorForma, total, totalDoDia, anuladosAindaNaCloudbeds, aviso: null };
+}
+
+// ---- Conveniência: vendas avulsas que NÃO chegaram à Cloudbeds -------------
+// (as que chegaram já aparecem nos lançamentos da Cloudbeds). Vendas antigas,
+// de antes do envio automático, ficam de fora, como sempre foi.
+async function buscarPdvForaDaCloudbeds({ supabaseAdmin, hotelId, dataConsultada }) {
+  const vazio = { vendas: [], totaisPorForma: {}, total: 0, aviso: null };
+  const inicio = new Date(`${dataConsultada}T03:00:00Z`); // 00:00 em Fortaleza
+  const fim = new Date(inicio.getTime() + 24 * 60 * 60 * 1000);
+  const { data: linhas, error } = await supabaseAdmin
+    .from('pdv_vendas')
+    .select('id, numero_venda, criado_em, forma_pagamento_avulso, valor_total, vendido_por_id, cloudbeds_status, cloudbeds_erro, cloudbeds_payment_id')
+    .eq('hotel_id', hotelId).eq('tipo_pagamento', 'AVULSO').eq('status', 'CONCLUIDA')
+    .is('cloudbeds_payment_id', null)
+    .in('cloudbeds_status', ['PENDENTE', 'FALHOU'])
+    .gte('criado_em', inicio.toISOString()).lt('criado_em', fim.toISOString())
+    .order('criado_em', { ascending: true });
+  if (error) {
+    if (/cloudbeds_payment_id|column/i.test(error.message)) return vazio; // SQL novo ainda não rodado
+    return { ...vazio, aviso: 'Não foi possível ler as vendas da Conveniência: ' + error.message };
+  }
+
+  const ids = [...new Set((linhas || []).map((l) => l.vendido_por_id).filter(Boolean))];
+  const nomes = {};
+  if (ids.length) {
+    const { data: pessoas } = await supabaseAdmin.from('usuarios').select('id, nome').in('id', ids);
+    (pessoas || []).forEach((u) => { nomes[u.id] = u.nome; });
+  }
+  const vendas = (linhas || []).map((l) => ({
+    id: l.id,
+    numero: l.numero_venda,
+    horario: new Date(l.criado_em).toLocaleTimeString('pt-BR', { timeZone: FUSO_HOTEL, hour: '2-digit', minute: '2-digit' }),
+    formaPagamento: FORMAS_PDV[l.forma_pagamento_avulso] || l.forma_pagamento_avulso || '—',
+    valor: Number(l.valor_total),
+    usuario: nomes[l.vendido_por_id] || `Usuário #${l.vendido_por_id}`,
+    erro: l.cloudbeds_erro || null,
+  }));
+  const totaisPorForma = {};
+  vendas.forEach((v) => {
+    totaisPorForma[v.formaPagamento] = Math.round(((totaisPorForma[v.formaPagamento] || 0) + v.valor) * 100) / 100;
+  });
+  const total = Math.round(vendas.reduce((soma, v) => soma + v.valor, 0) * 100) / 100;
+  return { vendas, totaisPorForma, total, aviso: null };
 }
 
 export async function GET(request) {
@@ -278,35 +388,52 @@ export async function GET(request) {
     const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
 
     // ---- 1) Cloudbeds (se falhar, segue só com a Sala de Reunião + aviso) ----
-    let cloudbeds = { pagamentos: [], estornos: [], totaisPorForma: {} };
+    let cloudbeds = { pagamentos: [], estornos: [], totaisPorForma: {}, totaisPorOrigem: { SALA: 0, PDV: 0 } };
     let avisoCloudbeds = null;
+    const contasConhecidas = await buscarContasConhecidas(supabaseAdmin, chamador.hotel_id);
     try {
       cloudbeds = await buscarCloudbeds({
-        supabaseAdmin, hotelId: chamador.hotel_id, dataConsultada, segredoCripto,
+        supabaseAdmin, hotelId: chamador.hotel_id, dataConsultada, segredoCripto, contasConhecidas,
       });
     } catch (e) {
       avisoCloudbeds = e.message;
     }
-    const { pagamentos, estornos, totaisPorForma } = cloudbeds;
+    const { pagamentos, estornos, totaisPorForma, totaisPorOrigem } = cloudbeds;
 
-    // ---- 2) Pagamentos da Sala de Reunião no dia ----
-    const sala = await buscarSalaReuniao({ supabaseAdmin, hotelId: chamador.hotel_id, dataConsultada });
+    // ---- 2) Sala de Reunião e Conveniência que NÃO estão na Cloudbeds ----
+    const [sala, pdv] = await Promise.all([
+      buscarSalaReuniao({ supabaseAdmin, hotelId: chamador.hotel_id, dataConsultada }),
+      buscarPdvForaDaCloudbeds({ supabaseAdmin, hotelId: chamador.hotel_id, dataConsultada }),
+    ]);
 
-    const totalCloudbeds = Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0);
+    const arred = (v) => Math.round(v * 100) / 100;
+    const totalCloudbeds = arred(Object.values(totaisPorForma).reduce((soma, v) => soma + v, 0));
 
     return Response.json({
       data: dataConsultada,
       pagamentos,
       estornos,
       totaisPorForma,
-      // Sala de Reunião: lista do dia, totais por forma e total (anulados não somam)
+      // Sala de Reunião: lista do dia (com a situação na Cloudbeds). Os totais
+      // "Sala" abaixo são SÓ dos pagamentos que não estão na Cloudbeds.
       salaReuniao: sala.pagamentos,
       totaisSalaPorForma: sala.totaisPorForma,
       totalSalaReuniao: sala.total,
+      totalSalaDoDia: sala.totalDoDia ?? sala.total,
+      salaAnuladosAindaNaCloudbeds: sala.anuladosAindaNaCloudbeds || [],
       avisoSalaReuniao: sala.aviso,
+      // Conveniência avulsa que não chegou à Cloudbeds (somada à parte)
+      pdvForaCloudbeds: pdv.vendas,
+      totaisPdvPorForma: pdv.totaisPorForma,
+      totalPdvFora: pdv.total,
+      avisoPdv: pdv.aviso,
+      // O que veio da Cloudbeds pelas Contas da Casa do sistema
+      totalSalaNaCloudbeds: arred(totaisPorOrigem?.SALA || 0),
+      totalPdvNaCloudbeds: arred(totaisPorOrigem?.PDV || 0),
+      contasConfiguradas: Object.keys(contasConhecidas).length > 0,
       avisoCloudbeds,
       totalCloudbeds,
-      totalGeral: totalCloudbeds + sala.total,
+      totalGeral: arred(totalCloudbeds + sala.total + pdv.total),
       totalEstornos: estornos.reduce((soma, l) => soma + l.valor, 0),
     });
   } catch (erro) {
