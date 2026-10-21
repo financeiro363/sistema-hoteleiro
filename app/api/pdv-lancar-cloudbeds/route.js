@@ -1,6 +1,13 @@
 // ============================================================================
 // ROTA DE SERVIDOR: /api/pdv-lancar-cloudbeds
 // ============================================================================
+// VENDA AVULSA (dinheiro, Pix, cartão): lança o PAGAMENTO e os PRODUTOS na
+// Conta da Casa "Conveniência – Vendas Avulsas" da Cloudbeds, no mesmo dia.
+// O pagamento vai primeiro (é o que importa para o Fechamento de Caixa); se
+// algum produto não for, a venda fica em "Tentar de novo" só para os produtos.
+// Ver lancarVendaAvulsa() no fim do arquivo e lib/cloudbedsCaixa.js.
+//
+// LANÇAMENTO NO QUARTO (como já era):
 // Recebe uma venda do tipo "Lançamento no Quarto" já salva no nosso banco,
 // e lança a cobrança na Cloudbeds usando o endpoint item/v1/items
 // (confirmado na documentação oficial, com print da conta real do
@@ -11,6 +18,9 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { descriptografar } from '../../../lib/cloudbedsCrypto';
+import {
+  carregarCloudbeds, carregarConfigCaixa, garantirContaDaCasa, formaNaCloudbeds, lancarPagamento, lancarItem,
+} from '../../../lib/cloudbedsCaixa';
 
 const CLOUDBEDS_BASE_URL = 'https://api.cloudbeds.com/api/v1.2';
 
@@ -56,13 +66,18 @@ export async function POST(request) {
     if (erroVenda || !venda) {
       return Response.json({ erro: 'Venda não encontrada.' }, { status: 404 });
     }
-    if (venda.tipo_pagamento !== 'QUARTO' || !venda.cloudbeds_reservation_id) {
-      return Response.json({ erro: 'Essa venda não é do tipo "Lançamento no Quarto".' }, { status: 400 });
-    }
     const { data: itens, error: erroItens } = await supabaseAdmin
       .from('pdv_venda_itens').select('*').eq('venda_id', vendaId);
     if (erroItens || !itens?.length) {
       return Response.json({ erro: 'Não foi possível carregar os itens da venda.' }, { status: 400 });
+    }
+
+    // Venda avulsa → Conta da Casa da Cloudbeds
+    if (venda.tipo_pagamento === 'AVULSO') {
+      return lancarVendaAvulsa({ supabaseAdmin, hotelId: chamador.hotel_id, venda, itens, segredoCripto });
+    }
+    if (venda.tipo_pagamento !== 'QUARTO' || !venda.cloudbeds_reservation_id) {
+      return Response.json({ erro: 'Essa venda não é do tipo "Lançamento no Quarto".' }, { status: 400 });
     }
 
     // Credencial da Cloudbeds
@@ -145,5 +160,103 @@ export async function POST(request) {
     return Response.json({ sucesso: true });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
+  }
+}
+// ============================================================================
+// VENDA AVULSA → Conta da Casa "Conveniência – Vendas Avulsas"
+// ============================================================================
+const TRAVA_SEGUNDOS = 60; // evita lançar duas vezes se clicarem duas vezes
+
+async function lancarVendaAvulsa({ supabaseAdmin, hotelId, venda, itens, segredoCripto }) {
+  const atualizarVenda = (campos) => supabaseAdmin.from('pdv_vendas').update(campos).eq('id', venda.id);
+
+  if (venda.status && venda.status !== 'CONCLUIDA') {
+    return Response.json({ erro: 'Esta venda não está concluída (foi cancelada?).' }, { status: 400 });
+  }
+  if (venda.cloudbeds_status === 'ENVIADO') return Response.json({ sucesso: true, jaEnviado: true });
+
+  let config;
+  try { config = await carregarConfigCaixa(supabaseAdmin, hotelId); }
+  catch (e) {
+    await atualizarVenda({ cloudbeds_status: 'FALHOU', cloudbeds_erro: e.message });
+    return Response.json({ erro: e.message }, { status: 400 });
+  }
+  if (config.enviar_pdv === false) {
+    await atualizarVenda({ cloudbeds_status: 'NAO_APLICAVEL', cloudbeds_erro: null });
+    return Response.json({ sucesso: true, ignorado: true, motivo: 'O envio das vendas avulsas para a Cloudbeds está desligado.' });
+  }
+
+  // Trava: só um envio por vez para a mesma venda
+  const limite = new Date(Date.now() - TRAVA_SEGUNDOS * 1000).toISOString();
+  const { data: travada, error: erroTrava } = await supabaseAdmin.from('pdv_vendas')
+    .update({ cloudbeds_tentativa_em: new Date().toISOString() })
+    .eq('id', venda.id)
+    .or(`cloudbeds_tentativa_em.is.null,cloudbeds_tentativa_em.lt.${limite}`)
+    .select('id');
+  if (erroTrava) {
+    const msg = /cloudbeds_|column/i.test(erroTrava.message)
+      ? 'O envio para a Cloudbeds ainda não foi ativado no banco de dados (falta rodar o SQL do caixa).'
+      : 'Não foi possível preparar o envio: ' + erroTrava.message;
+    return Response.json({ erro: msg }, { status: 400 });
+  }
+  if (!travada?.length) {
+    return Response.json({ erro: 'Esta venda já está sendo enviada. Aguarde um minuto e confira.' }, { status: 409 });
+  }
+
+  let pagamentoNaCloudbeds = !!venda.cloudbeds_payment_id;
+  try {
+    const cb = await carregarCloudbeds(supabaseAdmin, hotelId, segredoCripto);
+    const contaId = venda.cloudbeds_conta_id
+      || await garantirContaDaCasa({ cb, supabaseAdmin, hotelId, config, tipo: 'pdv' });
+
+    // 1) Pagamento (é o que entra no Fechamento de Caixa)
+    if (!venda.cloudbeds_payment_id) {
+      const forma = formaNaCloudbeds(config, venda.forma_pagamento_avulso);
+      const paymentId = await lancarPagamento({
+        cb, contaId, forma, valor: Number(venda.valor_total),
+        descricao: `Conveniência — Venda #${venda.numero_venda}`,
+      });
+      await atualizarVenda({ cloudbeds_payment_id: paymentId, cloudbeds_conta_id: contaId });
+      pagamentoNaCloudbeds = true;
+    }
+
+    // 2) Produtos (um lançamento por produto, com a quantidade)
+    const semId = [];
+    for (const item of itens) {
+      if (item.cloudbeds_sold_product_id) continue; // já foi numa tentativa anterior
+      let itemCloudbeds = item.cloudbeds_item_id;
+      if (!itemCloudbeds && item.produto_id) {
+        // O ID pode ter sido cadastrado no produto depois da venda
+        const { data: produto } = await supabaseAdmin.from('pdv_produtos')
+          .select('cloudbeds_item_id').eq('id', item.produto_id).maybeSingle();
+        if (produto?.cloudbeds_item_id) {
+          itemCloudbeds = produto.cloudbeds_item_id;
+          await supabaseAdmin.from('pdv_venda_itens').update({ cloudbeds_item_id: itemCloudbeds }).eq('id', item.id);
+        }
+      }
+      if (!itemCloudbeds) { semId.push(item.nome_produto); continue; }
+      const soldId = await lancarItem({
+        cb, contaId, itemId: itemCloudbeds, quantidade: item.quantidade, precoUnitario: Number(item.preco_unitario),
+        nota: `${item.nome_produto} — Venda #${venda.numero_venda}`,
+      });
+      await supabaseAdmin.from('pdv_venda_itens').update({ cloudbeds_sold_product_id: soldId }).eq('id', item.id);
+    }
+
+    if (semId.length) {
+      const msg = `O pagamento já está na Cloudbeds, mas faltam os produtos: ${semId.join(', ')} (sem o "ID do item na Cloudbeds"). Cadastre o ID em Preços e Estoque e clique em "Tentar de novo".`;
+      await atualizarVenda({ cloudbeds_status: 'FALHOU', cloudbeds_erro: msg, cloudbeds_tentativa_em: null });
+      return Response.json({ erro: msg, pagamentoNaCloudbeds: true }, { status: 400 });
+    }
+
+    await atualizarVenda({
+      cloudbeds_status: 'ENVIADO', cloudbeds_erro: null, cloudbeds_enviado_em: new Date().toISOString(), cloudbeds_tentativa_em: null,
+    });
+    return Response.json({ sucesso: true });
+  } catch (e) {
+    const msg = pagamentoNaCloudbeds
+      ? `O pagamento já está na Cloudbeds, mas os produtos não foram: ${e.message}`
+      : e.message;
+    await atualizarVenda({ cloudbeds_status: 'FALHOU', cloudbeds_erro: msg, cloudbeds_tentativa_em: null });
+    return Response.json({ erro: msg, pagamentoNaCloudbeds }, { status: 400 });
   }
 }
