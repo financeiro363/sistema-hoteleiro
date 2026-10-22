@@ -232,6 +232,22 @@ export default function ControleUsuarios() {
     carregarTudo(usuario);
   }
 
+  async function alternarPermissaoAtendimento(pessoa) {
+    setSalvandoId(pessoa.id);
+    const { error } = await supabase.from('usuarios').update({ pode_acessar_atendimento: !pessoa.pode_acessar_atendimento }).eq('id', pessoa.id);
+    setSalvandoId(null);
+    if (error) {
+      setErro(/pode_acessar_atendimento/.test(error.message)
+        ? 'A Caixa de Entrada ainda não foi ativada no banco de dados (falta rodar o SQL da Caixa de Entrada).'
+        : 'Não foi possível atualizar. Detalhe técnico: ' + error.message);
+      return;
+    }
+    mostrarAviso(pessoa.pode_acessar_atendimento
+      ? `${pessoa.nome} não pode mais usar a Caixa de Entrada.`
+      : `${pessoa.nome} agora pode usar a Caixa de Entrada (WhatsApp e e-mail).`);
+    carregarTudo(usuario);
+  }
+
   const termo = busca.trim().toLowerCase();
   const filtrados = usuarios.filter((u) =>
     !termo || u.nome.toLowerCase().includes(termo) || (u.email || '').toLowerCase().includes(termo)
@@ -358,6 +374,13 @@ export default function ControleUsuarios() {
                       <input type="checkbox" checked={!!u.pode_acessar_fechamento_caixa} disabled={salvandoId === u.id}
                         onChange={() => alternarPermissaoFechamentoCaixa(u)} />
                       Pode acessar a página de Fechamento de Caixa
+                    </label>
+                  )}
+                  {u.papel === 'COLABORADOR' && (
+                    <label className="us-checkbox-atestado">
+                      <input type="checkbox" checked={!!u.pode_acessar_atendimento} disabled={salvandoId === u.id}
+                        onChange={() => alternarPermissaoAtendimento(u)} />
+                      Pode usar a Caixa de Entrada (responder WhatsApp e e-mails)
                     </label>
                   )}
                   {souEu ? (
