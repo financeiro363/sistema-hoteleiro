@@ -18,6 +18,7 @@ const CATEGORIAS_MENU = [
     chave: 'atendimento',
     nome: 'Atendimento',
     links: [
+      { href: '/atendimento', rotulo: 'Caixa de Entrada' },
       { href: '/agenda', rotulo: 'Agenda Telefônica' },
       { href: '/solicitacoes', rotulo: 'Solicitações' },
       { href: '/lista-espera', rotulo: 'Lista de Espera' },
@@ -58,8 +59,10 @@ const CATEGORIAS_MENU = [
 ];
 
 // Decide se um link específico pode aparecer para o papel atual
-function linkVisivelPara(link, papelUsuario, podeAcessarDepositos, podeVerTarefasDoDia, podeAcessarFechamentoCaixa) {
+function linkVisivelPara(link, papelUsuario, podeAcessarDepositos, podeVerTarefasDoDia, podeAcessarFechamentoCaixa, podeAcessarAtendimento) {
   if (papelUsuario === 'CONTADOR') return !!link.contadorVe;
+  // Caixa de Entrada: ADMIN, ou COLABORADOR com a permissão marcada em Usuários
+  if (link.href === '/atendimento') return papelUsuario === 'ADMIN' || (papelUsuario === 'COLABORADOR' && !!podeAcessarAtendimento);
   if (link.soAdmin) return papelUsuario === 'ADMIN';
   if (link.soAdminOuContador) return papelUsuario === 'ADMIN';
   if (link.href === '/depositos' && papelUsuario === 'COLABORADOR') return !!podeAcessarDepositos;
@@ -91,6 +94,8 @@ export default function CabecalhoSite() {
   const [podeAcessarDepositos, setPodeAcessarDepositos] = useState(false);
   const [podeVerTarefasDoDia, setPodeVerTarefasDoDia] = useState(false);
   const [podeAcessarFechamentoCaixa, setPodeAcessarFechamentoCaixa] = useState(false);
+  const [podeAcessarAtendimento, setPodeAcessarAtendimento] = useState(false);
+  const [contadorAtendimento, setContadorAtendimento] = useState(0);
   const [meusHoteis, setMeusHoteis] = useState([]); // [{hotel_id, papel, nome}]
   const [hotelIdAtual, setHotelIdAtual] = useState(null);
   const [trocandoHotel, setTrocandoHotel] = useState(false);
@@ -112,7 +117,7 @@ export default function CabecalhoSite() {
       if (data?.session) {
         const { data: perfil } = await supabase
           .from('usuarios')
-          .select('id, nome, papel, super_admin, pode_incluir_atestado, pode_acessar_depositos, pode_ver_tarefas_do_dia, pode_acessar_fechamento_caixa, hotel_id')
+          .select('*') // '*' (e não a lista de colunas) para não quebrar se alguma coluna nova ainda não existir no banco
           .eq('auth_id', data.session.user.id)
           .single();
         if (ativo) setUsuarioIdAtual(perfil?.id || null);
@@ -123,6 +128,7 @@ export default function CabecalhoSite() {
         if (ativo) setPodeAcessarDepositos(perfil?.pode_acessar_depositos === true);
         if (ativo) setPodeVerTarefasDoDia(perfil?.pode_ver_tarefas_do_dia === true);
         if (ativo) setPodeAcessarFechamentoCaixa(perfil?.pode_acessar_fechamento_caixa === true);
+        if (ativo) setPodeAcessarAtendimento(perfil?.pode_acessar_atendimento === true);
         if (ativo) setHotelIdAtual(perfil?.hotel_id || null);
         if (perfil?.hotel_id) {
           const { data: hotel } = await supabase.from('hoteis').select('nome_fantasia').eq('id', perfil.hotel_id).single();
@@ -167,7 +173,7 @@ export default function CabecalhoSite() {
 
     const { data: escuta } = supabase.auth.onAuthStateChange((_evento, sessao) => {
       setLogado(!!sessao);
-      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setPodeVerTarefasDoDia(false); setPodeAcessarFechamentoCaixa(false); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); setContadorSolicitacoes(0); setContadorFichasPendentes(0); setContadorDevolucoes(0); setContadorArrumacoes(0); setContadorManutencao(0); }
+      if (!sessao) { setNomeUsuario(''); setPapelUsuario(''); setSouSuperAdmin(false); setPodeIncluirAtestado(false); setPodeAcessarDepositos(false); setPodeVerTarefasDoDia(false); setPodeAcessarFechamentoCaixa(false); setPodeAcessarAtendimento(false); setContadorAtendimento(0); setNomeHotel(''); setMeusHoteis([]); setHotelIdAtual(null); setContadorSolicitacoes(0); setContadorFichasPendentes(0); setContadorDevolucoes(0); setContadorArrumacoes(0); setContadorManutencao(0); }
       else carregarSessao();
     });
 
@@ -212,6 +218,7 @@ export default function CabecalhoSite() {
       setContadorDevolucoes(0);
       setContadorArrumacoes(0);
       setContadorManutencao(0);
+      setContadorAtendimento(0);
       return;
     }
     const { count } = await supabase
@@ -267,6 +274,21 @@ export default function CabecalhoSite() {
       .eq('hotel_id', hotelId)
       .neq('status', 'CONCLUIDO');
     setContadorManutencao(countManutencao || 0);
+
+    // Caixa de Entrada: conversas com mensagem não lida, comigo ou sem
+    // responsável (se a tabela ainda não existir, fica 0 sem quebrar nada).
+    try {
+      const { count: countAtendimento, error: erroAtendimento } = await supabase
+        .from('atendimento_conversas')
+        .select('id', { count: 'exact', head: true })
+        .eq('hotel_id', hotelId)
+        .gt('nao_lidas', 0)
+        .neq('status', 'RESOLVIDA')
+        .or(`responsavel_id.is.null,responsavel_id.eq.${usuarioId}`);
+      setContadorAtendimento(erroAtendimento ? 0 : (countAtendimento || 0));
+    } catch (e) {
+      setContadorAtendimento(0);
+    }
   }
 
   // Atualiza os contadores periodicamente (a cada 60s) — como o menu não
@@ -289,7 +311,11 @@ export default function CabecalhoSite() {
       atualizarContadores(usuarioIdAtual, hotelIdAtual, papelUsuario);
     }
     window.addEventListener('fichas-atualizadas', aoAtualizarFichas);
-    return () => window.removeEventListener('fichas-atualizadas', aoAtualizarFichas);
+    window.addEventListener('atendimento-atualizado', aoAtualizarFichas);
+    return () => {
+      window.removeEventListener('fichas-atualizadas', aoAtualizarFichas);
+      window.removeEventListener('atendimento-atualizado', aoAtualizarFichas);
+    };
   }, [usuarioIdAtual, hotelIdAtual, papelUsuario]);
 
   // Fecha o menu hambúrguer e o dropdown de categoria sempre que muda de
@@ -326,6 +352,7 @@ export default function CabecalhoSite() {
   // chamados na mesma ordem, mesmo quando vamos retornar nada.
   function contadorDoLink(href) {
     switch (href) {
+      case '/atendimento': return contadorAtendimento;
       case '/solicitacoes': return contadorSolicitacoes;
       case '/fichas-hospedes': return contadorFichasPendentes;
       case '/creditos': return contadorDevolucoes;
@@ -404,7 +431,7 @@ export default function CabecalhoSite() {
           ) : (
             <>
               {CATEGORIAS_MENU.map((categoria) => {
-                const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario, podeAcessarDepositos, podeVerTarefasDoDia, podeAcessarFechamentoCaixa));
+                const linksVisiveis = categoria.links.filter((link) => linkVisivelPara(link, papelUsuario, podeAcessarDepositos, podeVerTarefasDoDia, podeAcessarFechamentoCaixa, podeAcessarAtendimento));
                 if (linksVisiveis.length === 0) return null; // esconde a categoria inteira se ninguém dentro dela é visível
                 const temPaginaAtiva = linksVisiveis.some((link) => link.href === caminhoAtual);
                 // Se QUALQUER item dessa categoria tiver algo pendente pra
