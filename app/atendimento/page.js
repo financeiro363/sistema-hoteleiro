@@ -30,6 +30,7 @@ import { CartaoConversa, Quadro, colunasDoQuadro } from '../components/atendimen
 import { Contatos } from '../components/atendimento/Contatos';
 import { PainelIndicadores } from '../components/atendimento/Painel';
 import { FunilEtiquetas } from '../components/atendimento/Funil';
+import { ModelosEmail } from '../components/atendimento/ModelosEmail';
 
 const FILTROS = [
   ['abertas', 'Abertas'],
@@ -50,7 +51,7 @@ const PERIODOS = [
   ['90', 'Últimos 90 dias'],
 ];
 
-const ABAS = ['conversas', 'contatos', 'painel', 'respostas', 'funil', 'canais'];
+const ABAS = ['conversas', 'contatos', 'painel', 'respostas', 'modelos', 'funil', 'canais'];
 const FECHADAS = '(RESOLVIDA,ARQUIVADA)';
 const LIMITE_LISTA = 300;
 const LIMITE_QUADRO = 600;
@@ -73,6 +74,7 @@ export default function CaixaDeEntrada() {
   const [etapas, setEtapas] = useState([]);
   const [etiquetas, setEtiquetas] = useState([]);
   const [preferencias, setPreferencias] = useState([]);
+  const [modelos, setModelos] = useState([]);
   const [faltaFase2, setFaltaFase2] = useState(false);
 
   const [conversas, setConversas] = useState([]);
@@ -143,12 +145,13 @@ export default function CaixaDeEntrada() {
       eq = await chamarApi('/api/atendimento', { acao: 'equipe' });
       setEquipe({ hoteis: eq.hoteis || [], pessoas: eq.pessoas || [], nomes: eq.nomes || {} });
     } catch (e) { /* segue com o hotel atual */ }
-    const [c, r, et, eg, pr] = await Promise.all([
+    const [c, r, et, eg, pr, me] = await Promise.all([
       supabase.from('atendimento_canais').select('id, hotel_id, tipo, nome, endereco_exibicao, ativo, status, erro, ultima_sincronizacao, config, identificador').order('nome'),
       supabase.from('atendimento_respostas_prontas').select('*').order('atalho'),
       supabase.from('atendimento_etapas').select('*').order('ordem').order('id'),
       supabase.from('atendimento_etiquetas').select('*').order('nome'),
       supabase.from('atendimento_preferencias').select('*'),
+      supabase.from('atendimento_modelos_email').select('*').order('categoria').order('nome'),
     ]);
     if (c.error) setErroLista(/atendimento_|does not exist|schema cache/i.test(c.error.message) ? mensagemSemSql : 'Não foi possível carregar os canais: ' + c.error.message);
     setCanais(c.data || []);
@@ -157,6 +160,7 @@ export default function CaixaDeEntrada() {
     setEtapas(et.data || []);
     setEtiquetas(eg.data || []);
     setPreferencias(pr.data || []);
+    setModelos(me.data || []);
   }, []);
 
   // ---- Filtros → consulta ----------------------------------------------------
@@ -363,6 +367,7 @@ export default function CaixaDeEntrada() {
     const canalRt = supabase.channel(`atendimento-${usuario.id}-${chaveHoteis}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'atendimento_conversas', filter: filtroRt }, agendarRecarga)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'atendimento_mensagens', filter: filtroRt }, agendarRecarga)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendimento_cotacoes', filter: filtroRt }, agendarRecarga)
       .subscribe();
     const intervalo = setInterval(recarregarTudo, 20000);
     verificarNovidades();
@@ -453,6 +458,8 @@ export default function CaixaDeEntrada() {
       etapas={etapas.filter((e) => e.hotel_id === selecionada.hotel_id)}
       etiquetas={etiquetas.filter((e) => e.hotel_id === selecionada.hotel_id)}
       nomeHotel={multiHotel ? nomesHoteis[selecionada.hotel_id] : null}
+      nomeHotelReal={nomesHoteis[selecionada.hotel_id] || ''}
+      modelos={modelos.filter((m) => m.hotel_id === selecionada.hotel_id)}
       alertaMinutos={alertas[selecionada.hotel_id]}
       lateralAberta={lateralAberta}
       onAlternarLateral={() => setLateralAberta(!lateralAberta)}
@@ -485,6 +492,7 @@ export default function CaixaDeEntrada() {
             ['contatos', '👥 Contatos'],
             ['painel', '📊 Painel'],
             ['respostas', '⚡ Respostas prontas'],
+            ['modelos', '✉️ Modelos de e-mail'],
             ...(souAdminDeAlgum ? [['funil', '🧩 Funil e etiquetas']] : []),
             ...(souAdmin ? [['canais', '⚙️ Canais']] : []),
           ].map(([chave, rotulo]) => (
@@ -522,10 +530,16 @@ export default function CaixaDeEntrada() {
       {aba === 'respostas' && (
         <RespostasProntas usuario={usuario} respostas={respostas} hoteis={equipe.hoteis} multiHotel={multiHotel} onMudou={carregarApoio} />
       )}
+      {aba === 'modelos' && (
+        <ModelosEmail
+          hoteis={equipe.hoteis.length ? equipe.hoteis : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual', souAdmin }]}
+          multiHotel={multiHotel} modelos={modelos} usuario={usuario} onMudou={carregarApoio}
+        />
+      )}
       {aba === 'funil' && souAdminDeAlgum && (
         <FunilEtiquetas
           hoteis={equipe.hoteis.length ? equipe.hoteis.filter((h) => h.souAdmin) : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual', souAdmin: true }]}
-          etapas={etapas} etiquetas={etiquetas} preferencias={preferencias} onMudou={carregarApoio}
+          hotelAtual={usuario.hotel_id} etapas={etapas} etiquetas={etiquetas} preferencias={preferencias} onMudou={carregarApoio}
         />
       )}
       {aba === 'canais' && souAdmin && (
@@ -688,6 +702,9 @@ export default function CaixaDeEntrada() {
           canais={canais}
           inicial={novaConversa}
           nomesHoteis={multiHotel ? nomesHoteis : null}
+          nomesHoteisTodos={nomesHoteis}
+          modelos={modelos}
+          usuario={usuario}
           onFechar={() => setNovaConversa(null)}
           onCriada={(id) => { setNovaConversa(null); setFiltro('todas'); recarregarTudo(); if (id) abrirConversa(id); }}
         />

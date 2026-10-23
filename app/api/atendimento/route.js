@@ -14,6 +14,10 @@
 //   equipe            → hotéis e pessoas que atendem (filtros e "responsável")
 //   painel            → indicadores do mês (aba Painel)
 //   importar_contatos → importa a lista de contatos (ex.: exportada do Asksuite)
+//   cotacao_buscar    → preço e disponibilidade na Cloudbeds (tarifa padrão)
+//   cotacao_enviar    → envia a cotação com o link "Reservar agora" de cada quarto
+//   motor_detectar    → descobre o link do motor de reservas na Cloudbeds (ADMIN)
+//   reservas_verificar→ procura reservas novas na Cloudbeds e marca "Reservou"
 // Acesso: ADMIN ou COLABORADOR com "Pode usar a Caixa de Entrada" — nos dois
 // hotéis, quando a pessoa tem vínculo com os dois.
 // ============================================================================
@@ -31,6 +35,11 @@ import {
   marcarFioComoLido, baixarAnexoGmail, listaDeEnderecos,
 } from '../../../lib/atendimento/gmail';
 import { conexaoCloudbeds, procurarReservas, detalheReserva } from '../../../lib/atendimento/cloudbeds';
+import {
+  buscarDisponibilidade, linkDoMotor, detectarMotor, novoCodigo, textoCotacao, htmlCotacao, limparHtml,
+  verificarReservasHotel, reais, dataBR,
+} from '../../../lib/atendimento/cotacao';
+import { origemDoSite } from '../../../lib/atendimento/servidor';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,10 +51,15 @@ export async function POST(request) {
   let corpo;
   try { corpo = await request.json(); } catch (e) { return respostaErro('Pedido inválido.'); }
 
-  // Chamada da função agendada da Netlify (sem usuário)
+  // Chamada da função agendada da Netlify (sem usuário): e-mails novos e,
+  // a cada 5 minutos por hotel, reservas novas na Cloudbeds
   if (corpo?.acao === 'sincronizar' && chamadaAgendadaValida(request)) {
-    try { return Response.json(await sincronizarEmails(clienteAdmin(), null, 60 * 1000)); }
-    catch (e) { return respostaErro(e.message, 500); }
+    try {
+      const supabaseAdmin = clienteAdmin();
+      const emails = await sincronizarEmails(supabaseAdmin, null, 60 * 1000);
+      const reservas = await verificarReservasTodos(supabaseAdmin, null, false);
+      return Response.json({ ...emails, reservas });
+    } catch (e) { return respostaErro(e.message, 500); }
   }
 
   const auth = await autenticar(request);
@@ -66,6 +80,11 @@ export async function POST(request) {
       case 'equipe': return await acaoEquipe(supabaseAdmin, chamador);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
       case 'importar_contatos': return await acaoImportarContatos(supabaseAdmin, chamador, corpo);
+      case 'cotacao_buscar': return await acaoCotacaoBuscar(supabaseAdmin, chamador, corpo);
+      case 'cotacao_enviar': return await acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request);
+      case 'motor_detectar': return await acaoMotorDetectar(supabaseAdmin, chamador, corpo);
+      case 'reservas_verificar':
+        return Response.json({ resultados: await verificarReservasTodos(supabaseAdmin, chamador.hoteis, true) });
       default: return respostaErro('Ação desconhecida.');
     }
   } catch (e) {
@@ -144,7 +163,7 @@ async function acaoEnviar(supabaseAdmin, chamador, corpo) {
   }
 
   const arquivos = await lerAnexosEnviados(supabaseAdmin, canal.hotel_id, corpo.anexos, canal.tipo);
-  if (!texto && !arquivos.length && !corpo.modelo) return respostaErro('Escreva a mensagem ou escolha um anexo.');
+  if (!texto && !arquivos.length && !corpo.modelo && !corpo.html) return respostaErro('Escreva a mensagem ou escolha um anexo.');
 
   const mensagens = canal.tipo === 'WHATSAPP'
     ? await enviarWhatsApp(supabaseAdmin, chamador, { canal, conversa, corpo, texto, arquivos })
@@ -206,7 +225,7 @@ async function enviarWhatsApp(supabaseAdmin, chamador, { canal, conversa, corpo,
   const legendaNoArquivo = arquivos.length === 1 && texto && texto.length <= 1000;
   try {
     if (texto && !legendaNoArquivo) {
-      const r = await enviarTexto({ token, canal, para, texto });
+      const r = await enviarTexto({ token, canal, para, texto, previa: !corpo.semPrevia });
       lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, { tipo: 'texto', texto, id_externo: r.idExterno, status_envio: 'ENVIADA' }));
     }
     for (const arquivo of arquivos) {
@@ -249,10 +268,11 @@ async function enviarEmailDaConversa(supabaseAdmin, chamador, { canal, conversa,
     if (!para) return { lista, erro: 'Informe um e-mail válido para o destinatário.' };
     if (!assunto) return { lista, erro: 'Informe o assunto do e-mail.' };
   }
-  if (!texto) return { lista, conversa, erro: 'Escreva o texto do e-mail.' };
+  const htmlCorpo = corpo.html ? limparHtml(corpo.html) : null;
+  if (!texto && !htmlCorpo) return { lista, conversa, erro: 'Escreva o texto do e-mail.' };
 
   const { mime, html } = montarEmail({
-    de: canal.identificador, nomeRemetente: canal.config?.nomeExibicao || canal.nome, para, cc, assunto, texto,
+    de: canal.identificador, nomeRemetente: canal.config?.nomeExibicao || canal.nome, para, cc, assunto, texto, html: htmlCorpo,
     assinaturaHtml: canal.config?.usarAssinatura === false ? null : canal.config?.assinatura || null,
     emResposta, referencias, anexos: arquivos,
   });
@@ -262,7 +282,7 @@ async function enviarEmailDaConversa(supabaseAdmin, chamador, { canal, conversa,
   catch (e) {
     if (conversa) {
       lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, {
-        tipo: 'email', texto, para, cc: cc || null, assunto, anexos: arquivos.map(metaAnexo), status_envio: 'FALHOU', erro: e.message,
+        tipo: 'email', texto: texto || null, html: htmlCorpo, para, cc: cc || null, assunto, anexos: arquivos.map(metaAnexo), status_envio: 'FALHOU', erro: e.message,
       }));
     }
     return { lista, conversa, erro: e.message };
@@ -277,7 +297,7 @@ async function enviarEmailDaConversa(supabaseAdmin, chamador, { canal, conversa,
     conversa = nova;
   }
   lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, {
-    tipo: 'email', texto, html, de: canal.identificador, para, cc: cc || null, assunto,
+    tipo: 'email', texto: texto || null, html, de: canal.identificador, para, cc: cc || null, assunto,
     anexos: arquivos.map(metaAnexo), id_externo: `gmail:${enviado.id}`, status_envio: 'ENVIADA',
   }));
   return { lista, conversa };
@@ -433,6 +453,21 @@ async function acaoCloudbedsVincular(supabaseAdmin, chamador, corpo) {
     data_original: new Date().toISOString(),
     texto: reservationId ? `Reserva ${reservationId} da Cloudbeds ligada a esta conversa.` : 'Reserva da Cloudbeds desligada desta conversa.',
   });
+
+  // Reserva atual ou futura ligada à mão também conta como "Reservou"
+  if (reservationId) {
+    try {
+      const cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id);
+      const r = await detalheReserva(cb, reservationId);
+      const ontem = new Date(Date.now() - 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+      if (r.status !== 'canceled' && r.status !== 'no_show' && String(r.checkout || '') >= ontem) {
+        await supabaseAdmin.rpc('atendimento_marcar_reserva', {
+          p_conversa: conversa.id, p_reserva: reservationId, p_valor: r.total,
+          p_texto: `🎉 Reservou! Reserva ${reservationId}: ${dataBR(r.checkin)} a ${dataBR(r.checkout)}${r.total ? `, total ${reais(r.total)}` : ''}.`,
+        });
+      }
+    } catch (e) { /* a ligação já foi feita; o "Reservou" é um extra */ }
+  }
   return Response.json({ sucesso: true });
 }
 
@@ -493,7 +528,8 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
 
   const { data, error } = await supabaseAdmin.rpc('atendimento_painel', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   if (error) throw error;
-  return Response.json({ painel: data, inicio, fim });
+  const { data: cotacoes } = await supabaseAdmin.rpc('atendimento_painel_cotacoes', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS
@@ -598,4 +634,109 @@ async function acaoImportarContatos(supabaseAdmin, chamador, corpo) {
     if (error) throw error;
   }
   return Response.json({ sucesso: true, novos: novos.length, atualizados: alterados.size, ignorados });
+}
+
+// ---------------------------------------------------------------- COTAÇÃO
+async function preferenciasCotacao(supabaseAdmin, hotelId) {
+  const { data } = await supabaseAdmin.from('atendimento_preferencias')
+    .select('cotacao_texto_abertura, cotacao_texto_final').eq('hotel_id', hotelId).maybeSingle();
+  return data || {};
+}
+
+async function acaoCotacaoBuscar(supabaseAdmin, chamador, corpo) {
+  const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
+  let cb;
+  try { cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id); } catch (e) { return respostaErro(e.message); }
+  const resultado = await buscarDisponibilidade(cb, corpo);
+  const motor = await linkDoMotor(supabaseAdmin, cb, conversa.hotel_id);
+  const pref = await preferenciasCotacao(supabaseAdmin, conversa.hotel_id);
+  const { data: hotel } = await supabaseAdmin.from('hoteis').select('nome_fantasia').eq('id', conversa.hotel_id).maybeSingle();
+  return Response.json({
+    ...resultado, motor: !!motor, abertura: pref.cotacao_texto_abertura || null, final: pref.cotacao_texto_final || null,
+    nomeHotel: hotel?.nome_fantasia || null,
+  });
+}
+
+async function acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request) {
+  const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
+  const canal = await carregarCanal(supabaseAdmin, chamador, conversa.canal_id);
+  let cb;
+  try { cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id); } catch (e) { return respostaErro(e.message); }
+
+  // Preço buscado de novo aqui (é sempre o preço do motor, sem alteração)
+  const resultado = await buscarDisponibilidade(cb, corpo);
+  const escolhidos = Array.isArray(corpo.tipos) ? corpo.tipos.map(String) : [];
+  const itens = resultado.itens.filter((i) => !escolhidos.length || escolhidos.includes(i.tipoId)).slice(0, 8);
+  if (!itens.length) return respostaErro('Os quartos escolhidos não estão mais disponíveis para essas datas. Busque de novo.');
+
+  const motor = await linkDoMotor(supabaseAdmin, cb, conversa.hotel_id);
+  if (!motor) {
+    return respostaErro('Falta o link do motor de reservas. O administrador coloca em Caixa de Entrada → Funil e etiquetas → Motor de reservas e cotação.');
+  }
+
+  const pref = await preferenciasCotacao(supabaseAdmin, conversa.hotel_id);
+  const { data: hotel } = await supabaseAdmin.from('hoteis').select('nome_fantasia').eq('id', conversa.hotel_id).maybeSingle();
+  const codigo = novoCodigo();
+  const origem = origemDoSite(request);
+  const links = itens.map((_, n) => `${origem}/r/${codigo}-${n + 1}`);
+  const dados = {
+    cot: resultado, itens, links,
+    abertura: String(corpo.abertura || '').trim() || pref.cotacao_texto_abertura,
+    final: String(corpo.final || '').trim() || pref.cotacao_texto_final,
+    nomeCliente: conversa.contato_nome, nomeHotel: hotel?.nome_fantasia,
+  };
+  const texto = textoCotacao(dados);
+  const valores = itens.map((i) => i.total);
+
+  // A cotação é gravada antes do envio: o link já tem que funcionar quando chegar
+  const { data: cotacao, error } = await supabaseAdmin.from('atendimento_cotacoes').insert({
+    hotel_id: conversa.hotel_id, conversa_id: conversa.id, contato_id: conversa.contato_id, codigo,
+    checkin: resultado.checkin, checkout: resultado.checkout, adultos: resultado.adultos, criancas: resultado.criancas, quartos: resultado.quartos,
+    itens: itens.map(({ tipoId, nome, abreviacao, total, porNoite, disponiveis, foto }) => ({ tipoId, nome, abreviacao, total, porNoite, disponiveis, foto })),
+    valor_minimo: Math.min(...valores), valor_maximo: Math.max(...valores), mensagem: texto, canal_tipo: canal.tipo, enviado_por_id: chamador.id,
+  }).select().single();
+  if (error) throw error;
+
+  const envio = canal.tipo === 'WHATSAPP'
+    ? await enviarWhatsApp(supabaseAdmin, chamador, { canal, conversa, corpo: { semPrevia: true }, texto, arquivos: [] })
+    : await enviarEmailDaConversa(supabaseAdmin, chamador, { canal, conversa, corpo: { html: htmlCotacao(dados) }, texto, arquivos: [] });
+  if (envio.erro) {
+    await supabaseAdmin.from('atendimento_cotacoes').update({ status: 'CANCELADA' }).eq('id', cotacao.id);
+    return respostaErro(envio.erro, 400, { mensagens: envio.lista });
+  }
+
+  await supabaseAdmin.from('atendimento_conversas').update({
+    valor_cotacao: Math.min(...valores), ...(conversa.responsavel_id ? {} : { responsavel_id: chamador.id }),
+  }).eq('id', conversa.id);
+  await supabaseAdmin.rpc('atendimento_avancar_etapa', { p_conversa: conversa.id, p_nome: 'Cotação' });
+  return Response.json({ sucesso: true, cotacao, mensagens: envio.lista });
+}
+
+async function acaoMotorDetectar(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelPermitido(chamador, corpo.hotelId);
+  if (!chamador.hoteisAdmin.includes(hotelId)) return respostaErro('Só o administrador do hotel pode fazer isso.', 403);
+  let cb;
+  try { cb = await conexaoCloudbeds(supabaseAdmin, hotelId); } catch (e) { return respostaErro(e.message); }
+  const url = await detectarMotor(cb);
+  if (!url) {
+    return respostaErro('A Cloudbeds não informou o link do motor. Copie o link na Cloudbeds (Configurações → Motor de reservas → link de reserva) e cole no campo.');
+  }
+  await supabaseAdmin.from('atendimento_preferencias').upsert({ hotel_id: hotelId, motor_url: url }, { onConflict: 'hotel_id' });
+  return Response.json({ sucesso: true, url });
+}
+
+// ---------------------------------------------------------------- RESERVAS NOVAS
+async function verificarReservasTodos(supabaseAdmin, hoteis, forcar) {
+  let consulta = supabaseAdmin.from('cloudbeds_credenciais').select('hotel_id');
+  if (hoteis) consulta = consulta.in('hotel_id', hoteis);
+  const { data: credenciais } = await consulta;
+  const resultados = [];
+  for (const c of credenciais || []) {
+    try {
+      resultados.push(await verificarReservasHotel(supabaseAdmin, Number(c.hotel_id), { segredoCripto: process.env.CLOUDBEDS_CRYPTO_SECRET, forcar }));
+    } catch (e) {
+      resultados.push({ hotelId: c.hotel_id, erro: e.message });
+    }
+  }
+  return resultados;
 }

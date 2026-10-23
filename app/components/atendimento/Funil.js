@@ -7,12 +7,15 @@
 // - Etiquetas: manuais (a equipe usa) e automáticas (o sistema coloca)
 // - Horário comercial (para o Painel contar "fora do horário") e o alerta
 //   de cliente esperando
+// - Motor de reservas e cotação (link do motor, textos da cotação e a
+//   verificação automática de reservas novas → "Reservou")
 // - Copiar tudo para o outro hotel
 // ============================================================================
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
-import { CORES_SUGERIDAS, chaveNome } from './util';
+import { CORES_SUGERIDAS, chaveNome, chamarApi, dataHora } from './util';
+import { ABERTURA_PADRAO, FINAL_PADRAO } from '../../../lib/atendimento/cotacaoTexto';
 import { ChipEtiqueta } from './Conversa';
 
 const DIAS = [['1', 'Segunda'], ['2', 'Terça'], ['3', 'Quarta'], ['4', 'Quinta'], ['5', 'Sexta'], ['6', 'Sábado'], ['0', 'Domingo']];
@@ -29,8 +32,8 @@ function EscolherCor({ valor, onMudar }) {
   );
 }
 
-export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudou }) {
-  const [hotelId, setHotelId] = useState(hoteis[0]?.id);
+export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferencias, onMudou }) {
+  const [hotelId, setHotelId] = useState((hoteis.find((h) => h.id === Number(hotelAtual)) || hoteis[0])?.id);
   const [erro, setErro] = useState('');
   const [ok, setOk] = useState('');
   const [ocupado, setOcupado] = useState(false);
@@ -38,6 +41,11 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
   const [editEtiqueta, setEditEtiqueta] = useState(null);
   const [horario, setHorario] = useState(HORARIO_PADRAO);
   const [alerta, setAlerta] = useState(15);
+  const [motor, setMotor] = useState('');
+  const [abertura, setAbertura] = useState('');
+  const [finalTexto, setFinalTexto] = useState('');
+  const [verificar, setVerificar] = useState(true);
+  const [resultadoReservas, setResultadoReservas] = useState('');
 
   const minhasEtapas = etapas.filter((e) => e.hotel_id === Number(hotelId)).sort((a, b) => a.ordem - b.ordem || a.id - b.id);
   const minhasEtiquetas = etiquetas.filter((e) => e.hotel_id === Number(hotelId));
@@ -47,7 +55,46 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
   useEffect(() => {
     setHorario(pref?.horario_comercial || HORARIO_PADRAO);
     setAlerta(pref?.alerta_espera_minutos ?? 15);
+    setMotor(pref?.motor_url || '');
+    setAbertura(pref?.cotacao_texto_abertura || '');
+    setFinalTexto(pref?.cotacao_texto_final || '');
+    setVerificar(pref?.verificar_reservas !== false);
   }, [hotelId, pref]);
+
+  // ---- Motor de reservas e cotação ----
+  function salvarMotor() {
+    const url = motor.trim();
+    if (url && !/^https:\/\/\S+$/i.test(url)) { setErro('O link do motor tem que começar com https://'); return; }
+    executar(async () => verificar_(await supabase.from('atendimento_preferencias').upsert({
+      hotel_id: Number(hotelId), motor_url: url || null,
+      cotacao_texto_abertura: abertura.trim() || null, cotacao_texto_final: finalTexto.trim() || null,
+      verificar_reservas: verificar, atualizado_em: new Date().toISOString(),
+    }, { onConflict: 'hotel_id' })), 'Motor de reservas e textos da cotação salvos.');
+  }
+
+  async function detectarMotor() {
+    setOcupado(true); setErro(''); setOk('');
+    try {
+      const r = await chamarApi('/api/atendimento', { acao: 'motor_detectar', hotelId: Number(hotelId) });
+      setMotor(r.url);
+      setOk('Link do motor encontrado na Cloudbeds e salvo.');
+      onMudou();
+    } catch (e) { setErro(e.message); }
+    setOcupado(false);
+  }
+
+  async function verificarAgora() {
+    setOcupado(true); setErro(''); setResultadoReservas('');
+    try {
+      const r = await chamarApi('/api/atendimento', { acao: 'reservas_verificar' });
+      const meu = (r.resultados || []).find((x) => Number(x.hotelId) === Number(hotelId));
+      setResultadoReservas(!meu ? 'Este hotel não tem a Cloudbeds configurada.'
+        : meu.erro ? `Erro: ${meu.erro}`
+          : meu.pulou ? `Não verificado: ${meu.pulou}.`
+            : `${meu.reservas} reserva(s) nova(s) na Cloudbeds; ${meu.marcadas} ligada(s) a conversas e marcada(s) como “Reservou”.`);
+    } catch (e) { setErro(e.message); }
+    setOcupado(false);
+  }
 
   async function executar(acao, mensagemOk) {
     setOcupado(true); setErro(''); setOk('');
@@ -60,17 +107,17 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
     }
     setOcupado(false);
   }
-  const verificar = ({ error }) => { if (error) throw new Error(error.message); };
+  const verificar_ = ({ error }) => { if (error) throw new Error(/motor_url|cotacao_texto|verificar_reservas/.test(error.message) ? 'Falta rodar no Supabase o SQL da Fase 3.' : error.message); };
 
   // ---- Etapas ----
   function salvarEtapa() {
     const nome = String(editEtapa.nome || '').trim();
     if (!nome) { setErro('Dê um nome para a etapa.'); return; }
     executar(async () => {
-      if (editEtapa.id) verificar(await supabase.from('atendimento_etapas').update({ nome, cor: editEtapa.cor }).eq('id', editEtapa.id));
+      if (editEtapa.id) verificar_(await supabase.from('atendimento_etapas').update({ nome, cor: editEtapa.cor }).eq('id', editEtapa.id));
       else {
         const ordem = (minhasEtapas.at(-1)?.ordem || 0) + 1;
-        verificar(await supabase.from('atendimento_etapas').insert({ hotel_id: Number(hotelId), nome, cor: editEtapa.cor || CORES_SUGERIDAS[0], ordem }));
+        verificar_(await supabase.from('atendimento_etapas').insert({ hotel_id: Number(hotelId), nome, cor: editEtapa.cor || CORES_SUGERIDAS[0], ordem }));
       }
       setEditEtapa(null);
     });
@@ -83,18 +130,18 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
     [lista[i], lista[j]] = [lista[j], lista[i]];
     executar(async () => {
       for (let k = 0; k < lista.length; k += 1) {
-        if (lista[k].ordem !== k + 1) verificar(await supabase.from('atendimento_etapas').update({ ordem: k + 1 }).eq('id', lista[k].id));
+        if (lista[k].ordem !== k + 1) verificar_(await supabase.from('atendimento_etapas').update({ ordem: k + 1 }).eq('id', lista[k].id));
       }
     });
   }
 
   function alternarEtapa(e) {
-    executar(async () => verificar(await supabase.from('atendimento_etapas').update({ ativa: !e.ativa }).eq('id', e.id)));
+    executar(async () => verificar_(await supabase.from('atendimento_etapas').update({ ativa: !e.ativa }).eq('id', e.id)));
   }
 
   function excluirEtapa(e) {
     if (!window.confirm(`Excluir a etapa “${e.nome}”? Os atendimentos que estão nela ficam “sem etapa” até alguém mover.`)) return;
-    executar(async () => verificar(await supabase.from('atendimento_etapas').delete().eq('id', e.id)));
+    executar(async () => verificar_(await supabase.from('atendimento_etapas').delete().eq('id', e.id)));
   }
 
   // ---- Etiquetas ----
@@ -104,9 +151,9 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
     executar(async () => {
       if (editEtiqueta.id) {
         const original = minhasEtiquetas.find((x) => x.id === editEtiqueta.id);
-        verificar(await supabase.from('atendimento_etiquetas').update({ cor: editEtiqueta.cor, ...(original?.automatica ? {} : { nome }) }).eq('id', editEtiqueta.id));
+        verificar_(await supabase.from('atendimento_etiquetas').update({ cor: editEtiqueta.cor, ...(original?.automatica ? {} : { nome }) }).eq('id', editEtiqueta.id));
       } else {
-        verificar(await supabase.from('atendimento_etiquetas').insert({ hotel_id: Number(hotelId), nome, cor: editEtiqueta.cor || CORES_SUGERIDAS[6] }));
+        verificar_(await supabase.from('atendimento_etiquetas').insert({ hotel_id: Number(hotelId), nome, cor: editEtiqueta.cor || CORES_SUGERIDAS[6] }));
       }
       setEditEtiqueta(null);
     });
@@ -117,9 +164,9 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
     executar(async () => {
       const { data: usando } = await supabase.from('atendimento_conversas').select('id, etiquetas').contains('etiquetas', [e.id]).limit(5000);
       for (const c of usando || []) {
-        verificar(await supabase.from('atendimento_conversas').update({ etiquetas: (c.etiquetas || []).filter((x) => x !== e.id) }).eq('id', c.id));
+        verificar_(await supabase.from('atendimento_conversas').update({ etiquetas: (c.etiquetas || []).filter((x) => x !== e.id) }).eq('id', c.id));
       }
-      verificar(await supabase.from('atendimento_etiquetas').delete().eq('id', e.id));
+      verificar_(await supabase.from('atendimento_etiquetas').delete().eq('id', e.id));
     });
   }
 
@@ -129,7 +176,7 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
       if (faixa && (!faixa[0] || !faixa[1] || faixa[0] >= faixa[1])) { setErro('Confira os horários: o fim tem que ser depois do início.'); return; }
     }
     const minutos = Math.max(1, Math.min(1440, Number(alerta) || 15));
-    executar(async () => verificar(await supabase.from('atendimento_preferencias').upsert({
+    executar(async () => verificar_(await supabase.from('atendimento_preferencias').upsert({
       hotel_id: Number(hotelId), horario_comercial: horario, alerta_espera_minutos: minutos, atualizado_em: new Date().toISOString(),
     }, { onConflict: 'hotel_id' })), 'Horário e alerta salvos.');
   }
@@ -143,16 +190,16 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
       const etapasDestino = etapas.filter((e) => e.hotel_id === destino.id);
       for (const e of minhasEtapas) {
         const igual = etapasDestino.find((x) => chaveNome(x.nome) === chaveNome(e.nome));
-        if (igual) verificar(await supabase.from('atendimento_etapas').update({ cor: e.cor, ordem: e.ordem, ativa: e.ativa }).eq('id', igual.id));
-        else verificar(await supabase.from('atendimento_etapas').insert({ hotel_id: destino.id, nome: e.nome, cor: e.cor, ordem: e.ordem, ativa: e.ativa }));
+        if (igual) verificar_(await supabase.from('atendimento_etapas').update({ cor: e.cor, ordem: e.ordem, ativa: e.ativa }).eq('id', igual.id));
+        else verificar_(await supabase.from('atendimento_etapas').insert({ hotel_id: destino.id, nome: e.nome, cor: e.cor, ordem: e.ordem, ativa: e.ativa }));
       }
       const etiquetasDestino = etiquetas.filter((e) => e.hotel_id === destino.id);
       for (const e of minhasEtiquetas) {
         const igual = etiquetasDestino.find((x) => chaveNome(x.nome) === chaveNome(e.nome));
-        if (igual) verificar(await supabase.from('atendimento_etiquetas').update({ cor: e.cor }).eq('id', igual.id));
-        else verificar(await supabase.from('atendimento_etiquetas').insert({ hotel_id: destino.id, nome: e.nome, cor: e.cor, automatica: e.automatica }));
+        if (igual) verificar_(await supabase.from('atendimento_etiquetas').update({ cor: e.cor }).eq('id', igual.id));
+        else verificar_(await supabase.from('atendimento_etiquetas').insert({ hotel_id: destino.id, nome: e.nome, cor: e.cor, automatica: e.automatica }));
       }
-      verificar(await supabase.from('atendimento_preferencias').upsert({
+      verificar_(await supabase.from('atendimento_preferencias').upsert({
         hotel_id: destino.id, horario_comercial: horario, alerta_espera_minutos: Number(alerta) || 15, atualizado_em: new Date().toISOString(),
       }, { onConflict: 'hotel_id' }));
     }, `Copiado para ${destino.nome}.`);
@@ -250,6 +297,34 @@ export function FunilEtiquetas({ hoteis, etapas, etiquetas, preferencias, onMudo
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="at-cartao">
+        <h2>🏨 Motor de reservas e cotação</h2>
+        <p className="at-dica" style={{ marginTop: 0 }}>
+          O link “Reservar agora” da cotação abre o motor de reservas da Cloudbeds com as datas, os hóspedes e o quarto já escolhidos.
+        </p>
+        <label className="rotulo" htmlFor="fm-motor">Link do motor de reservas</label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input id="fm-motor" className="campo" style={{ flex: '1 1 320px' }} value={motor} onChange={(e) => setMotor(e.target.value)} placeholder="https://hotels.cloudbeds.com/reservation/XXXXXX" />
+          <button type="button" className="at-btn" onClick={detectarMotor} disabled={ocupado}>🔎 Buscar na Cloudbeds</button>
+        </div>
+        <label className="rotulo" htmlFor="fm-abertura">Texto de abertura da cotação</label>
+        <textarea id="fm-abertura" className="campo" rows={2} value={abertura} onChange={(e) => setAbertura(e.target.value)} placeholder={ABERTURA_PADRAO} />
+        <label className="rotulo" htmlFor="fm-final">Texto final da cotação</label>
+        <textarea id="fm-final" className="campo" rows={3} value={finalTexto} onChange={(e) => setFinalTexto(e.target.value)} placeholder={FINAL_PADRAO} />
+        <p className="at-dica">Em branco = texto padrão (o que aparece apagado no campo). Variáveis: {'{nome}'} {'{checkin}'} {'{checkout}'} {'{noites}'} {'{hospedes}'} {'{hotel}'}.</p>
+        <label className="at-detalhe" style={{ marginTop: 8 }}>
+          <input type="checkbox" checked={verificar} onChange={(e) => setVerificar(e.target.checked)} />
+          <span style={{ color: 'var(--tinta)', fontWeight: 600 }}>Marcar “Reservou” sozinho quando a reserva entrar na Cloudbeds</span>
+        </label>
+        <p className="at-dica">A cada 5 minutos o sistema olha as reservas novas da Cloudbeds e, se o e-mail ou o telefone for de alguém que conversou nos últimos 45 dias, move o cartão para “Reservou”.
+          {pref?.reservas_verificadas_ate ? ` Última verificação: ${dataHora(pref.reservas_verificadas_ate)}.` : ''}</p>
+        <div className="at-botoes">
+          <button type="button" className="at-btn at-btn-verde" onClick={salvarMotor} disabled={ocupado}>Salvar</button>
+          <button type="button" className="at-btn" onClick={verificarAgora} disabled={ocupado}>🔄 Verificar reservas agora</button>
+        </div>
+        {resultadoReservas && <p className="at-dica">{resultadoReservas}</p>}
       </section>
 
       <section className="at-cartao">

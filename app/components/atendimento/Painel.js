@@ -51,6 +51,7 @@ function minutosTexto(min) {
 }
 
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+const reaisCurto = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 
 // Largura real do elemento (para o gráfico se ajustar à tela)
 function useLargura() {
@@ -196,6 +197,7 @@ export function PainelIndicadores({ hoteis, nomes }) {
   }, [hotel, inicio, fim, idsHoteis]);
 
   const t = dados?.totais || {};
+  const cot = dados?.cotacoes || null;
   const meses = dados?.meses || [];
   const seriesMes = useMemo(() => [
     { nome: 'Atendimentos', cor: CORES[0], valores: meses.map((m) => m.atendimentos) },
@@ -253,6 +255,18 @@ export function PainelIndicadores({ hoteis, nomes }) {
             <Cartao rotulo="Reservas" valor={fmt(t.reservas)} detalhe={`Conversão: ${pct(t.reservas, t.atendimentos)} dos atendimentos`} />
             <Cartao rotulo="Vieram de anúncio (AD)" valor={fmt(t.anuncios)} detalhe={`${pct(t.anuncios, t.atendimentos)} dos atendimentos`} />
           </div>
+
+          {cot && (
+            <>
+              <h2 className="pi-secao">💰 Cotações pelo sistema</h2>
+              <div className="pi-cartoes">
+                <Cartao rotulo="Cotações enviadas" valor={fmt(cot.enviadas)} detalhe={`Total cotado: ${reaisCurto(cot.valor_cotado)}`} />
+                <Cartao rotulo="Clicaram em Reservar agora" valor={fmt(cot.clicadas)} detalhe={`${pct(cot.clicadas, cot.enviadas)} das cotações`} />
+                <Cartao rotulo="Reservaram" valor={fmt(cot.reservadas)} detalhe={`${pct(cot.reservadas, cot.enviadas)} das cotações · ${reaisCurto(cot.valor_reservado)}`} />
+                <Cartao rotulo="Reservas ligadas a conversas" valor={fmt(cot.reservas_detectadas)} detalhe="Encontradas na Cloudbeds pelo telefone ou e-mail" />
+              </div>
+            </>
+          )}
 
           <section className="at-cartao">
             <div className="at-canal-topo">

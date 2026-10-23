@@ -47,6 +47,7 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
   const [total, setTotal] = useState(0);
   const [qtdConversas, setQtdConversas] = useState({});
   const [atendentes, setAtendentes] = useState({});
+  const [funil, setFunil] = useState({}); // contato → { cotacoes, clicou, reservou }
   const [periodo, setPeriodo] = useState('');
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
@@ -94,6 +95,16 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
       });
       setQtdConversas((antes) => ({ ...(mais ? antes : {}), ...Object.fromEntries(ids.map((id) => [id, contagem[id] || 0])) }));
       setAtendentes((antes) => ({ ...(mais ? antes : {}), ...ultimoAtendente }));
+      const { data: cots } = await supabase.from('atendimento_cotacoes').select('contato_id, status, cliques').in('contato_id', ids).limit(5000);
+      const porContato = {};
+      (cots || []).forEach((c) => {
+        const f = porContato[c.contato_id] || { cotacoes: 0, clicou: false, reservou: false };
+        f.cotacoes += c.status === 'CANCELADA' ? 0 : 1;
+        f.clicou = f.clicou || c.cliques > 0;
+        f.reservou = f.reservou || c.status === 'RESERVOU';
+        porContato[c.contato_id] = f;
+      });
+      setFunil((antes) => ({ ...(mais ? antes : {}), ...porContato }));
     }
     setCarregando(false);
   }, [hotel, busca, mostrar, periodo, ordenar, lista]);
@@ -180,7 +191,7 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
         <table className="at-tabela">
           <thead>
             <tr>
-              <th>Nome</th><th>Telefone</th><th>E-mail</th><th>Plataforma</th><th>Idioma</th><th>Etiquetas</th><th>Atendente</th>
+              <th>Nome</th><th>Telefone</th><th>E-mail</th><th>Plataforma</th><th>Idioma</th><th>Etiquetas</th><th>Pediu cotação?</th><th>Clicou em Reservar?</th><th>Atendente</th>
               {multiHotel && <th>Hotel</th>}
               <th className="num">Conversas</th><th>Criado em</th><th>Atualizado em</th>
             </tr>
@@ -194,6 +205,8 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
                 <td data-rotulo="Plataforma">{PLATAFORMA[c.origem] || c.origem || '—'}</td>
                 <td data-rotulo="Idioma">{c.idioma || '—'}</td>
                 <td data-rotulo="Etiquetas" className="at-td-etq">{c.etiquetas_importadas || '—'}</td>
+                <td data-rotulo="Pediu cotação?">{funil[c.id]?.cotacoes ? `Sim (${funil[c.id].cotacoes})` : 'Não'}</td>
+                <td data-rotulo="Clicou em Reservar?">{funil[c.id]?.reservou ? 'Reservou ✓' : funil[c.id]?.clicou ? 'Sim' : 'Não'}</td>
                 <td data-rotulo="Atendente">{atendentes[c.id] ? (nomes[atendentes[c.id]] || '—') : '—'}</td>
                 {multiHotel && <td data-rotulo="Hotel">{nomesHoteis[c.hotel_id] || '—'}</td>}
                 <td data-rotulo="Conversas" className="num">{qtdConversas[c.id] ?? '…'}</td>
