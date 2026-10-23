@@ -5,8 +5,9 @@
 // ============================================================================
 // - Conversa: topo (responsável, situação), mensagens e caixa de escrever
 // - ModalModelo: modelos aprovados do WhatsApp (obrigatórios fora das 24 h)
-// - PainelReserva: reserva da Cloudbeds ao lado da conversa
+// - PainelLateral: contato (dados, histórico, origem) e reserva da Cloudbeds
 // - NovaConversa: começar conversa por WhatsApp (modelo) ou e-mail
+// - DetalhesConversa: etapa do funil, etiquetas e valor da cotação
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,7 +15,7 @@ import { supabase } from '../../../lib/supabaseClient';
 import {
   chamarApi, subirArquivo, avisarCabecalho, STATUS_CONVERSA, ICONE_CANAL, NOME_CANAL,
   soHora, dataHora, rotuloDia, chaveDia, dataCurta, noites, dinheiro, iniciais, tamanhoArquivo,
-  aplicarVariaveis, separarCitacao, partesComLinks,
+  aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando,
 } from './util';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
@@ -335,7 +336,7 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
     for (const arquivo of arquivos) {
       setSubindo((n) => n + 1);
       try {
-        const subido = await subirArquivo(arquivo);
+        const subido = await subirArquivo(arquivo, conversa.hotel_id);
         setAnexos((lista) => [...lista, subido]);
       } catch (e) { setErro(e.message); }
       setSubindo((n) => n - 1);
@@ -469,8 +470,8 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
 // ---------------------------------------------------------------------------
 // Conversa completa
 export function Conversa({
-  conversa, canal, mensagens, carregando, usuario, atendentes, respostas,
-  onRecarregar, onVoltar, onAlternarLateral, lateralAberta,
+  conversa, canal, mensagens, carregando, usuario, atendentes, nomes, respostas, etapas, etiquetas, nomeHotel,
+  alertaMinutos, onRecarregar, onVoltar, onAlternarLateral, lateralAberta, rotuloVoltar,
 }) {
   const [mostrarModelo, setMostrarModelo] = useState(false);
   const [salvando, setSalvando] = useState(false);
@@ -479,8 +480,9 @@ export function Conversa({
   const listaRef = useRef(null);
   const ultimoTamanho = useRef({ id: null, n: 0 });
 
-  const nomesAtendentes = useMemo(() => Object.fromEntries((atendentes || []).map((a) => [a.id, a.nome])), [atendentes]);
+  const nomesAtendentes = useMemo(() => ({ ...(nomes || {}), ...Object.fromEntries((atendentes || []).map((a) => [a.id, a.nome])) }), [atendentes, nomes]);
   const nomeAtendente = (id) => (id ? (nomesAtendentes[id] || `Usuário #${id}`) : 'Sistema');
+  const esperando = minutosEsperando(conversa);
 
   // Rola para o fim ao abrir a conversa e quando chega mensagem nova
   useEffect(() => {
@@ -503,9 +505,10 @@ export function Conversa({
     setErro('');
     const { error } = await supabase.from('atendimento_conversas').update({ ...campos, atualizado_em: new Date().toISOString() }).eq('id', conversa.id);
     setSalvando(false);
-    if (error) { setErro('Não foi possível salvar: ' + error.message); return; }
+    if (error) { setErro('Não foi possível salvar: ' + error.message); return false; }
     avisarCabecalho();
     onRecarregar();
+    return true;
   }
 
   const nomeContato = conversa.contato_nome || conversa.contato_endereco || 'Cliente';
@@ -513,11 +516,12 @@ export function Conversa({
   return (
     <>
       <div className="at-conv-topo">
-        <button type="button" className="at-btn at-voltar" onClick={onVoltar} aria-label="Voltar para a lista">←</button>
+        <button type="button" className={`at-btn at-voltar ${rotuloVoltar ? 'sempre' : ''}`} onClick={onVoltar} aria-label={rotuloVoltar || 'Voltar para a lista'}>{rotuloVoltar ? '✕' : '←'}</button>
         <div className="at-avatar">{iniciais(nomeContato)}<span className="at-avatar-canal">{ICONE_CANAL[conversa.canal_tipo]}</span></div>
         <div className="at-conv-titulo">
           <div className="at-conv-nome">{nomeContato}</div>
           <div className="at-conv-sub">
+            {nomeHotel ? <strong>{nomeHotel} · </strong> : null}
             {NOME_CANAL[conversa.canal_tipo]}{canal ? ` · ${canal.nome}` : ' · canal removido'}
             {conversa.contato_endereco && conversa.contato_nome ? ` · ${conversa.contato_endereco}` : ''}
             {conversa.canal_tipo === 'EMAIL' && conversa.assunto ? ` · ${conversa.assunto}` : ''}
@@ -525,6 +529,11 @@ export function Conversa({
           {conversa.canal_tipo === 'WHATSAPP' && (
             <div className="at-conv-sub">
               {janelaAberta ? `🟢 Pode responder livremente até ${soHora(fimJanela)}${rotuloDia(fimJanela) !== 'Hoje' ? ` de ${rotuloDia(fimJanela).toLowerCase()}` : ''}` : '⏰ Janela de 24 h fechada — só modelos'}
+            </div>
+          )}
+          {esperando !== null && (
+            <div className={`at-conv-sub ${alertaMinutos && esperando >= alertaMinutos ? 'at-espera-alerta' : ''}`}>
+              ⏳ Cliente esperando resposta há {tempoDesde(conversa.ultima_entrada_em)}
             </div>
           )}
         </div>
@@ -538,14 +547,18 @@ export function Conversa({
             onChange={(e) => alterar({ status: e.target.value })} aria-label="Situação">
             {Object.entries(STATUS_CONVERSA).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
-          {conversa.status !== 'RESOLVIDA' && (
+          {!['RESOLVIDA', 'ARQUIVADA'].includes(conversa.status) && (
             <button type="button" className="at-btn at-btn-verde" onClick={() => alterar({ status: 'RESOLVIDA' })} disabled={salvando}>✓ Resolver</button>
           )}
-          <button type="button" className="at-btn" onClick={onAlternarLateral} title="Reserva na Cloudbeds">
-            🏨 {lateralAberta ? 'Fechar reserva' : 'Reserva'}
+          {conversa.status !== 'ARQUIVADA' && (
+            <button type="button" className="at-btn" onClick={() => alterar({ status: 'ARQUIVADA' })} disabled={salvando} title="Tira a conversa das listas (volta sozinha se o cliente escrever de novo)">🗄 Arquivar</button>
+          )}
+          <button type="button" className="at-btn" onClick={onAlternarLateral} title="Dados do contato e reserva na Cloudbeds">
+            👤 {lateralAberta ? 'Fechar contato' : 'Contato e reserva'}
           </button>
         </div>
       </div>
+      <DetalhesConversa conversa={conversa} etapas={etapas} etiquetas={etiquetas} salvando={salvando} onAlterar={alterar} />
       {erro && <div className="aviso-erro" style={{ margin: 8 }}>{erro}</div>}
 
       <div className="at-mensagens" ref={listaRef}>
@@ -612,7 +625,7 @@ function CartaoReserva({ r, ligada, onLigar, onDesligar, ocupado }) {
   );
 }
 
-export function PainelReserva({ conversa, onMudou }) {
+function PainelReserva({ conversa, onMudou }) {
   const [carregando, setCarregando] = useState(false);
   const [vinculada, setVinculada] = useState(null);
   const [reservas, setReservas] = useState(null);
@@ -649,12 +662,6 @@ export function PainelReserva({ conversa, onMudou }) {
   return (
     <>
       <div className="at-lateral-bloco">
-        <p className="at-lateral-titulo">Contato</p>
-        <div className="at-dado"><span>Nome</span><span>{conversa.contato_nome || '—'}</span></div>
-        <div className="at-dado"><span>{conversa.canal_tipo === 'EMAIL' ? 'E-mail' : 'Telefone'}</span><span>{conversa.contato_endereco || '—'}</span></div>
-        <div className="at-dado"><span>Primeiro contato</span><span>{dataHora(conversa.criado_em)}</span></div>
-      </div>
-      <div className="at-lateral-bloco">
         <p className="at-lateral-titulo">Reserva na Cloudbeds</p>
         {erro && <div className="aviso-erro" style={{ fontSize: 13 }}>{erro}</div>}
         {vinculada && (
@@ -686,12 +693,230 @@ export function PainelReserva({ conversa, onMudou }) {
 }
 
 // ---------------------------------------------------------------------------
+// Etiqueta (bolinha com a cor + nome; o texto fica na cor normal)
+export function ChipEtiqueta({ etiqueta, onRemover, pequeno }) {
+  if (!etiqueta) return null;
+  return (
+    <span className={`at-etq ${pequeno ? 'pequeno' : ''}`} title={etiqueta.automatica ? 'Etiqueta automática' : undefined}>
+      <i style={{ background: etiqueta.cor || '#8A938E' }} aria-hidden="true" />
+      {etiqueta.nome}
+      {onRemover && <button type="button" onClick={onRemover} aria-label={`Tirar a etiqueta ${etiqueta.nome}`}>✕</button>}
+    </span>
+  );
+}
+
+function textoValor(v) {
+  if (v === null || v === undefined || v === '') return '';
+  return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function lerValor(texto) {
+  let t = String(texto || '').replace(/R\$|\s/g, '');
+  if (!t) return null;
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
+}
+
+// ---------------------------------------------------------------------------
+// Etapa do funil, etiquetas e valor da cotação (faixa abaixo do topo)
+export function DetalhesConversa({ conversa, etapas, etiquetas, salvando, onAlterar }) {
+  const [valor, setValor] = useState(textoValor(conversa.valor_cotacao));
+  const [aberto, setAberto] = useState(false);
+  const [erroValor, setErroValor] = useState('');
+  useEffect(() => { setValor(textoValor(conversa.valor_cotacao)); setErroValor(''); }, [conversa.id, conversa.valor_cotacao]);
+
+  const lista = etiquetas || [];
+  const mapa = Object.fromEntries(lista.map((e) => [e.id, e]));
+  const ids = conversa.etiquetas || [];
+  const atuais = ids.map((id) => mapa[id]).filter(Boolean);
+  const disponiveis = lista.filter((e) => !ids.includes(e.id));
+  const etapasHotel = (etapas || []).filter((e) => e.ativa || e.id === conversa.etapa_id);
+  const etapaAtual = (etapas || []).find((e) => e.id === conversa.etapa_id);
+
+  async function salvarValor() {
+    const n = lerValor(valor);
+    if (Number.isNaN(n)) { setErroValor('Valor inválido'); return; }
+    setErroValor('');
+    if ((n ?? null) === (conversa.valor_cotacao === null || conversa.valor_cotacao === undefined ? null : Number(conversa.valor_cotacao))) {
+      setValor(textoValor(n));
+      return;
+    }
+    if (await onAlterar({ valor_cotacao: n })) setValor(textoValor(n));
+  }
+
+  return (
+    <div className={`at-detalhes ${aberto ? 'aberto' : ''}`}>
+      <button type="button" className="at-detalhes-alternar" onClick={() => setAberto(!aberto)} aria-expanded={aberto}>
+        {etapaAtual ? <><i className="at-bolinha" style={{ background: etapaAtual.cor || '#8A938E' }} />{etapaAtual.nome}</> : 'Sem etapa'}
+        {atuais.length ? ` · ${atuais.length} etiqueta${atuais.length > 1 ? 's' : ''}` : ''}
+        {conversa.valor_cotacao ? ` · ${dinheiro(conversa.valor_cotacao)}` : ''} {aberto ? '▴' : '▾'}
+      </button>
+      <div className="at-detalhes-corpo">
+        <label className="at-detalhe">
+          <span>Etapa</span>
+          <select className="at-select" value={conversa.etapa_id || ''} disabled={salvando}
+            onChange={(e) => onAlterar({ etapa_id: e.target.value ? Number(e.target.value) : null })}>
+            {!conversa.etapa_id && <option value="">—</option>}
+            {etapasHotel.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+          </select>
+        </label>
+        <div className="at-detalhe at-detalhe-etq">
+          <span>Etiquetas</span>
+          {atuais.map((e) => (
+            <ChipEtiqueta key={e.id} etiqueta={e} onRemover={salvando ? undefined : () => onAlterar({ etiquetas: ids.filter((x) => x !== e.id) })} />
+          ))}
+          {disponiveis.length > 0 && (
+            <select className="at-select at-select-mini" value="" disabled={salvando} aria-label="Adicionar etiqueta"
+              onChange={(e) => { if (e.target.value) onAlterar({ etiquetas: [...ids, Number(e.target.value)] }); }}>
+              <option value="">+ etiqueta</option>
+              {disponiveis.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+            </select>
+          )}
+        </div>
+        <label className="at-detalhe">
+          <span>Cotação R$</span>
+          <input className="at-input-valor" inputMode="decimal" value={valor} placeholder="0,00" disabled={salvando}
+            onChange={(e) => setValor(e.target.value)} onBlur={salvarValor}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+          {erroValor && <small className="at-ruim">{erroValor}</small>}
+        </label>
+        {conversa.origem && (
+          <span className="at-detalhe" title={conversa.origem.texto || ''}>
+            <span className="at-chip at-chip-ad">📣 {conversa.origem.tipo === 'PUBLICACAO' ? 'Veio de publicação' : 'Veio de anúncio'}</span>
+            {conversa.origem.titulo && <span className="at-dica" style={{ margin: 0 }}>{conversa.origem.titulo}</span>}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Contato: dados (editáveis), histórico com o hotel e origem
+function PainelContato({ conversa, onAbrirConversa }) {
+  const [contato, setContato] = useState(null);
+  const [historico, setHistorico] = useState([]);
+  const [editando, setEditando] = useState(null);
+  const [erro, setErro] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  const [versao, setVersao] = useState(0);
+
+  useEffect(() => {
+    let ativo = true;
+    setContato(null); setHistorico([]); setEditando(null); setErro('');
+    if (!conversa.contato_id) return undefined;
+    Promise.all([
+      supabase.from('atendimento_contatos').select('*').eq('id', conversa.contato_id).maybeSingle(),
+      supabase.from('atendimento_conversas').select('id, canal_tipo, assunto, status, criado_em, ultima_mensagem_em, ultima_mensagem_resumo')
+        .eq('contato_id', conversa.contato_id).order('ultima_mensagem_em', { ascending: false, nullsFirst: false }).limit(30),
+    ]).then(([c, h]) => {
+      if (!ativo) return;
+      setContato(c.data || null);
+      setHistorico(h.data || []);
+    });
+    return () => { ativo = false; };
+  }, [conversa.id, conversa.contato_id, versao]);
+
+  async function salvar() {
+    const nome = String(editando.nome || '').trim();
+    const telefone = String(editando.telefone || '').replace(/\D/g, '');
+    const email = String(editando.email || '').trim().toLowerCase();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setErro('E-mail inválido.'); return; }
+    setSalvando(true);
+    setErro('');
+    const { error } = await supabase.from('atendimento_contatos').update({
+      nome: nome || null,
+      telefone: telefone ? (telefone.length === 10 || telefone.length === 11 ? `55${telefone}` : telefone) : null,
+      email: email || null,
+      idioma: String(editando.idioma || '').trim() || null,
+      observacoes: String(editando.observacoes || '').trim() || null,
+      atualizado_em: new Date().toISOString(),
+    }).eq('id', contato.id);
+    setSalvando(false);
+    if (error) { setErro('Não foi possível salvar: ' + error.message); return; }
+    setEditando(null);
+    setVersao((v) => v + 1);
+  }
+
+  const outras = historico.filter((h) => h.id !== conversa.id);
+  return (
+    <>
+      <div className="at-lateral-bloco">
+        <div className="at-canal-topo">
+          <p className="at-lateral-titulo" style={{ margin: 0 }}>Contato</p>
+          {contato && !editando && <button type="button" className="at-link-pequeno" onClick={() => setEditando({ ...contato })}>Editar</button>}
+        </div>
+        {erro && <div className="aviso-erro" style={{ fontSize: 13 }}>{erro}</div>}
+        {editando ? (
+          <div className="at-form-contato">
+            <label className="rotulo" htmlFor="pc-nome">Nome</label>
+            <input id="pc-nome" className="campo at-campo-pequeno" value={editando.nome || ''} onChange={(e) => setEditando({ ...editando, nome: e.target.value })} />
+            <label className="rotulo" htmlFor="pc-tel">Telefone / WhatsApp</label>
+            <input id="pc-tel" className="campo at-campo-pequeno" inputMode="tel" value={editando.telefone || ''} onChange={(e) => setEditando({ ...editando, telefone: e.target.value })} />
+            <label className="rotulo" htmlFor="pc-email">E-mail</label>
+            <input id="pc-email" className="campo at-campo-pequeno" inputMode="email" value={editando.email || ''} onChange={(e) => setEditando({ ...editando, email: e.target.value })} />
+            <label className="rotulo" htmlFor="pc-idioma">Idioma</label>
+            <input id="pc-idioma" className="campo at-campo-pequeno" value={editando.idioma || ''} placeholder="Português" onChange={(e) => setEditando({ ...editando, idioma: e.target.value })} />
+            <label className="rotulo" htmlFor="pc-obs">Observações</label>
+            <textarea id="pc-obs" className="campo at-campo-pequeno" rows={3} value={editando.observacoes || ''} onChange={(e) => setEditando({ ...editando, observacoes: e.target.value })} />
+            <div className="at-botoes" style={{ marginTop: 8 }}>
+              <button type="button" className="at-btn at-btn-verde" onClick={salvar} disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
+              <button type="button" className="at-btn" onClick={() => setEditando(null)}>Cancelar</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="at-dado"><span>Nome</span><span>{contato?.nome || conversa.contato_nome || '—'}</span></div>
+            <div className="at-dado"><span>Telefone</span><span>{contato?.telefone ? `+${contato.telefone}` : (conversa.canal_tipo === 'WHATSAPP' ? conversa.contato_endereco : '—')}</span></div>
+            <div className="at-dado"><span>E-mail</span><span>{contato?.email || (conversa.canal_tipo === 'EMAIL' ? conversa.contato_endereco : '—')}</span></div>
+            {contato?.idioma && <div className="at-dado"><span>Idioma</span><span>{contato.idioma}</span></div>}
+            <div className="at-dado"><span>Cliente desde</span><span>{dataHora(contato?.criado_em || conversa.criado_em)}</span></div>
+            {contato?.etiquetas_importadas && <div className="at-dado"><span>Etiquetas (Asksuite)</span><span>{contato.etiquetas_importadas}</span></div>}
+            {contato?.observacoes && <div className="at-obs">{contato.observacoes}</div>}
+          </>
+        )}
+      </div>
+
+      {conversa.origem && (
+        <div className="at-lateral-bloco">
+          <p className="at-lateral-titulo">📣 Origem: {conversa.origem.tipo === 'PUBLICACAO' ? 'publicação' : 'anúncio'} da Meta</p>
+          {conversa.origem.titulo && <div style={{ fontWeight: 700, fontSize: 13.5 }}>{conversa.origem.titulo}</div>}
+          {conversa.origem.texto && <div className="at-dica" style={{ whiteSpace: 'pre-wrap' }}>{conversa.origem.texto}</div>}
+          {conversa.origem.url && <a className="at-link-pequeno" href={conversa.origem.url} target="_blank" rel="noopener noreferrer">Ver o anúncio ↗</a>}
+        </div>
+      )}
+
+      <div className="at-lateral-bloco">
+        <p className="at-lateral-titulo">Histórico ({historico.length || 1} conversa{(historico.length || 1) > 1 ? 's' : ''})</p>
+        {outras.length === 0 ? <p className="at-dica" style={{ margin: 0 }}>Esta é a única conversa com este contato.</p> : outras.map((h) => (
+          <button key={h.id} type="button" className="at-historico" onClick={() => onAbrirConversa && onAbrirConversa(h.id)}>
+            <span>{ICONE_CANAL[h.canal_tipo]} {h.assunto || NOME_CANAL[h.canal_tipo]} <small>· {STATUS_CONVERSA[h.status] || h.status}</small></span>
+            <small>{dataHora(h.ultima_mensagem_em || h.criado_em)} — {h.ultima_mensagem_resumo || '—'}</small>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+export function PainelLateral({ conversa, onMudou, onAbrirConversa }) {
+  return (
+    <>
+      <PainelContato conversa={conversa} onAbrirConversa={onAbrirConversa} />
+      <PainelReserva conversa={conversa} onMudou={onMudou} />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Começar conversa nova
-export function NovaConversa({ canais, onFechar, onCriada }) {
+export function NovaConversa({ canais, onFechar, onCriada, inicial, nomesHoteis }) {
   const ativos = (canais || []).filter((c) => c.ativo && (c.tipo === 'WHATSAPP' || c.tipo === 'EMAIL'));
-  const [canalId, setCanalId] = useState(ativos[0]?.id || '');
-  const [para, setPara] = useState('');
-  const [nome, setNome] = useState('');
+  const preferido = inicial?.tipo ? ativos.find((c) => c.tipo === inicial.tipo && (!inicial.hotelId || c.hotel_id === inicial.hotelId)) : null;
+  const [canalId, setCanalId] = useState((preferido || ativos[0])?.id || '');
+  const [para, setPara] = useState(inicial?.para || '');
+  const [nome, setNome] = useState(inicial?.nome || '');
   const [assunto, setAssunto] = useState('');
   const [texto, setTexto] = useState('');
   const [erro, setErro] = useState('');
@@ -734,7 +959,7 @@ export function NovaConversa({ canais, onFechar, onCriada }) {
         <div className="at-modal-topo"><h2>Nova conversa</h2><button type="button" className="at-btn" onClick={onFechar} aria-label="Fechar">✕</button></div>
         <label className="rotulo" htmlFor="nc-canal">Enviar por</label>
         <select id="nc-canal" className="campo" value={canalId} onChange={(e) => setCanalId(e.target.value)}>
-          {ativos.map((c) => <option key={c.id} value={c.id}>{ICONE_CANAL[c.tipo]} {c.nome}{c.endereco_exibicao && c.endereco_exibicao !== c.nome ? ` (${c.endereco_exibicao})` : ''}</option>)}
+          {ativos.map((c) => <option key={c.id} value={c.id}>{ICONE_CANAL[c.tipo]} {nomesHoteis?.[c.hotel_id] ? `${nomesHoteis[c.hotel_id]} · ` : ''}{c.nome}{c.endereco_exibicao && c.endereco_exibicao !== c.nome ? ` (${c.endereco_exibicao})` : ''}</option>)}
         </select>
         <label className="rotulo" htmlFor="nc-para">{canal?.tipo === 'EMAIL' ? 'E-mail do cliente' : 'WhatsApp do cliente (com DDD)'}</label>
         <input id="nc-para" className="campo" value={para} onChange={(e) => setPara(e.target.value)}

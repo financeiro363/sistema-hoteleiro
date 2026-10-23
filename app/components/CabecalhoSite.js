@@ -276,14 +276,14 @@ export default function CabecalhoSite() {
     setContadorManutencao(countManutencao || 0);
 
     // Caixa de Entrada: conversas com mensagem não lida, comigo ou sem
-    // responsável (se a tabela ainda não existir, fica 0 sem quebrar nada).
+    // responsável, nos hotéis em que a pessoa atende (o banco já limita a
+    // esses hotéis). Se a tabela ainda não existir, fica 0 sem quebrar nada.
     try {
       const { count: countAtendimento, error: erroAtendimento } = await supabase
         .from('atendimento_conversas')
         .select('id', { count: 'exact', head: true })
-        .eq('hotel_id', hotelId)
         .gt('nao_lidas', 0)
-        .neq('status', 'RESOLVIDA')
+        .not('status', 'in', '(RESOLVIDA,ARQUIVADA)')
         .or(`responsavel_id.is.null,responsavel_id.eq.${usuarioId}`);
       setContadorAtendimento(erroAtendimento ? 0 : (countAtendimento || 0));
     } catch (e) {
