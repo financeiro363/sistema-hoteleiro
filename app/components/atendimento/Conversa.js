@@ -15,7 +15,7 @@ import { supabase } from '../../../lib/supabaseClient';
 import {
   chamarApi, subirArquivo, avisarCabecalho, STATUS_CONVERSA, ICONE_CANAL, NOME_CANAL,
   soHora, dataHora, rotuloDia, chaveDia, dataCurta, noites, dinheiro, iniciais, tamanhoArquivo,
-  aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando,
+  aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando, telefoneBonito,
 } from './util';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
@@ -868,7 +868,7 @@ function PainelContato({ conversa, onAbrirConversa }) {
         ) : (
           <>
             <div className="at-dado"><span>Nome</span><span>{contato?.nome || conversa.contato_nome || '—'}</span></div>
-            <div className="at-dado"><span>Telefone</span><span>{contato?.telefone ? `+${contato.telefone}` : (conversa.canal_tipo === 'WHATSAPP' ? conversa.contato_endereco : '—')}</span></div>
+            <div className="at-dado"><span>Telefone</span><span>{contato?.telefone ? telefoneBonito(contato.telefone) : (conversa.canal_tipo === 'WHATSAPP' ? conversa.contato_endereco : '—')}</span></div>
             <div className="at-dado"><span>E-mail</span><span>{contato?.email || (conversa.canal_tipo === 'EMAIL' ? conversa.contato_endereco : '—')}</span></div>
             {contato?.idioma && <div className="at-dado"><span>Idioma</span><span>{contato.idioma}</span></div>}
             <div className="at-dado"><span>Cliente desde</span><span>{dataHora(contato?.criado_em || conversa.criado_em)}</span></div>

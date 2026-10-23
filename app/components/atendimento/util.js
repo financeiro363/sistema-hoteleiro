@@ -229,6 +229,17 @@ export function iniciais(nome) {
   return (partes[0][0] + (partes.length > 1 ? partes[partes.length - 1][0] : '')).toUpperCase();
 }
 
+// 5583988887777 → +55 (83) 98888-7777
+export function telefoneBonito(t) {
+  const d = String(t || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('55') && (d.length === 12 || d.length === 13)) {
+    const resto = d.slice(4);
+    return `+55 (${d.slice(2, 4)}) ${resto.slice(0, resto.length - 4)}-${resto.slice(-4)}`;
+  }
+  return `+${d}`;
+}
+
 export function primeiroNome(nome) {
   return String(nome || '').trim().split(/\s+/)[0] || '';
 }

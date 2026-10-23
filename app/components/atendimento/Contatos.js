@@ -12,25 +12,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
 import {
-  chamarApi, dataHora, lerCsv, baixarCsv, ICONE_CANAL, NOME_CANAL, STATUS_CONVERSA, iniciais,
+  chamarApi, dataHora, lerCsv, baixarCsv, ICONE_CANAL, NOME_CANAL, STATUS_CONVERSA, iniciais, telefoneBonito,
 } from './util';
 
 const POR_PAGINA = 100;
 const limparBusca = (t) => String(t || '').replace(/[,()%*\\]/g, ' ').trim();
 
-function telefoneBonito(t) {
-  const d = String(t || '').replace(/\D/g, '');
-  if (!d) return '';
-  if (d.startsWith('55') && (d.length === 12 || d.length === 13)) {
-    const resto = d.slice(4);
-    return `+55 (${d.slice(2, 4)}) ${resto.slice(0, resto.length - 4)}-${resto.slice(-4)}`;
-  }
-  return `+${d}`;
-}
 
-function aplicarFiltros(q, { hotel, busca, mostrar }) {
+const PLATAFORMA = { WHATSAPP: '🟢 WhatsApp', EMAIL: '✉️ E-mail', INSTAGRAM: '📸 Instagram', FACEBOOK: '💬 Facebook', IMPORTADO: '📄 Planilha', MANUAL: '✍️ Manual' };
+
+function aplicarFiltros(q, { hotel, busca, mostrar, periodo }) {
   let r = q;
   if (hotel) r = r.eq('hotel_id', Number(hotel));
+  if (periodo) {
+    const desde = periodo === 'hoje'
+      ? `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' })}T00:00:00-03:00`
+      : new Date(Date.now() - Number(periodo) * 86400000).toISOString();
+    r = r.gte('criado_em', desde);
+  }
   if (mostrar === 'importados') r = r.eq('origem', 'IMPORTADO');
   if (mostrar === 'conversaram') r = r.neq('origem', 'IMPORTADO');
   const termo = limparBusca(busca);
@@ -43,10 +42,12 @@ function aplicarFiltros(q, { hotel, busca, mostrar }) {
 }
 
 // ---------------------------------------------------------------------------
-export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }) {
+export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNovaConversa }) {
   const [lista, setLista] = useState([]);
   const [total, setTotal] = useState(0);
   const [qtdConversas, setQtdConversas] = useState({});
+  const [atendentes, setAtendentes] = useState({});
+  const [periodo, setPeriodo] = useState('');
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
   const [busca, setBusca] = useState('');
@@ -68,7 +69,7 @@ export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }
     setCarregando(true);
     const de = mais ? lista.length : 0;
     const { data, error, count } = await ordenar(aplicarFiltros(
-      supabase.from('atendimento_contatos').select('*', { count: 'exact' }), { hotel, busca, mostrar },
+      supabase.from('atendimento_contatos').select('*', { count: 'exact' }), { hotel, busca, mostrar, periodo },
     )).range(de, de + POR_PAGINA - 1);
     if (meu !== pedido.current) return;
     if (error) {
@@ -83,19 +84,25 @@ export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }
     setTotal(count || 0);
     const ids = (data || []).map((c) => c.id);
     if (ids.length) {
-      const { data: convs } = await supabase.from('atendimento_conversas').select('contato_id').in('contato_id', ids).limit(5000);
+      const { data: convs } = await supabase.from('atendimento_conversas').select('contato_id, responsavel_id, ultima_mensagem_em')
+        .in('contato_id', ids).order('ultima_mensagem_em', { ascending: false, nullsFirst: false }).limit(5000);
       const contagem = {};
-      (convs || []).forEach((c) => { contagem[c.contato_id] = (contagem[c.contato_id] || 0) + 1; });
+      const ultimoAtendente = {};
+      (convs || []).forEach((c) => {
+        contagem[c.contato_id] = (contagem[c.contato_id] || 0) + 1;
+        if (c.responsavel_id && !ultimoAtendente[c.contato_id]) ultimoAtendente[c.contato_id] = c.responsavel_id;
+      });
       setQtdConversas((antes) => ({ ...(mais ? antes : {}), ...Object.fromEntries(ids.map((id) => [id, contagem[id] || 0])) }));
+      setAtendentes((antes) => ({ ...(mais ? antes : {}), ...ultimoAtendente }));
     }
     setCarregando(false);
-  }, [hotel, busca, mostrar, ordenar, lista]);
+  }, [hotel, busca, mostrar, periodo, ordenar, lista]);
 
   // Recarrega ao mudar filtros (com uma pequena espera na busca)
   useEffect(() => {
     const id = setTimeout(() => carregar(false), busca ? 350 : 0);
     return () => clearTimeout(id);
-  }, [hotel, busca, mostrar, ordem]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hotel, busca, mostrar, periodo, ordem]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function exportar() {
     setExportando(true);
@@ -103,16 +110,16 @@ export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }
     try {
       const todos = [];
       for (let de = 0; ; de += 1000) {
-        const { data, error } = await ordenar(aplicarFiltros(supabase.from('atendimento_contatos').select('*'), { hotel, busca, mostrar })).range(de, de + 999);
+        const { data, error } = await ordenar(aplicarFiltros(supabase.from('atendimento_contatos').select('*'), { hotel, busca, mostrar, periodo })).range(de, de + 999);
         if (error) throw error;
         todos.push(...(data || []));
         if (!data || data.length < 1000) break;
       }
       const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
       baixarCsv(`contatos-${hoje}.csv`,
-        ['Nome', 'Telefone', 'E-mail', 'Idioma', 'Etiquetas', 'Hotel', 'Origem', 'Criado em', 'Atualizado em', 'Observações'],
+        ['Nome', 'Telefone', 'E-mail', 'Idioma', 'Etiquetas', 'Hotel', 'Plataforma', 'Criado em', 'Atualizado em', 'Observações'],
         todos.map((c) => [c.nome || '', c.telefone ? `+${c.telefone}` : '', c.email || '', c.idioma || '', c.etiquetas_importadas || '',
-          nomesHoteis[c.hotel_id] || c.hotel_id, c.origem || '', dataHora(c.criado_em), dataHora(c.atualizado_em), c.observacoes || '']));
+          nomesHoteis[c.hotel_id] || c.hotel_id, (PLATAFORMA[c.origem] || c.origem || '').replace(/^\S+ /, ''), dataHora(c.criado_em), dataHora(c.atualizado_em), c.observacoes || '']));
     } catch (e) { setErro('Não foi possível exportar: ' + e.message); }
     setExportando(false);
   }
@@ -122,7 +129,7 @@ export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }
       <div className="at-canal-topo">
         <div>
           <h2>👥 Contatos</h2>
-          <p className="at-dica" style={{ margin: 0 }}>{total.toLocaleString('pt-BR')} contato{total === 1 ? '' : 's'}{hotel || busca || mostrar ? ' com esses filtros' : ''}. Novos clientes entram sozinhos quando escrevem pelo WhatsApp ou e-mail.</p>
+          <p className="at-dica" style={{ margin: 0 }}>{total.toLocaleString('pt-BR')} contato{total === 1 ? '' : 's'}{hotel || busca || mostrar || periodo ? ' com esses filtros' : ''}. Novos clientes entram sozinhos quando escrevem pelo WhatsApp ou e-mail.</p>
         </div>
         <div className="at-botoes" style={{ marginTop: 0 }}>
           <button type="button" className="at-btn" onClick={() => setAberto({ novo: true, hotel_id: Number(hotel) || hoteis[0]?.id })}>+ Novo contato</button>
@@ -141,6 +148,16 @@ export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }
             </select>
           </label>
         )}
+        <label><span>Criados em</span>
+          <select className="at-select" value={periodo} onChange={(e) => setPeriodo(e.target.value)}>
+            <option value="">Qualquer data</option>
+            <option value="hoje">Hoje</option>
+            <option value="7">Últimos 7 dias</option>
+            <option value="30">Últimos 30 dias</option>
+            <option value="90">Últimos 90 dias</option>
+            <option value="365">Últimos 12 meses</option>
+          </select>
+        </label>
         <label><span>Mostrar</span>
           <select className="at-select" value={mostrar} onChange={(e) => setMostrar(e.target.value)}>
             <option value="">Todos</option>
@@ -163,7 +180,7 @@ export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }
         <table className="at-tabela">
           <thead>
             <tr>
-              <th>Nome</th><th>Telefone</th><th>E-mail</th><th>Idioma</th><th>Etiquetas</th>
+              <th>Nome</th><th>Telefone</th><th>E-mail</th><th>Plataforma</th><th>Idioma</th><th>Etiquetas</th><th>Atendente</th>
               {multiHotel && <th>Hotel</th>}
               <th className="num">Conversas</th><th>Criado em</th><th>Atualizado em</th>
             </tr>
@@ -174,8 +191,10 @@ export function Contatos({ hoteis, multiHotel, onAbrirConversa, onNovaConversa }
                 <td data-rotulo="Nome"><span className="at-avatar at-avatar-mini">{iniciais(c.nome || c.email || c.telefone)}</span> <strong>{c.nome || '—'}</strong></td>
                 <td data-rotulo="Telefone">{telefoneBonito(c.telefone) || '—'}</td>
                 <td data-rotulo="E-mail">{c.email || '—'}</td>
+                <td data-rotulo="Plataforma">{PLATAFORMA[c.origem] || c.origem || '—'}</td>
                 <td data-rotulo="Idioma">{c.idioma || '—'}</td>
                 <td data-rotulo="Etiquetas" className="at-td-etq">{c.etiquetas_importadas || '—'}</td>
+                <td data-rotulo="Atendente">{atendentes[c.id] ? (nomes[atendentes[c.id]] || '—') : '—'}</td>
                 {multiHotel && <td data-rotulo="Hotel">{nomesHoteis[c.hotel_id] || '—'}</td>}
                 <td data-rotulo="Conversas" className="num">{qtdConversas[c.id] ?? '…'}</td>
                 <td data-rotulo="Criado em">{dataHora(c.criado_em)}</td>

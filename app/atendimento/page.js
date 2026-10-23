@@ -21,8 +21,8 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import {
-  chamarApi, avisarCabecalho, ESTILOS_ATENDIMENTO, ICONE_CANAL, chaveNome, tocarAviso, mostrarNotificacao,
-  lerPreferencia, gravarPreferencia,
+  chamarApi, avisarCabecalho, ESTILOS_ATENDIMENTO, ICONE_CANAL, NOME_CANAL, STATUS_CONVERSA, chaveNome, tocarAviso, mostrarNotificacao,
+  lerPreferencia, gravarPreferencia, baixarCsv, dataHora,
 } from '../components/atendimento/util';
 import { Conversa, PainelLateral, NovaConversa } from '../components/atendimento/Conversa';
 import { ConfigCanais, RespostasProntas } from '../components/atendimento/Configuracoes';
@@ -130,6 +130,11 @@ export default function CaixaDeEntrada() {
   const multiHotel = hoteisIds.length > 1;
   const nomesHoteis = useMemo(() => Object.fromEntries(equipe.hoteis.map((h) => [h.id, h.nome])), [equipe.hoteis]);
   const souAdminDeAlgum = souAdmin || equipe.hoteis.some((h) => h.souAdmin);
+  const nomesTodos = useMemo(() => {
+    const n = { ...equipe.nomes, ...Object.fromEntries(equipe.pessoas.map((p) => [p.id, p.nome])) };
+    if (usuario && !n[usuario.id]) n[usuario.id] = usuario.nome;
+    return n;
+  }, [equipe, usuario]);
 
   // ---- Dados de apoio ----------------------------------------------------------
   const carregarApoio = useCallback(async () => {
@@ -169,8 +174,8 @@ export default function CaixaDeEntrada() {
     return a;
   }, [preferencias, hoteisIds]);
 
-  const carregarLista = useCallback(async () => {
-    if (!usuario) return;
+  // Monta a consulta com os filtros da tela (usada na lista, no quadro e no exportar)
+  const montarConsulta = useCallback(() => {
     let q = supabase.from('atendimento_conversas').select('*');
     if (hotelFiltro) q = q.eq('hotel_id', Number(hotelFiltro));
     if (filtro === 'abertas') q = q.not('status', 'in', FECHADAS);
@@ -204,8 +209,12 @@ export default function CaixaDeEntrada() {
       q = q.or(`contato_nome.ilike.${t},contato_endereco.ilike.${t},assunto.ilike.${t},chave_externa.ilike.${t},ultima_mensagem_resumo.ilike.${t}`);
     }
     const crescente = ordem === 'antigas';
-    const { data, error } = await q.order('ultima_mensagem_em', { ascending: crescente, nullsFirst: false }).order('id', { ascending: crescente })
-      .limit(visao === 'quadro' ? LIMITE_QUADRO : LIMITE_LISTA);
+    return q.order('ultima_mensagem_em', { ascending: crescente, nullsFirst: false }).order('id', { ascending: crescente });
+  }, [usuario, filtro, hotelFiltro, atendenteFiltro, etiquetaFiltro, etapaFiltro, canalFiltro, periodo, busca, ordem, etiquetas, etapas]);
+
+  const carregarLista = useCallback(async () => {
+    if (!usuario) return;
+    const { data, error } = await montarConsulta().limit(visao === 'quadro' ? LIMITE_QUADRO : LIMITE_LISTA);
     if (error) {
       setErroLista(/atendimento_|does not exist|schema cache/i.test(error.message)
         ? (/etiquetas|etapa_id|ARQUIVADA/.test(error.message) ? mensagemSemFase2 : mensagemSemSql)
@@ -215,7 +224,38 @@ export default function CaixaDeEntrada() {
       setConversas(data || []);
     }
     setCarregandoLista(false);
-  }, [usuario, filtro, hotelFiltro, atendenteFiltro, etiquetaFiltro, etapaFiltro, canalFiltro, periodo, busca, ordem, visao, etiquetas, etapas]);
+  }, [usuario, montarConsulta, visao]);
+
+  // Exportar os atendimentos do filtro atual (todos, não só os da tela)
+  const [exportando, setExportando] = useState(false);
+  async function exportarAtendimentos() {
+    setExportando(true);
+    try {
+      const todos = [];
+      for (let de = 0; de < 20000; de += 1000) {
+        const { data, error } = await montarConsulta().range(de, de + 999);
+        if (error) throw error;
+        todos.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+      const etapaPorId = Object.fromEntries(etapas.map((e) => [e.id, e.nome]));
+      const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+      baixarCsv(`atendimentos-${hoje}.csv`,
+        ['Início', 'Hotel', 'Canal', 'Contato', 'Telefone / e-mail', 'Assunto', 'Situação', 'Etapa', 'Etiquetas', 'Responsável', 'Valor da cotação',
+          'Veio de anúncio', 'Última mensagem', 'Primeira resposta', 'Reserva Cloudbeds', 'Resumo'],
+        todos.map((c) => [
+          dataHora(c.criado_em), nomesHoteis[c.hotel_id] || c.hotel_id, NOME_CANAL[c.canal_tipo] || c.canal_tipo, c.contato_nome || '', c.contato_endereco || '',
+          c.assunto || '', STATUS_CONVERSA[c.status] || c.status, etapaPorId[c.etapa_id] || '',
+          (c.etiquetas || []).map((id) => etiquetasPorId[id]?.nome).filter(Boolean).join(', '),
+          c.responsavel_id ? (nomesTodos[c.responsavel_id] || `#${c.responsavel_id}`) : '',
+          c.valor_cotacao ? Number(c.valor_cotacao).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '',
+          c.origem ? (c.origem.titulo || 'Sim') : '', dataHora(c.ultima_mensagem_em), c.primeira_resposta_em ? dataHora(c.primeira_resposta_em) : '',
+          c.cloudbeds_reservation_id || '', c.ultima_mensagem_resumo || '',
+        ]));
+      setAviso(`${todos.length} atendimento(s) exportado(s).`);
+    } catch (e) { setAviso('Não foi possível exportar: ' + e.message); }
+    setExportando(false);
+  }
 
   // A conversa aberta pode não estar no filtro atual — busca ela à parte
   const [conversaAvulsa, setConversaAvulsa] = useState(null);
@@ -391,8 +431,7 @@ export default function CaixaDeEntrada() {
   }
 
   const mapaCanais = Object.fromEntries(canais.map((c) => [c.id, c]));
-  const nomes = { ...equipe.nomes, ...Object.fromEntries(equipe.pessoas.map((p) => [p.id, p.nome])) };
-  if (usuario && !nomes[usuario.id]) nomes[usuario.id] = usuario.nome;
+  const nomes = nomesTodos;
   const totalNaoLidas = conversas.reduce((s, c) => s + (!['RESOLVIDA', 'ARQUIVADA'].includes(c.status) ? c.nao_lidas : 0), 0);
   const canalSelecionado = selecionada ? mapaCanais[selecionada.canal_id] : null;
   const pessoasDaConversa = selecionada
@@ -472,6 +511,7 @@ export default function CaixaDeEntrada() {
         <Contatos
           hoteis={equipe.hoteis.length ? equipe.hoteis : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual' }]}
           multiHotel={multiHotel}
+          nomes={nomes}
           onAbrirConversa={abrirConversa}
           onNovaConversa={(inicial) => { setAba('conversas'); setNovaConversa(inicial); }}
         />
@@ -507,6 +547,9 @@ export default function CaixaDeEntrada() {
             <input className="campo at-campo-pequeno at-busca" type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="🔎 Nome, telefone, e-mail ou assunto" />
             <button type="button" className={`at-btn ${filtrosAtivos ? 'at-btn-ligado' : ''}`} onClick={() => setMostrarFiltros(!mostrarFiltros)} aria-expanded={mostrarFiltros}>
               ⚲ Filtros{filtrosAtivos ? ` (${filtrosAtivos})` : ''}
+            </button>
+            <button type="button" className="at-btn" onClick={exportarAtendimentos} disabled={exportando} title="Baixar planilha com os atendimentos deste filtro">
+              {exportando ? 'Exportando…' : '⬇ Exportar'}
             </button>
           </div>
           <div className="at-filtros at-filtros-situacao">
