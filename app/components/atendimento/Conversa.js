@@ -17,6 +17,8 @@ import {
   soHora, dataHora, rotuloDia, chaveDia, dataCurta, noites, dinheiro, iniciais, tamanhoArquivo,
   aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando, telefoneBonito,
 } from './util';
+import { ModalCotacao, ListaCotacoes } from './Cotacao';
+import { EditorHtml, EscolherModelo, aplicarVariaveisModelo, htmlParaTextoTela } from './ModelosEmail';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 
@@ -283,8 +285,10 @@ export function ModalModelo({ canal, destino, nomeContato, onFechar, onEnviado }
 
 // ---------------------------------------------------------------------------
 // Caixa de escrever
-function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado, onAbrirModelo }) {
+function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, janelaAberta, onEnviado, onAbrirModelo, onAbrirCotacao }) {
   const [texto, setTexto] = useState('');
+  const [htmlModelo, setHtmlModelo] = useState(null); // e-mail com modelo formatado
+  const [escolherModelo, setEscolherModelo] = useState(false);
   const [nota, setNota] = useState(false);
   const [anexos, setAnexos] = useState([]);
   const [subindo, setSubindo] = useState(0);
@@ -301,7 +305,7 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
   // Rascunho por conversa (só neste navegador)
   useEffect(() => {
     try { setTexto(sessionStorage.getItem(`at-rascunho-${conversa.id}`) || ''); } catch (e) { setTexto(''); }
-    setAnexos([]); setErro(''); setNota(false); setCc(''); setMostrarCc(false);
+    setAnexos([]); setErro(''); setNota(false); setCc(''); setMostrarCc(false); setHtmlModelo(null);
   }, [conversa.id]);
   useEffect(() => {
     try { sessionStorage.setItem(`at-rascunho-${conversa.id}`, texto); } catch (e) { /* nada */ }
@@ -343,17 +347,32 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
     }
   }
 
+  function usarModelo(m) {
+    setEscolherModelo(false);
+    const vars = { nomeCliente: conversa.contato_nome, nomeAtendente: usuario.nome, nomeHotel };
+    if (ehEmail) {
+      setHtmlModelo(aplicarVariaveisModelo(m.corpo_html, vars, true));
+    } else {
+      const simples = aplicarVariaveisModelo(htmlParaTextoTela(m.corpo_html), vars, false);
+      setTexto((t) => (t.trim() ? `${t}\n${simples}` : simples));
+    }
+    setTimeout(() => campoRef.current?.focus(), 0);
+  }
+
   async function enviar() {
     if (enviando || subindo) return;
-    const conteudo = texto.trim();
+    const usandoModelo = ehEmail && !nota && htmlModelo !== null;
+    const conteudo = usandoModelo ? htmlParaTextoTela(htmlModelo) : texto.trim();
     if (!conteudo && !anexos.length) return;
     setEnviando(true);
     setErro('');
     try {
       await chamarApi('/api/atendimento', {
         acao: 'enviar', conversaId: conversa.id, texto: conteudo, nota,
+        html: usandoModelo ? htmlModelo : undefined,
         anexos: nota ? [] : anexos, cc: ehEmail && !nota ? cc : undefined,
       });
+      if (usandoModelo) setHtmlModelo(null);
       setTexto(''); setAnexos([]); setCc(''); setMostrarCc(false);
       if (nota) setNota(false); // depois de salvar a nota, volta a escrever para o cliente
       try { sessionStorage.removeItem(`at-rascunho-${conversa.id}`); } catch (e) { /* nada */ }
@@ -417,6 +436,13 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
           </>
         )}
         <button type="button" className="at-ferramenta" onClick={() => setListaRespostas(!listaRespostas)}>⚡ Respostas prontas</button>
+        {!nota && (
+          <button type="button" className="at-ferramenta" onClick={() => setEscolherModelo(true)} disabled={canalDesligado || bloqueadoPelaJanela}
+            title={ehEmail ? 'Usar um modelo de e-mail formatado' : 'Usar o texto de um modelo de e-mail'}>📄 Modelo de e-mail</button>
+        )}
+        {!nota && onAbrirCotacao && (
+          <button type="button" className="at-ferramenta at-ferramenta-destaque" onClick={onAbrirCotacao} disabled={canalDesligado}>💰 Cotação</button>
+        )}
         {canal?.tipo === 'WHATSAPP' && !nota && (
           <button type="button" className="at-ferramenta" onClick={onAbrirModelo} disabled={canalDesligado}>📋 Modelo</button>
         )}
@@ -444,6 +470,18 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
         </div>
       )}
 
+      {htmlModelo !== null && ehEmail && !nota ? (
+        <div className="me-na-conversa">
+          <div className="at-canal-topo">
+            <span className="at-dica" style={{ margin: 0 }}>📄 E-mail com modelo formatado — ajuste o que precisar antes de enviar.</span>
+            <button type="button" className="at-link-pequeno" onClick={() => setHtmlModelo(null)}>Voltar ao texto simples</button>
+          </div>
+          <EditorHtml valor={htmlModelo} onMudar={setHtmlModelo} altura={180} rotulo="Texto do e-mail" />
+          <div className="at-botoes" style={{ marginTop: 6 }}>
+            <button type="button" className="at-btn at-btn-verde" onClick={enviar} disabled={enviando || subindo > 0 || canalDesligado}>{enviando ? 'Enviando…' : 'Enviar e-mail'}</button>
+          </div>
+        </div>
+      ) : (
       <div className="at-escrever-linha">
         <textarea
           ref={campoRef}
@@ -462,6 +500,10 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
           {enviando ? '…' : nota ? 'Salvar nota' : 'Enviar'}
         </button>
       </div>
+      )}
+      {escolherModelo && (
+        <EscolherModelo modelos={modelos || []} paraWhatsApp={!ehEmail} onEscolher={usarModelo} onFechar={() => setEscolherModelo(false)} />
+      )}
       {erro && <div className="aviso-erro" style={{ marginTop: 8, marginBottom: 0 }}>{erro}</div>}
     </div>
   );
@@ -471,9 +513,10 @@ function Escrever({ conversa, canal, usuario, respostas, janelaAberta, onEnviado
 // Conversa completa
 export function Conversa({
   conversa, canal, mensagens, carregando, usuario, atendentes, nomes, respostas, etapas, etiquetas, nomeHotel,
-  alertaMinutos, onRecarregar, onVoltar, onAlternarLateral, lateralAberta, rotuloVoltar,
+  alertaMinutos, onRecarregar, onVoltar, onAlternarLateral, lateralAberta, rotuloVoltar, modelos, nomeHotelReal,
 }) {
   const [mostrarModelo, setMostrarModelo] = useState(false);
+  const [mostrarCotacao, setMostrarCotacao] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
   const fimRef = useRef(null);
@@ -578,9 +621,17 @@ export function Conversa({
       </div>
 
       <Escrever
-        conversa={conversa} canal={canal} usuario={usuario} respostas={respostas}
+        conversa={conversa} canal={canal} usuario={usuario} respostas={respostas} modelos={modelos} nomeHotel={nomeHotelReal}
         janelaAberta={janelaAberta} onEnviado={onRecarregar} onAbrirModelo={() => setMostrarModelo(true)}
+        onAbrirCotacao={canal && ['WHATSAPP', 'EMAIL'].includes(canal.tipo) ? () => setMostrarCotacao(true) : null}
       />
+      {mostrarCotacao && canal && (
+        <ModalCotacao
+          conversa={conversa} canal={canal} janelaAberta={janelaAberta}
+          onFechar={() => setMostrarCotacao(false)}
+          onEnviada={() => { setMostrarCotacao(false); avisarCabecalho(); onRecarregar(); }}
+        />
+      )}
 
       {mostrarModelo && canal && (
         <ModalModelo
@@ -904,6 +955,7 @@ export function PainelLateral({ conversa, onMudou, onAbrirConversa }) {
   return (
     <>
       <PainelContato conversa={conversa} onAbrirConversa={onAbrirConversa} />
+      <ListaCotacoes conversa={conversa} />
       <PainelReserva conversa={conversa} onMudou={onMudou} />
     </>
   );
@@ -911,7 +963,7 @@ export function PainelLateral({ conversa, onMudou, onAbrirConversa }) {
 
 // ---------------------------------------------------------------------------
 // Começar conversa nova
-export function NovaConversa({ canais, onFechar, onCriada, inicial, nomesHoteis }) {
+export function NovaConversa({ canais, onFechar, onCriada, inicial, nomesHoteis, nomesHoteisTodos, modelos, usuario }) {
   const ativos = (canais || []).filter((c) => c.ativo && (c.tipo === 'WHATSAPP' || c.tipo === 'EMAIL'));
   const preferido = inicial?.tipo ? ativos.find((c) => c.tipo === inicial.tipo && (!inicial.hotelId || c.hotel_id === inicial.hotelId)) : null;
   const [canalId, setCanalId] = useState((preferido || ativos[0])?.id || '');
@@ -922,13 +974,26 @@ export function NovaConversa({ canais, onFechar, onCriada, inicial, nomesHoteis 
   const [erro, setErro] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [modelo, setModelo] = useState(false);
+  const [htmlModelo, setHtmlModelo] = useState(null);
+  const [escolherModelo, setEscolherModelo] = useState(false);
   const canal = ativos.find((c) => String(c.id) === String(canalId));
+  const modelosDoHotel = (modelos || []).filter((m) => m.hotel_id === canal?.hotel_id);
+
+  function usarModelo(m) {
+    setEscolherModelo(false);
+    const vars = { nomeCliente: nome, nomeAtendente: usuario?.nome, nomeHotel: nomesHoteisTodos?.[canal?.hotel_id] || '' };
+    setHtmlModelo(aplicarVariaveisModelo(m.corpo_html, vars, true));
+    if (m.assunto && !assunto.trim()) setAssunto(aplicarVariaveisModelo(m.assunto, vars, false));
+  }
 
   async function enviarEmail() {
     setEnviando(true);
     setErro('');
     try {
-      const r = await chamarApi('/api/atendimento', { acao: 'enviar', canalId: canal.id, para, nome, assunto, texto });
+      const corpoTexto = htmlModelo !== null ? htmlParaTextoTela(htmlModelo) : texto;
+      const r = await chamarApi('/api/atendimento', {
+        acao: 'enviar', canalId: canal.id, para, nome, assunto, texto: corpoTexto, html: htmlModelo !== null ? htmlModelo : undefined,
+      });
       onCriada(r.conversaId);
     } catch (e) { setErro(e.message); setEnviando(false); }
   }
@@ -970,9 +1035,17 @@ export function NovaConversa({ canais, onFechar, onCriada, inicial, nomesHoteis 
           <>
             <label className="rotulo" htmlFor="nc-assunto">Assunto</label>
             <input id="nc-assunto" className="campo" value={assunto} onChange={(e) => setAssunto(e.target.value)} />
-            <label className="rotulo" htmlFor="nc-texto">Mensagem</label>
-            <textarea id="nc-texto" className="campo" rows={7} value={texto} onChange={(e) => setTexto(e.target.value)} />
+            <div className="at-canal-topo" style={{ marginTop: 10 }}>
+              <label className="rotulo" htmlFor="nc-texto" style={{ margin: 0 }}>Mensagem</label>
+              {htmlModelo !== null
+                ? <button type="button" className="at-link-pequeno" onClick={() => setHtmlModelo(null)}>Voltar ao texto simples</button>
+                : <button type="button" className="at-link-pequeno" onClick={() => setEscolherModelo(true)}>📄 Usar modelo de e-mail</button>}
+            </div>
+            {htmlModelo !== null
+              ? <EditorHtml valor={htmlModelo} onMudar={setHtmlModelo} altura={200} rotulo="Texto do e-mail" />
+              : <textarea id="nc-texto" className="campo" rows={7} value={texto} onChange={(e) => setTexto(e.target.value)} />}
             <p className="at-dica">A assinatura da caixa de e-mail entra automaticamente no final.</p>
+            {escolherModelo && <EscolherModelo modelos={modelosDoHotel} onEscolher={usarModelo} onFechar={() => setEscolherModelo(false)} />}
           </>
         ) : (
           <p className="at-dica">No WhatsApp, a empresa só pode começar a conversa com um <strong>modelo aprovado</strong> pela Meta. Depois que o cliente responder, vocês conversam livremente por 24 horas.</p>
@@ -980,7 +1053,7 @@ export function NovaConversa({ canais, onFechar, onCriada, inicial, nomesHoteis 
         {erro && <div className="aviso-erro" style={{ marginTop: 10 }}>{erro}</div>}
         <div className="at-botoes">
           {canal?.tipo === 'EMAIL'
-            ? <button type="button" className="at-btn at-btn-verde" onClick={enviarEmail} disabled={enviando || !para.trim() || !assunto.trim() || !texto.trim()}>{enviando ? 'Enviando…' : 'Enviar e-mail'}</button>
+            ? <button type="button" className="at-btn at-btn-verde" onClick={enviarEmail} disabled={enviando || !para.trim() || !assunto.trim() || (htmlModelo === null ? !texto.trim() : !htmlParaTextoTela(htmlModelo))}>{enviando ? 'Enviando…' : 'Enviar e-mail'}</button>
             : <button type="button" className="at-btn at-btn-verde" onClick={() => { if (para.replace(/\D/g, '').length < 10) { setErro('Informe o número com DDD.'); return; } setErro(''); setModelo(true); }}>Escolher modelo →</button>}
           <button type="button" className="at-btn" onClick={onFechar}>Cancelar</button>
         </div>

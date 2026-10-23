@@ -538,6 +538,40 @@ export const ESTILOS_ATENDIMENTO = `
   .pi-barra { display: block; height: 100%; border-radius: 0 4px 4px 0; }
   .pi-barra-valor { font-variant-numeric: tabular-nums; }
 
+  /* ---- Fase 3: cotação e modelos de e-mail ---- */
+  .at-ferramenta-destaque { background: #FFF1D6; color: #7A4A00; font-weight: 700; }
+  .ct-busca { display: flex; gap: 8px 10px; flex-wrap: wrap; align-items: flex-end; background: #FAFBF9; border: 1px solid var(--borda); border-radius: 12px; padding: 10px 12px; }
+  .ct-busca label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--texto-suave); font-weight: 600; }
+  .ct-busca input[type=date] { min-width: 150px; }
+  .ct-busca input[type=number] { width: 84px; }
+  .ct-quartos { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .ct-quarto { display: flex; gap: 10px; align-items: center; border: 1px solid var(--borda); border-radius: 12px; padding: 8px 10px; cursor: pointer; background: #fff; }
+  .ct-quarto.escolhido { border-color: var(--marca); background: var(--marca-clara); }
+  .ct-quarto img, .ct-sem-foto { width: 64px; height: 48px; object-fit: cover; border-radius: 8px; flex-shrink: 0; background: #EEF1EE; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+  .ct-quarto-meio { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .ct-quarto-meio small, .ct-preco small { color: var(--texto-suave); font-size: 12px; }
+  .ct-preco { display: flex; flex-direction: column; align-items: flex-end; white-space: nowrap; }
+  .ct-preco strong { font-size: 15px; }
+  .ct-editar { background: #FAFBF9; border: 1px solid var(--borda); border-radius: 12px; padding: 8px 10px; margin: 6px 0; }
+  .ct-previa { max-height: 260px; overflow-y: auto; }
+  .ct-item { border: 1px solid var(--borda); border-radius: 10px; background: #fff; padding: 8px 10px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+  .ct-item small { color: var(--texto-suave); }
+  .me-editor { border: 1px solid var(--borda); border-radius: 10px; background: #fff; overflow: hidden; }
+  .me-barra { display: flex; gap: 2px; flex-wrap: wrap; padding: 4px; border-bottom: 1px solid var(--borda); background: #F6F7F4; align-items: center; }
+  .me-barra button, .me-cor { border: none; background: none; min-width: 30px; height: 30px; border-radius: 6px; cursor: pointer; font-size: 14px; font-family: inherit; color: var(--tinta); display: inline-flex; align-items: center; justify-content: center; position: relative; }
+  .me-barra button:hover, .me-cor:hover, .me-barra button.ativo { background: #E5E9E4; }
+  .me-cor input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .me-barra select { border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; padding: 3px 4px; background: #fff; font-family: inherit; }
+  .me-area { padding: 10px 12px; font-size: 14px; line-height: 1.5; outline: none; overflow-y: auto; max-height: 60vh; font-family: Arial, Helvetica, sans-serif; }
+  .me-area:focus { box-shadow: inset 0 0 0 2px var(--marca-clara); }
+  .me-area img { max-width: 100%; height: auto; }
+  .me-codigo { width: 100%; border: none; padding: 10px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; resize: vertical; box-sizing: border-box; }
+  .me-inativo { opacity: .6; }
+  .me-escolher { max-height: 220px; overflow-y: auto; margin: 8px 0; }
+  .me-visto { border-color: var(--marca) !important; background: var(--marca-clara) !important; }
+  .me-na-conversa { display: flex; flex-direction: column; gap: 6px; }
+  .pi-secao { font-size: 17px; margin: 6px 0 10px; }
+
   @media (min-width: 900px) {
     .at-gaveta.com-lateral { width: min(1120px, 100%); grid-template-columns: 1fr 320px; }
     .at-mover { display: none; }
