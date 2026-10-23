@@ -561,7 +561,10 @@ grant execute on function public.atendimento_painel(bigint[], date, date) to aut
 grant execute on function public.atendimento_adicionar_etiqueta(bigint, text) to service_role;
 grant execute on function public.atendimento_preparar_hotel(bigint) to service_role;
 grant execute on function public.atendimento_contato_para(bigint, text, text, text, text) to service_role;
+revoke all on function public.atendimento_fora_do_horario(bigint, timestamptz) from public, anon;
+revoke all on function public.atendimento_variantes_telefone(text) from public, anon;
 grant execute on function public.atendimento_fora_do_horario(bigint, timestamptz) to authenticated, service_role;
+grant execute on function public.atendimento_variantes_telefone(text) to authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- 10) Segurança: tudo passa a valer para os hotéis em que a pessoa atende
