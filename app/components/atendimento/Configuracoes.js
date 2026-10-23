@@ -290,8 +290,11 @@ export function ConfigCanais() {
 }
 
 // ---------------------------------------------------------------------------
-export function RespostasProntas({ usuario, respostas, onMudou }) {
-  const [form, setForm] = useState(null); // { id?, atalho, titulo, texto }
+export function RespostasProntas({ usuario, respostas, hoteis, multiHotel, onMudou }) {
+  const [form, setForm] = useState(null); // { id?, hotel_id, atalho, titulo, texto }
+  const [hotelVer, setHotelVer] = useState('');
+  const nomesHoteis = Object.fromEntries((hoteis || []).map((h) => [h.id, h.nome]));
+  const visiveis = hotelVer ? respostas.filter((r) => r.hotel_id === Number(hotelVer)) : respostas;
   const [erro, setErro] = useState('');
   const [salvando, setSalvando] = useState(false);
 
@@ -303,7 +306,7 @@ export function RespostasProntas({ usuario, respostas, onMudou }) {
     const registro = { atalho, titulo: String(form.titulo || '').trim() || null, texto: form.texto.trim(), atualizado_em: new Date().toISOString() };
     const { error } = form.id
       ? await supabase.from('atendimento_respostas_prontas').update(registro).eq('id', form.id)
-      : await supabase.from('atendimento_respostas_prontas').insert({ ...registro, hotel_id: usuario.hotel_id, criado_por_id: usuario.id });
+      : await supabase.from('atendimento_respostas_prontas').insert({ ...registro, hotel_id: Number(form.hotel_id) || usuario.hotel_id, criado_por_id: usuario.id });
     setSalvando(false);
     if (error) {
       setErro(/duplicate|unique/i.test(error.message) ? `Já existe uma resposta com o atalho /${atalho}.` : 'Não foi possível salvar: ' + error.message);
@@ -324,13 +327,29 @@ export function RespostasProntas({ usuario, respostas, onMudou }) {
     <section className="at-cartao">
       <div className="at-canal-topo">
         <h2>⚡ Respostas prontas</h2>
-        <button type="button" className="at-btn at-btn-verde" onClick={() => { setErro(''); setForm({ atalho: '', titulo: '', texto: '' }); }}>+ Nova resposta</button>
+        <div className="at-botoes" style={{ marginTop: 0 }}>
+          {multiHotel && (
+            <select className="at-select" value={hotelVer} onChange={(e) => setHotelVer(e.target.value)} aria-label="Hotel">
+              <option value="">Todos os hotéis</option>
+              {hoteis.map((h) => <option key={h.id} value={h.id}>{h.nome}</option>)}
+            </select>
+          )}
+          <button type="button" className="at-btn at-btn-verde" onClick={() => { setErro(''); setForm({ hotel_id: Number(hotelVer) || Number(usuario.hotel_id), atalho: '', titulo: '', texto: '' }); }}>+ Nova resposta</button>
+        </div>
       </div>
       <p className="at-dica">Na conversa, digite <strong>/</strong> e o atalho (ex.: <strong>/checkin</strong>). Use <strong>{'{nome}'}</strong> para o primeiro nome do cliente e <strong>{'{atendente}'}</strong> para o seu.</p>
       {erro && <div className="aviso-erro">{erro}</div>}
 
       {form && (
         <div className="at-canal" style={{ background: '#FAFBF9' }}>
+          {multiHotel && !form.id && (
+            <>
+              <label className="rotulo" htmlFor="r-hotel">Hotel</label>
+              <select id="r-hotel" className="campo" value={form.hotel_id} onChange={(e) => setForm({ ...form, hotel_id: Number(e.target.value) })}>
+                {hoteis.map((h) => <option key={h.id} value={h.id}>{h.nome}</option>)}
+              </select>
+            </>
+          )}
           <div className="at-grade">
             <div>
               <label className="rotulo" htmlFor="r-atalho">Atalho</label>
@@ -351,11 +370,14 @@ export function RespostasProntas({ usuario, respostas, onMudou }) {
         </div>
       )}
 
-      {respostas.length === 0 && !form && <p className="at-vazio">Nenhuma resposta pronta ainda.</p>}
-      {respostas.map((r) => (
+      {visiveis.length === 0 && !form && <p className="at-vazio">Nenhuma resposta pronta ainda.</p>}
+      {visiveis.map((r) => (
         <div key={r.id} className="at-canal">
           <div className="at-canal-topo">
-            <div><strong>/{r.atalho}</strong>{r.titulo ? <span className="texto-suave"> — {r.titulo}</span> : null}</div>
+            <div>
+              <strong>/{r.atalho}</strong>{r.titulo ? <span className="texto-suave"> — {r.titulo}</span> : null}
+              {multiHotel && nomesHoteis[r.hotel_id] && <span className="at-chip" style={{ marginLeft: 8 }}>🏨 {nomesHoteis[r.hotel_id]}</span>}
+            </div>
             <div className="at-botoes" style={{ marginTop: 0 }}>
               <button type="button" className="at-btn" onClick={() => { setErro(''); setForm({ ...r }); }}>Editar</button>
               <button type="button" className="at-btn at-btn-perigo" onClick={() => excluir(r)}>Excluir</button>

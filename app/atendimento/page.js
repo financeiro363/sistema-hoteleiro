@@ -1,15 +1,18 @@
 'use client';
 
 // ============================================================================
-// CAIXA DE ENTRADA (Atendimento → Caixa de Entrada) — Fase 1, Parte A
+// CAIXA DE ENTRADA (Atendimento → Caixa de Entrada) — Fase 2: LiveChat completo
 // ============================================================================
-// WhatsApp e e-mails do hotel num lugar só:
-//   - lista de conversas (abertas, minhas, sem responsável, resolvidas)
-//   - conversa com envio de texto, anexos, modelos do WhatsApp e notas internas
-//   - reserva da Cloudbeds ao lado
-//   - abas "Respostas prontas" e "Canais" (só ADMIN)
-// Acesso: ADMIN, ou COLABORADOR com a permissão "Pode usar a Caixa de Entrada"
-// (Administração → Usuários).
+// WhatsApp e e-mails dos hotéis num lugar só:
+//   - Conversas em LISTA ou em QUADRO (Kanban por etapa do funil), com filtros
+//     por hotel, atendente, etapa, etiqueta, canal, período e situação
+//   - conversa com envio de texto, anexos, modelos do WhatsApp, notas internas,
+//     etapa, etiquetas, valor da cotação, contato/histórico e reserva Cloudbeds
+//   - Contatos (lista, editar, juntar, importar e exportar planilha)
+//   - Painel (indicadores mês a mês)
+//   - Respostas prontas; Funil e etiquetas (ADMIN); Canais (ADMIN)
+// Os dois hotéis aparecem juntos para quem atende nos dois (vínculo do usuário).
+// Acesso: ADMIN, ou COLABORADOR com "Pode usar a Caixa de Entrada".
 // Atualiza ao vivo (Supabase Realtime) e, por garantia, a cada 20 segundos.
 // ============================================================================
 
@@ -18,21 +21,44 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import {
-  chamarApi, avisarCabecalho, ESTILOS_ATENDIMENTO, STATUS_CONVERSA, ICONE_CANAL, horaCurta, iniciais, primeiroNome,
+  chamarApi, avisarCabecalho, ESTILOS_ATENDIMENTO, ICONE_CANAL, NOME_CANAL, STATUS_CONVERSA, chaveNome, tocarAviso, mostrarNotificacao,
+  lerPreferencia, gravarPreferencia, baixarCsv, dataHora,
 } from '../components/atendimento/util';
-import { Conversa, PainelReserva, NovaConversa } from '../components/atendimento/Conversa';
+import { Conversa, PainelLateral, NovaConversa } from '../components/atendimento/Conversa';
 import { ConfigCanais, RespostasProntas } from '../components/atendimento/Configuracoes';
+import { CartaoConversa, Quadro, colunasDoQuadro } from '../components/atendimento/Quadro';
+import { Contatos } from '../components/atendimento/Contatos';
+import { PainelIndicadores } from '../components/atendimento/Painel';
+import { FunilEtiquetas } from '../components/atendimento/Funil';
 
 const FILTROS = [
   ['abertas', 'Abertas'],
   ['minhas', 'Minhas'],
   ['sem', 'Sem responsável'],
+  ['nao_respondidas', 'Não respondidas'],
   ['nao_lidas', 'Não lidas'],
   ['resolvidas', 'Resolvidas'],
+  ['arquivadas', 'Arquivadas'],
   ['todas', 'Todas'],
 ];
 
+const PERIODOS = [
+  ['', 'Qualquer data'],
+  ['hoje', 'Hoje'],
+  ['7', 'Últimos 7 dias'],
+  ['30', 'Últimos 30 dias'],
+  ['90', 'Últimos 90 dias'],
+];
+
+const ABAS = ['conversas', 'contatos', 'painel', 'respostas', 'funil', 'canais'];
+const FECHADAS = '(RESOLVIDA,ARQUIVADA)';
+const LIMITE_LISTA = 300;
+const LIMITE_QUADRO = 600;
+const DIA_MS = 86400000;
+
 const limparBusca = (t) => String(t || '').replace(/[,()%*\\]/g, ' ').trim();
+const mensagemSemSql = 'A Caixa de Entrada ainda não foi ativada no banco de dados (falta rodar o SQL da Caixa de Entrada no Supabase).';
+const mensagemSemFase2 = 'Falta rodar no Supabase o SQL da Fase 2 da Caixa de Entrada (sql/caixa_de_entrada_fase2.sql).';
 
 export default function CaixaDeEntrada() {
   const router = useRouter();
@@ -41,21 +67,37 @@ export default function CaixaDeEntrada() {
   const [semPermissao, setSemPermissao] = useState(false);
   const [aba, setAba] = useState('conversas');
 
+  const [equipe, setEquipe] = useState({ hoteis: [], pessoas: [], nomes: {} });
   const [canais, setCanais] = useState([]);
-  const [atendentes, setAtendentes] = useState([]);
   const [respostas, setRespostas] = useState([]);
+  const [etapas, setEtapas] = useState([]);
+  const [etiquetas, setEtiquetas] = useState([]);
+  const [preferencias, setPreferencias] = useState([]);
+  const [faltaFase2, setFaltaFase2] = useState(false);
+
   const [conversas, setConversas] = useState([]);
   const [carregandoLista, setCarregandoLista] = useState(true);
   const [erroLista, setErroLista] = useState('');
+  const [aviso, setAviso] = useState('');
+  const [visao, setVisao] = useState('lista');
   const [filtro, setFiltro] = useState('abertas');
+  const [hotelFiltro, setHotelFiltro] = useState('');
+  const [atendenteFiltro, setAtendenteFiltro] = useState('');
+  const [etapaFiltro, setEtapaFiltro] = useState('');
+  const [etiquetaFiltro, setEtiquetaFiltro] = useState('');
   const [canalFiltro, setCanalFiltro] = useState('');
+  const [periodo, setPeriodo] = useState('');
+  const [ordem, setOrdem] = useState('recentes');
   const [busca, setBusca] = useState('');
+  const [mostrarFiltros, setMostrarFiltros] = useState(false);
 
   const [selecionadaId, setSelecionadaId] = useState(null);
   const [mensagens, setMensagens] = useState([]);
   const [carregandoMensagens, setCarregandoMensagens] = useState(false);
   const [lateralAberta, setLateralAberta] = useState(false);
-  const [novaConversa, setNovaConversa] = useState(false);
+  const [novaConversa, setNovaConversa] = useState(null);
+  const [avisosLigados, setAvisosLigados] = useState(false);
+  const [agora, setAgora] = useState(Date.now());
 
   const selecionadaRef = useRef(null);
   selecionadaRef.current = selecionadaId;
@@ -74,56 +116,146 @@ export default function CaixaDeEntrada() {
       setUsuario(u);
       setSemPermissao(!pode);
       const p = new URLSearchParams(window.location.search);
-      if (p.get('aba') && ['conversas', 'respostas', 'canais'].includes(p.get('aba'))) setAba(p.get('aba'));
+      if (p.get('aba') && ABAS.includes(p.get('aba'))) setAba(p.get('aba'));
       if (p.get('conversa')) setSelecionadaId(Number(p.get('conversa')));
+      setVisao(lerPreferencia('at-visao', 'lista') === 'quadro' ? 'quadro' : 'lista');
+      setAvisosLigados(lerPreferencia('at-avisos', false) === true && typeof Notification !== 'undefined');
       setVerificando(false);
     })();
     return () => { ativo = false; };
   }, [router]);
 
   const souAdmin = usuario?.papel === 'ADMIN';
+  const hoteisIds = useMemo(() => (equipe.hoteis.length ? equipe.hoteis.map((h) => h.id) : (usuario ? [Number(usuario.hotel_id)] : [])), [equipe.hoteis, usuario]);
+  const multiHotel = hoteisIds.length > 1;
+  const nomesHoteis = useMemo(() => Object.fromEntries(equipe.hoteis.map((h) => [h.id, h.nome])), [equipe.hoteis]);
+  const souAdminDeAlgum = souAdmin || equipe.hoteis.some((h) => h.souAdmin);
+  const nomesTodos = useMemo(() => {
+    const n = { ...equipe.nomes, ...Object.fromEntries(equipe.pessoas.map((p) => [p.id, p.nome])) };
+    if (usuario && !n[usuario.id]) n[usuario.id] = usuario.nome;
+    return n;
+  }, [equipe, usuario]);
 
   // ---- Dados de apoio ----------------------------------------------------------
-  const carregarApoio = useCallback(async (u) => {
-    const [c, a, r] = await Promise.all([
-      supabase.from('atendimento_canais').select('id, hotel_id, tipo, nome, endereco_exibicao, ativo, status, erro, ultima_sincronizacao, config, identificador').eq('hotel_id', u.hotel_id).order('nome'),
-      supabase.from('usuarios').select('*').eq('hotel_id', u.hotel_id).order('nome'),
-      supabase.from('atendimento_respostas_prontas').select('*').eq('hotel_id', u.hotel_id).order('atalho'),
+  const carregarApoio = useCallback(async () => {
+    let eq = null;
+    try {
+      eq = await chamarApi('/api/atendimento', { acao: 'equipe' });
+      setEquipe({ hoteis: eq.hoteis || [], pessoas: eq.pessoas || [], nomes: eq.nomes || {} });
+    } catch (e) { /* segue com o hotel atual */ }
+    const [c, r, et, eg, pr] = await Promise.all([
+      supabase.from('atendimento_canais').select('id, hotel_id, tipo, nome, endereco_exibicao, ativo, status, erro, ultima_sincronizacao, config, identificador').order('nome'),
+      supabase.from('atendimento_respostas_prontas').select('*').order('atalho'),
+      supabase.from('atendimento_etapas').select('*').order('ordem').order('id'),
+      supabase.from('atendimento_etiquetas').select('*').order('nome'),
+      supabase.from('atendimento_preferencias').select('*'),
     ]);
-    if (c.error) setErroLista(/atendimento_|does not exist|schema cache/i.test(c.error.message)
-      ? 'A Caixa de Entrada ainda não foi ativada no banco de dados (falta rodar o SQL da Caixa de Entrada no Supabase).'
-      : 'Não foi possível carregar os canais: ' + c.error.message);
+    if (c.error) setErroLista(/atendimento_|does not exist|schema cache/i.test(c.error.message) ? mensagemSemSql : 'Não foi possível carregar os canais: ' + c.error.message);
     setCanais(c.data || []);
-    setAtendentes((a.data || []).filter((p) => p.ativo !== false && (p.papel === 'ADMIN' || (p.papel === 'COLABORADOR' && p.pode_acessar_atendimento))).map((p) => ({ id: p.id, nome: p.nome })));
     setRespostas(r.data || []);
+    setFaltaFase2(!!(et.error || eg.error));
+    setEtapas(et.data || []);
+    setEtiquetas(eg.data || []);
+    setPreferencias(pr.data || []);
   }, []);
 
-  // ---- Lista de conversas -------------------------------------------------------
-  const carregarLista = useCallback(async () => {
-    if (!usuario) return;
-    let q = supabase.from('atendimento_conversas').select('*').eq('hotel_id', usuario.hotel_id);
-    if (filtro === 'abertas') q = q.neq('status', 'RESOLVIDA');
-    if (filtro === 'minhas') q = q.eq('responsavel_id', usuario.id).neq('status', 'RESOLVIDA');
-    if (filtro === 'sem') q = q.is('responsavel_id', null).neq('status', 'RESOLVIDA');
+  // ---- Filtros → consulta ----------------------------------------------------
+  const etiquetasPorId = useMemo(() => Object.fromEntries(etiquetas.map((e) => [e.id, e])), [etiquetas]);
+  const opcoesEtiqueta = useMemo(() => {
+    const m = new Map();
+    etiquetas.forEach((e) => { const k = chaveNome(e.nome); if (!m.has(k)) m.set(k, e.nome); });
+    return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'));
+  }, [etiquetas]);
+  const opcoesEtapa = useMemo(() => colunasDoQuadro(etapas), [etapas]);
+  const alertas = useMemo(() => {
+    const a = {};
+    hoteisIds.forEach((h) => { a[h] = 15; });
+    preferencias.forEach((p) => { a[p.hotel_id] = p.alerta_espera_minutos; });
+    return a;
+  }, [preferencias, hoteisIds]);
+
+  // Monta a consulta com os filtros da tela (usada na lista, no quadro e no exportar)
+  const montarConsulta = useCallback(() => {
+    let q = supabase.from('atendimento_conversas').select('*');
+    if (hotelFiltro) q = q.eq('hotel_id', Number(hotelFiltro));
+    if (filtro === 'abertas') q = q.not('status', 'in', FECHADAS);
+    if (filtro === 'minhas') q = q.eq('responsavel_id', usuario.id).not('status', 'in', FECHADAS);
+    if (filtro === 'sem') q = q.is('responsavel_id', null).not('status', 'in', FECHADAS);
+    if (filtro === 'nao_respondidas') q = q.eq('ultima_direcao', 'ENTRADA').not('status', 'in', FECHADAS);
     if (filtro === 'nao_lidas') q = q.gt('nao_lidas', 0);
     if (filtro === 'resolvidas') q = q.eq('status', 'RESOLVIDA');
-    if (canalFiltro) q = q.eq('canal_id', canalFiltro);
+    if (filtro === 'arquivadas') q = q.eq('status', 'ARQUIVADA');
+    if (filtro === 'todas') q = q.neq('status', 'ARQUIVADA');
+    if (atendenteFiltro === 'sem') q = q.is('responsavel_id', null);
+    else if (atendenteFiltro) q = q.eq('responsavel_id', Number(atendenteFiltro));
+    if (etiquetaFiltro) {
+      const ids = etiquetas.filter((e) => chaveNome(e.nome) === etiquetaFiltro).map((e) => e.id);
+      q = q.overlaps('etiquetas', ids.length ? ids : [0]);
+    }
+    if (etapaFiltro) {
+      const ids = etapas.filter((e) => chaveNome(e.nome) === etapaFiltro).map((e) => e.id);
+      q = q.in('etapa_id', ids.length ? ids : [0]);
+    }
+    if (canalFiltro) q = q.eq('canal_id', Number(canalFiltro));
+    if (periodo) {
+      const desde = periodo === 'hoje'
+        ? `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' })}T00:00:00-03:00`
+        : new Date(Date.now() - Number(periodo) * DIA_MS).toISOString();
+      q = q.gte('ultima_mensagem_em', desde);
+    }
     const termo = limparBusca(busca);
     if (termo) {
       const t = `%${termo}%`;
       q = q.or(`contato_nome.ilike.${t},contato_endereco.ilike.${t},assunto.ilike.${t},chave_externa.ilike.${t},ultima_mensagem_resumo.ilike.${t}`);
     }
-    const { data, error } = await q.order('ultima_mensagem_em', { ascending: false, nullsFirst: false }).order('id', { ascending: false }).limit(300);
+    const crescente = ordem === 'antigas';
+    return q.order('ultima_mensagem_em', { ascending: crescente, nullsFirst: false }).order('id', { ascending: crescente });
+  }, [usuario, filtro, hotelFiltro, atendenteFiltro, etiquetaFiltro, etapaFiltro, canalFiltro, periodo, busca, ordem, etiquetas, etapas]);
+
+  const carregarLista = useCallback(async () => {
+    if (!usuario) return;
+    const { data, error } = await montarConsulta().limit(visao === 'quadro' ? LIMITE_QUADRO : LIMITE_LISTA);
     if (error) {
       setErroLista(/atendimento_|does not exist|schema cache/i.test(error.message)
-        ? 'A Caixa de Entrada ainda não foi ativada no banco de dados (falta rodar o SQL da Caixa de Entrada no Supabase).'
+        ? (/etiquetas|etapa_id|ARQUIVADA/.test(error.message) ? mensagemSemFase2 : mensagemSemSql)
         : 'Não foi possível carregar as conversas: ' + error.message);
     } else {
       setErroLista('');
       setConversas(data || []);
     }
     setCarregandoLista(false);
-  }, [usuario, filtro, canalFiltro, busca]);
+  }, [usuario, montarConsulta, visao]);
+
+  // Exportar os atendimentos do filtro atual (todos, não só os da tela)
+  const [exportando, setExportando] = useState(false);
+  async function exportarAtendimentos() {
+    setExportando(true);
+    try {
+      const todos = [];
+      for (let de = 0; de < 20000; de += 1000) {
+        const { data, error } = await montarConsulta().range(de, de + 999);
+        if (error) throw error;
+        todos.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+      const etapaPorId = Object.fromEntries(etapas.map((e) => [e.id, e.nome]));
+      const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+      baixarCsv(`atendimentos-${hoje}.csv`,
+        ['Início', 'Hotel', 'Canal', 'Contato', 'Telefone / e-mail', 'Assunto', 'Situação', 'Etapa', 'Etiquetas', 'Responsável', 'Valor da cotação',
+          'Veio de anúncio', 'Última mensagem', 'Primeira resposta', 'Reserva Cloudbeds', 'Resumo'],
+        todos.map((c) => [
+          dataHora(c.criado_em), nomesHoteis[c.hotel_id] || c.hotel_id, NOME_CANAL[c.canal_tipo] || c.canal_tipo, c.contato_nome || '', c.contato_endereco || '',
+          c.assunto || '', STATUS_CONVERSA[c.status] || c.status, etapaPorId[c.etapa_id] || '',
+          (c.etiquetas || []).map((id) => etiquetasPorId[id]?.nome).filter(Boolean).join(', '),
+          c.responsavel_id ? (nomesTodos[c.responsavel_id] || `#${c.responsavel_id}`) : '',
+          c.valor_cotacao ? Number(c.valor_cotacao).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '',
+          c.origem ? (c.origem.titulo || 'Sim') : '', dataHora(c.ultima_mensagem_em), c.primeira_resposta_em ? dataHora(c.primeira_resposta_em) : '',
+          c.cloudbeds_reservation_id || '', c.ultima_mensagem_resumo || '',
+        ]));
+      setAviso(`${todos.length} atendimento(s) exportado(s).`);
+    } catch (e) { setAviso('Não foi possível exportar: ' + e.message); }
+    setExportando(false);
+  }
 
   // A conversa aberta pode não estar no filtro atual — busca ela à parte
   const [conversaAvulsa, setConversaAvulsa] = useState(null);
@@ -159,7 +291,7 @@ export default function CaixaDeEntrada() {
     avisarCabecalho();
   }, []);
 
-  useEffect(() => { if (usuario && !semPermissao) carregarApoio(usuario); }, [usuario, semPermissao, carregarApoio]);
+  useEffect(() => { if (usuario && !semPermissao) carregarApoio(); }, [usuario, semPermissao, carregarApoio]);
   useEffect(() => { if (usuario && !semPermissao) carregarLista(); }, [usuario, semPermissao, carregarLista]);
   useEffect(() => {
     setMensagens([]);
@@ -169,11 +301,54 @@ export default function CaixaDeEntrada() {
     if (selecionada?.nao_lidas && document.visibilityState === 'visible') marcarLida(selecionada);
   }, [selecionada, marcarLida]);
 
+  // Relógio para o "esperando há…" (a cada 30 s)
+  useEffect(() => {
+    const id = setInterval(() => setAgora(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ---- Avisos de mensagem nova (som + notificação) ----------------------------
+  const vistos = useRef(null);
+  const verificarNovidades = useCallback(async () => {
+    if (!usuario) return;
+    const { data } = await supabase.from('atendimento_conversas')
+      .select('id, hotel_id, contato_nome, contato_endereco, ultima_mensagem_resumo, ultima_mensagem_em, canal_tipo, responsavel_id')
+      .gt('nao_lidas', 0).not('status', 'in', FECHADAS)
+      .or(`responsavel_id.is.null,responsavel_id.eq.${usuario.id}`)
+      .order('ultima_mensagem_em', { ascending: false, nullsFirst: false }).limit(30);
+    if (!data) return;
+    const antes = vistos.current;
+    vistos.current = new Map(data.map((c) => [c.id, c.ultima_mensagem_em]));
+    if (!antes || !avisosLigados) return;
+    const novas = data.filter((c) => (!antes.has(c.id) || antes.get(c.id) !== c.ultima_mensagem_em)
+      && !(c.id === selecionadaRef.current && document.visibilityState === 'visible'));
+    if (!novas.length) return;
+    tocarAviso();
+    if (document.visibilityState !== 'visible' || novas[0].id !== selecionadaRef.current) {
+      const c = novas[0];
+      const titulo = novas.length > 1 ? `${novas.length} conversas com mensagem nova` : `${ICONE_CANAL[c.canal_tipo] || ''} ${c.contato_nome || c.contato_endereco || 'Cliente'}`;
+      mostrarNotificacao(titulo, novas.length > 1 ? 'Abra a Caixa de Entrada para ver.' : (c.ultima_mensagem_resumo || 'Mensagem nova'), () => abrirConversa(c.id));
+    }
+  }, [usuario, avisosLigados]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function alternarAvisos() {
+    if (avisosLigados) { setAvisosLigados(false); gravarPreferencia('at-avisos', false); return; }
+    if (typeof Notification === 'undefined') { setAviso('Este navegador não mostra notificações. O som continua tocando com a página aberta.'); }
+    else if (Notification.permission !== 'granted') {
+      const r = await Notification.requestPermission().catch(() => 'denied');
+      if (r !== 'granted') setAviso('O navegador bloqueou as notificações. Vou avisar só com som enquanto a página estiver aberta. Para liberar, clique no cadeado ao lado do endereço do site.');
+    }
+    tocarAviso();
+    setAvisosLigados(true);
+    gravarPreferencia('at-avisos', true);
+  }
+
   // ---- Ao vivo + garantia a cada 20 s ----------------------------------------
   const recarregarTudo = useCallback(() => {
     carregarLista();
+    verificarNovidades();
     if (selecionadaRef.current) carregarMensagens(selecionadaRef.current);
-  }, [carregarLista, carregarMensagens]);
+  }, [carregarLista, carregarMensagens, verificarNovidades]);
 
   const agendado = useRef(null);
   const agendarRecarga = useCallback(() => {
@@ -181,15 +356,18 @@ export default function CaixaDeEntrada() {
     agendado.current = setTimeout(recarregarTudo, 400);
   }, [recarregarTudo]);
 
+  const chaveHoteis = hoteisIds.join(',');
   useEffect(() => {
-    if (!usuario || semPermissao) return undefined;
-    const canalRt = supabase.channel(`atendimento-${usuario.hotel_id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendimento_conversas', filter: `hotel_id=eq.${usuario.hotel_id}` }, agendarRecarga)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendimento_mensagens', filter: `hotel_id=eq.${usuario.hotel_id}` }, agendarRecarga)
+    if (!usuario || semPermissao || !chaveHoteis) return undefined;
+    const filtroRt = `hotel_id=in.(${chaveHoteis})`;
+    const canalRt = supabase.channel(`atendimento-${usuario.id}-${chaveHoteis}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendimento_conversas', filter: filtroRt }, agendarRecarga)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendimento_mensagens', filter: filtroRt }, agendarRecarga)
       .subscribe();
     const intervalo = setInterval(recarregarTudo, 20000);
+    verificarNovidades();
     return () => { supabase.removeChannel(canalRt); clearInterval(intervalo); clearTimeout(agendado.current); };
-  }, [usuario, semPermissao, agendarRecarga, recarregarTudo]);
+  }, [usuario, semPermissao, chaveHoteis, agendarRecarga, recarregarTudo, verificarNovidades]);
 
   // E-mails: pede sincronização ao abrir e a cada minuto (o servidor limita)
   const temEmail = canais.some((c) => c.tipo === 'EMAIL' && c.ativo);
@@ -200,6 +378,43 @@ export default function CaixaDeEntrada() {
     const id = setInterval(sincronizar, 60000);
     return () => clearInterval(id);
   }, [temEmail, recarregarTudo]);
+
+  // ---- Ações -------------------------------------------------------------------
+  function abrirConversa(id) {
+    setAba('conversas');
+    setSelecionadaId(id);
+    window.history.replaceState(null, '', `/atendimento?conversa=${id}`);
+  }
+
+  function fecharConversa() {
+    setSelecionadaId(null);
+    setLateralAberta(false);
+    window.history.replaceState(null, '', '/atendimento');
+  }
+
+  function trocarVisao(v) {
+    if (v === visao) return;
+    setVisao(v);
+    gravarPreferencia('at-visao', v);
+    if (selecionadaId) fecharConversa();
+  }
+
+  async function moverConversa(conversa, coluna) {
+    const etapaId = coluna.porHotel[conversa.hotel_id];
+    if (!etapaId) {
+      setAviso(`O hotel ${nomesHoteis[conversa.hotel_id] || ''} não tem a etapa “${coluna.nome}”. O administrador pode criar em “Funil e etiquetas”.`);
+      return;
+    }
+    setConversas((lista) => lista.map((c) => (c.id === conversa.id ? { ...c, etapa_id: etapaId } : c)));
+    const { error } = await supabase.from('atendimento_conversas')
+      .update({ etapa_id: etapaId, atualizado_em: new Date().toISOString() }).eq('id', conversa.id);
+    if (error) setAviso('Não foi possível mover: ' + error.message);
+    carregarLista();
+  }
+
+  function limparFiltros() {
+    setHotelFiltro(''); setAtendenteFiltro(''); setEtapaFiltro(''); setEtiquetaFiltro(''); setCanalFiltro(''); setPeriodo(''); setBusca(''); setOrdem('recentes');
+  }
 
   // ---- Telas -------------------------------------------------------------------
   if (verificando) return <main className="conteudo"><p className="texto-suave">Verificando seu acesso…</p></main>;
@@ -216,134 +431,254 @@ export default function CaixaDeEntrada() {
   }
 
   const mapaCanais = Object.fromEntries(canais.map((c) => [c.id, c]));
-  const nomesAtendentes = Object.fromEntries(atendentes.map((a) => [a.id, a.nome]));
-  const totalNaoLidas = conversas.reduce((s, c) => s + (c.status !== 'RESOLVIDA' ? c.nao_lidas : 0), 0);
+  const nomes = nomesTodos;
+  const totalNaoLidas = conversas.reduce((s, c) => s + (!['RESOLVIDA', 'ARQUIVADA'].includes(c.status) ? c.nao_lidas : 0), 0);
   const canalSelecionado = selecionada ? mapaCanais[selecionada.canal_id] : null;
+  const pessoasDaConversa = selecionada
+    ? (equipe.pessoas.length ? equipe.pessoas.filter((p) => p.hoteis.includes(selecionada.hotel_id)) : [{ id: usuario.id, nome: usuario.nome }])
+    : [];
+  const filtrosAtivos = [hotelFiltro, atendenteFiltro, etapaFiltro, etiquetaFiltro, canalFiltro, periodo, ordem !== 'recentes' ? 'o' : ''].filter(Boolean).length;
+  const quadro = visao === 'quadro';
 
-  function abrirConversa(id) {
-    setSelecionadaId(id);
-    window.history.replaceState(null, '', `/atendimento?conversa=${id}`);
-  }
+  const conversaAberta = selecionada && (
+    <Conversa
+      conversa={selecionada}
+      canal={canalSelecionado}
+      mensagens={mensagens}
+      carregando={carregandoMensagens}
+      usuario={usuario}
+      atendentes={pessoasDaConversa}
+      nomes={nomes}
+      respostas={respostas.filter((r) => r.hotel_id === selecionada.hotel_id)}
+      etapas={etapas.filter((e) => e.hotel_id === selecionada.hotel_id)}
+      etiquetas={etiquetas.filter((e) => e.hotel_id === selecionada.hotel_id)}
+      nomeHotel={multiHotel ? nomesHoteis[selecionada.hotel_id] : null}
+      alertaMinutos={alertas[selecionada.hotel_id]}
+      lateralAberta={lateralAberta}
+      onAlternarLateral={() => setLateralAberta(!lateralAberta)}
+      onRecarregar={() => { recarregarTudo(); }}
+      onVoltar={fecharConversa}
+      rotuloVoltar={quadro ? 'Fechar conversa' : null}
+    />
+  );
+  const lateral = selecionada && <PainelLateral conversa={selecionada} onMudou={recarregarTudo} onAbrirConversa={abrirConversa} />;
 
   return (
-    <main className={`conteudo at-conteudo ${aba === 'conversas' && selecionada ? 'at-com-conversa' : ''}`}>
+    <main className={`conteudo at-conteudo ${aba === 'conversas' && selecionada && !quadro ? 'at-com-conversa' : ''}`}>
       <style>{ESTILOS_ATENDIMENTO}</style>
       <div className="at-cabecalho-pagina">
-      <span className="olho">Atendimento</span>
-      <div className="barra-pagina">
-        <h1 style={{ margin: 0 }}>Caixa de Entrada</h1>
-        {aba === 'conversas' && <button type="button" className="botao botao-principal" onClick={() => setNovaConversa(true)}>+ Nova conversa</button>}
-      </div>
+        <span className="olho">Atendimento</span>
+        <div className="barra-pagina">
+          <h1 style={{ margin: 0 }}>Caixa de Entrada</h1>
+          <div className="at-botoes" style={{ marginTop: 0 }}>
+            <button type="button" className={`at-btn ${avisosLigados ? 'at-btn-ligado' : ''}`} onClick={alternarAvisos}
+              title="Tocar um som e mostrar notificação quando chegar mensagem nova (sem responsável ou comigo)">
+              {avisosLigados ? '🔔 Avisos ligados' : '🔕 Ligar avisos'}
+            </button>
+            {aba === 'conversas' && <button type="button" className="botao botao-principal" onClick={() => setNovaConversa({})}>+ Nova conversa</button>}
+          </div>
+        </div>
 
-      <div className="at-abas">
-        <button type="button" className={`at-aba ${aba === 'conversas' ? 'ativa' : ''}`} onClick={() => setAba('conversas')}>
-          💬 Conversas{totalNaoLidas > 0 && <span className="at-aba-badge">{totalNaoLidas > 99 ? '99+' : totalNaoLidas}</span>}
-        </button>
-        <button type="button" className={`at-aba ${aba === 'respostas' ? 'ativa' : ''}`} onClick={() => setAba('respostas')}>⚡ Respostas prontas</button>
-        {souAdmin && <button type="button" className={`at-aba ${aba === 'canais' ? 'ativa' : ''}`} onClick={() => setAba('canais')}>⚙️ Canais</button>}
-      </div>
+        <div className="at-abas" role="tablist">
+          {[
+            ['conversas', <>💬 Conversas{totalNaoLidas > 0 && <span className="at-aba-badge">{totalNaoLidas > 99 ? '99+' : totalNaoLidas}</span>}</>],
+            ['contatos', '👥 Contatos'],
+            ['painel', '📊 Painel'],
+            ['respostas', '⚡ Respostas prontas'],
+            ...(souAdminDeAlgum ? [['funil', '🧩 Funil e etiquetas']] : []),
+            ...(souAdmin ? [['canais', '⚙️ Canais']] : []),
+          ].map(([chave, rotulo]) => (
+            <button key={chave} type="button" role="tab" aria-selected={aba === chave} className={`at-aba ${aba === chave ? 'ativa' : ''}`} onClick={() => setAba(chave)}>{rotulo}</button>
+          ))}
+        </div>
       </div>
 
       {erroLista && <div className="aviso-erro">{erroLista}</div>}
+      {!erroLista && faltaFase2 && <div className="aviso-erro">{mensagemSemFase2}</div>}
+      {aviso && (
+        <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600', display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+          <span>{aviso}</span>
+          <button type="button" className="at-link-pequeno" onClick={() => setAviso('')}>Fechar</button>
+        </div>
+      )}
       {aba === 'conversas' && !erroLista && canais.length === 0 && (
         <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600' }}>
           Nenhum canal ligado ainda. {souAdmin ? 'Conecte o WhatsApp e as caixas de e-mail na aba “Canais”.' : 'Peça ao administrador para conectar o WhatsApp e os e-mails.'}
         </div>
       )}
 
-      {aba === 'respostas' && <RespostasProntas usuario={usuario} respostas={respostas} onMudou={() => carregarApoio(usuario)} />}
-      {aba === 'canais' && souAdmin && <ConfigCanais />}
-
-      {aba === 'conversas' && (
-        <div className={`at-painel ${selecionada && lateralAberta ? 'com-lateral' : ''}`}>
-          {/* ---------------- Lista ---------------- */}
-          <div className={`at-col at-col-lista ${selecionada ? 'at-celular-escondido' : ''}`}>
-            <div className="at-lista-topo">
-              <input className="campo at-campo-pequeno" type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="🔎 Nome, telefone, e-mail ou assunto" />
-              <div className="at-filtros">
-                {FILTROS.map(([chave, rotulo]) => (
-                  <button key={chave} type="button" className={`at-filtro ${filtro === chave ? 'ativo' : ''}`} onClick={() => setFiltro(chave)}>{rotulo}</button>
-                ))}
-              </div>
-              {canais.length > 1 && (
-                <select className="at-select" style={{ maxWidth: '100%' }} value={canalFiltro} onChange={(e) => setCanalFiltro(e.target.value)} aria-label="Canal">
-                  <option value="">Todos os canais</option>
-                  {canais.map((c) => <option key={c.id} value={c.id}>{ICONE_CANAL[c.tipo]} {c.nome}</option>)}
-                </select>
-              )}
-            </div>
-            <div className="at-lista">
-              {carregandoLista ? <div className="at-vazio">Carregando…</div> : conversas.length === 0 ? (
-                <div className="at-vazio">{busca ? 'Nada encontrado nessa busca.' : 'Nenhuma conversa aqui. 🎉'}</div>
-              ) : conversas.map((c) => {
-                const nome = c.contato_nome || c.contato_endereco || 'Cliente';
-                return (
-                  <button key={c.id} type="button" className={`at-item ${c.id === selecionadaId ? 'ativo' : ''}`} onClick={() => abrirConversa(c.id)}>
-                    <div className="at-avatar">{iniciais(nome)}<span className="at-avatar-canal">{ICONE_CANAL[c.canal_tipo]}</span></div>
-                    <div className="at-item-meio">
-                      <div className="at-item-linha">
-                        <span className="at-item-nome">{nome}</span>
-                        <span className={`at-item-hora ${c.nao_lidas ? 'nova' : ''}`}>{horaCurta(c.ultima_mensagem_em)}</span>
-                      </div>
-                      {c.canal_tipo === 'EMAIL' && c.assunto && <div className="at-item-resumo"><strong>{c.assunto}</strong></div>}
-                      <div className="at-item-linha">
-                        <span className="at-item-resumo">{c.ultima_direcao === 'SAIDA' ? '↪ ' : ''}{c.ultima_mensagem_resumo || '—'}</span>
-                        {c.nao_lidas > 0 && <span className="at-badge">{c.nao_lidas}</span>}
-                      </div>
-                      <div className="at-item-rodape">
-                        {c.status !== 'ABERTA' && <span className={`at-chip ${c.status === 'PENDENTE' ? 'at-chip-pendente' : 'at-chip-resolvida'}`}>{STATUS_CONVERSA[c.status]}</span>}
-                        {c.responsavel_id
-                          ? <span className="at-chip at-chip-resp">{c.responsavel_id === usuario.id ? 'Comigo' : primeiroNome(nomesAtendentes[c.responsavel_id] || '—')}</span>
-                          : <span className="at-chip">Sem responsável</span>}
-                        {c.cloudbeds_reservation_id && <span className="at-chip">🏨 {c.cloudbeds_reservation_id}</span>}
-                        {canais.length > 1 && mapaCanais[c.canal_id] && <span className="at-chip">{mapaCanais[c.canal_id].nome}</span>}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ---------------- Conversa ---------------- */}
-          <div className={`at-col ${selecionada ? '' : 'at-esconder-celular'}`}>
-            {selecionada ? (
-              <Conversa
-                conversa={selecionada}
-                canal={canalSelecionado}
-                mensagens={mensagens}
-                carregando={carregandoMensagens}
-                usuario={usuario}
-                atendentes={atendentes}
-                respostas={respostas}
-                lateralAberta={lateralAberta}
-                onAlternarLateral={() => setLateralAberta(!lateralAberta)}
-                onRecarregar={() => { recarregarTudo(); }}
-                onVoltar={() => { setSelecionadaId(null); window.history.replaceState(null, '', '/atendimento'); }}
-              />
-            ) : (
-              <div className="at-vazio" style={{ margin: 'auto' }}>Escolha uma conversa na lista.</div>
-            )}
-          </div>
-
-          {/* ---------------- Reserva (computador) ---------------- */}
-          {selecionada && lateralAberta && (
-            <div className="at-col at-col-lateral at-esconder-celular">
-              <PainelReserva conversa={selecionada} onMudou={recarregarTudo} />
-            </div>
-          )}
-        </div>
+      {aba === 'contatos' && (
+        <Contatos
+          hoteis={equipe.hoteis.length ? equipe.hoteis : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual' }]}
+          multiHotel={multiHotel}
+          nomes={nomes}
+          onAbrirConversa={abrirConversa}
+          onNovaConversa={(inicial) => { setAba('conversas'); setNovaConversa(inicial); }}
+        />
+      )}
+      {aba === 'painel' && (
+        <PainelIndicadores hoteis={equipe.hoteis.length ? equipe.hoteis : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual' }]} nomes={nomes} />
+      )}
+      {aba === 'respostas' && (
+        <RespostasProntas usuario={usuario} respostas={respostas} hoteis={equipe.hoteis} multiHotel={multiHotel} onMudou={carregarApoio} />
+      )}
+      {aba === 'funil' && souAdminDeAlgum && (
+        <FunilEtiquetas
+          hoteis={equipe.hoteis.length ? equipe.hoteis.filter((h) => h.souAdmin) : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual', souAdmin: true }]}
+          etapas={etapas} etiquetas={etiquetas} preferencias={preferencias} onMudou={carregarApoio}
+        />
+      )}
+      {aba === 'canais' && souAdmin && (
+        <>
+          {multiHotel && <p className="at-dica">Canais do hotel <strong>{nomesHoteis[Number(usuario.hotel_id)] || 'atual'}</strong>. Para configurar os canais do outro hotel, troque de hotel no menu do topo.</p>}
+          <ConfigCanais />
+        </>
       )}
 
-      {/* Reserva (celular): abre por cima */}
+      {aba === 'conversas' && (
+        <>
+          {/* ---------------- Barra de filtros ---------------- */}
+          <div className="at-topo-conversas">
+          <div className="at-barra-filtros">
+            <div className="at-visao" role="group" aria-label="Forma de ver">
+              <button type="button" className={!quadro ? 'ativo' : ''} onClick={() => trocarVisao('lista')} aria-pressed={!quadro}>☰ Lista</button>
+              <button type="button" className={quadro ? 'ativo' : ''} onClick={() => trocarVisao('quadro')} aria-pressed={quadro}>▦ Quadro</button>
+            </div>
+            <input className="campo at-campo-pequeno at-busca" type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="🔎 Nome, telefone, e-mail ou assunto" />
+            <button type="button" className={`at-btn ${filtrosAtivos ? 'at-btn-ligado' : ''}`} onClick={() => setMostrarFiltros(!mostrarFiltros)} aria-expanded={mostrarFiltros}>
+              ⚲ Filtros{filtrosAtivos ? ` (${filtrosAtivos})` : ''}
+            </button>
+            <button type="button" className="at-btn" onClick={exportarAtendimentos} disabled={exportando} title="Baixar planilha com os atendimentos deste filtro">
+              {exportando ? 'Exportando…' : '⬇ Exportar'}
+            </button>
+          </div>
+          <div className="at-filtros at-filtros-situacao">
+            {FILTROS.map(([chave, rotulo]) => (
+              <button key={chave} type="button" className={`at-filtro ${filtro === chave ? 'ativo' : ''}`} onClick={() => setFiltro(chave)}>{rotulo}</button>
+            ))}
+          </div>
+          {mostrarFiltros && (
+            <div className="at-filtros-mais">
+              {multiHotel && (
+                <label><span>Hotel</span>
+                  <select className="at-select" value={hotelFiltro} onChange={(e) => setHotelFiltro(e.target.value)}>
+                    <option value="">Todos os hotéis</option>
+                    {equipe.hoteis.map((h) => <option key={h.id} value={h.id}>{h.nome}</option>)}
+                  </select>
+                </label>
+              )}
+              <label><span>Atendente</span>
+                <select className="at-select" value={atendenteFiltro} onChange={(e) => setAtendenteFiltro(e.target.value)}>
+                  <option value="">Todos</option>
+                  <option value={usuario.id}>Comigo</option>
+                  <option value="sem">Sem responsável</option>
+                  {equipe.pessoas.filter((p) => p.id !== usuario.id).map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                </select>
+              </label>
+              {!quadro && (
+                <label><span>Etapa</span>
+                  <select className="at-select" value={etapaFiltro} onChange={(e) => setEtapaFiltro(e.target.value)}>
+                    <option value="">Todas</option>
+                    {opcoesEtapa.map((c) => <option key={c.chave} value={c.chave}>{c.nome}</option>)}
+                  </select>
+                </label>
+              )}
+              <label><span>Etiqueta</span>
+                <select className="at-select" value={etiquetaFiltro} onChange={(e) => setEtiquetaFiltro(e.target.value)}>
+                  <option value="">Todas</option>
+                  {opcoesEtiqueta.map(([k, nome]) => <option key={k} value={k}>{nome}</option>)}
+                </select>
+              </label>
+              {canais.length > 1 && (
+                <label><span>Canal</span>
+                  <select className="at-select" value={canalFiltro} onChange={(e) => setCanalFiltro(e.target.value)}>
+                    <option value="">Todos os canais</option>
+                    {canais.map((c) => <option key={c.id} value={c.id}>{ICONE_CANAL[c.tipo]} {multiHotel && nomesHoteis[c.hotel_id] ? `${nomesHoteis[c.hotel_id]} · ` : ''}{c.nome}</option>)}
+                  </select>
+                </label>
+              )}
+              <label><span>Período</span>
+                <select className="at-select" value={periodo} onChange={(e) => setPeriodo(e.target.value)}>
+                  {PERIODOS.map(([v, r]) => <option key={v} value={v}>{r}</option>)}
+                </select>
+              </label>
+              <label><span>Ordem</span>
+                <select className="at-select" value={ordem} onChange={(e) => setOrdem(e.target.value)}>
+                  <option value="recentes">Mais recentes primeiro</option>
+                  <option value="antigas">Mais antigas primeiro</option>
+                </select>
+              </label>
+              {filtrosAtivos > 0 && <button type="button" className="at-link-pequeno" onClick={limparFiltros}>Limpar filtros</button>}
+            </div>
+          )}
+          </div>
+
+          {quadro ? (
+            <>
+              {carregandoLista ? <div className="at-vazio">Carregando…</div> : (
+                <Quadro
+                  conversas={conversas} etapas={etapas} etiquetasPorId={etiquetasPorId} nomesHoteis={nomesHoteis}
+                  multiHotel={multiHotel} nomes={nomes} usuarioId={usuario.id} alertas={alertas} agora={agora}
+                  selecionadaId={selecionadaId} onAbrir={abrirConversa} onMover={moverConversa} limite={LIMITE_QUADRO}
+                />
+              )}
+              {selecionada && (
+                <div className="at-gaveta-fundo" onClick={(e) => { if (e.target === e.currentTarget) fecharConversa(); }} role="presentation">
+                  <div className={`at-gaveta ${lateralAberta ? 'com-lateral' : ''}`} role="dialog" aria-modal="true" aria-label="Conversa">
+                    <div className="at-col">{conversaAberta}</div>
+                    {lateralAberta && <div className="at-col at-col-lateral at-esconder-celular">{lateral}</div>}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className={`at-painel ${selecionada && lateralAberta ? 'com-lateral' : ''}`}>
+              {/* ---------------- Lista ---------------- */}
+              <div className={`at-col at-col-lista ${selecionada ? 'at-celular-escondido' : ''}`}>
+                <div className="at-lista">
+                  {carregandoLista ? <div className="at-vazio">Carregando…</div> : conversas.length === 0 ? (
+                    <div className="at-vazio">{busca || filtrosAtivos ? 'Nada encontrado com esses filtros.' : 'Nenhuma conversa aqui. 🎉'}</div>
+                  ) : conversas.map((c) => (
+                    <CartaoConversa
+                      key={c.id}
+                      c={c}
+                      ativo={c.id === selecionadaId}
+                      nomeHotel={multiHotel ? nomesHoteis[c.hotel_id] : null}
+                      nomeResponsavel={nomes[c.responsavel_id]}
+                      souEu={c.responsavel_id === usuario.id}
+                      etiquetasPorId={etiquetasPorId}
+                      alertaMinutos={alertas[c.hotel_id]}
+                      agora={agora}
+                      onAbrir={() => abrirConversa(c.id)}
+                    />
+                  ))}
+                  {conversas.length >= LIMITE_LISTA && <div className="at-dica" style={{ padding: 10 }}>Mostrando as {LIMITE_LISTA} mais recentes. Use a busca ou os filtros para achar outras.</div>}
+                </div>
+              </div>
+
+              {/* ---------------- Conversa ---------------- */}
+              <div className={`at-col ${selecionada ? '' : 'at-esconder-celular'}`}>
+                {conversaAberta || <div className="at-vazio" style={{ margin: 'auto' }}>Escolha uma conversa na lista.</div>}
+              </div>
+
+              {/* ---------------- Contato e reserva (computador) ---------------- */}
+              {selecionada && lateralAberta && (
+                <div className="at-col at-col-lateral at-esconder-celular">{lateral}</div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Contato e reserva (celular): abre por cima */}
       {aba === 'conversas' && selecionada && lateralAberta && (
-        <div className="at-overlay at-so-celular" role="dialog" aria-modal="true" aria-label="Reserva">
+        <div className="at-overlay at-so-celular at-overlay-lateral" role="dialog" aria-modal="true" aria-label="Contato e reserva">
           <div className="at-modal" style={{ padding: 0 }}>
             <div className="at-modal-topo" style={{ padding: '12px 14px 0' }}>
-              <h2>Reserva</h2>
+              <h2>Contato e reserva</h2>
               <button type="button" className="at-btn" onClick={() => setLateralAberta(false)} aria-label="Fechar">✕</button>
             </div>
-            <PainelReserva conversa={selecionada} onMudou={recarregarTudo} />
+            {lateral}
           </div>
         </div>
       )}
@@ -351,8 +686,10 @@ export default function CaixaDeEntrada() {
       {novaConversa && (
         <NovaConversa
           canais={canais}
-          onFechar={() => setNovaConversa(false)}
-          onCriada={(id) => { setNovaConversa(false); setFiltro('todas'); recarregarTudo(); if (id) abrirConversa(id); }}
+          inicial={novaConversa}
+          nomesHoteis={multiHotel ? nomesHoteis : null}
+          onFechar={() => setNovaConversa(null)}
+          onCriada={(id) => { setNovaConversa(null); setFiltro('todas'); recarregarTudo(); if (id) abrirConversa(id); }}
         />
       )}
     </main>
