@@ -69,7 +69,9 @@ export async function POST(request) {
       const supabaseAdmin = clienteAdmin();
       const emails = await sincronizarEmails(supabaseAdmin, null, 60 * 1000);
       const reservas = await verificarReservasTodos(supabaseAdmin, null, false);
-      return Response.json({ ...emails, reservas });
+      // Arquivar sozinho os atendimentos parados (só nos hotéis que escolheram os dias)
+      const { data: arquivadas } = await supabaseAdmin.rpc('atendimento_arquivar_antigos');
+      return Response.json({ ...emails, reservas, arquivadas: arquivadas ?? null });
     } catch (e) { return respostaErro(e.message, 500); }
   }
   // Robô: mensagens que ficaram sem resposta (o webhook não teve tempo)
@@ -425,7 +427,17 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   const { data: historico } = await supabaseAdmin.rpc('atendimento_painel_historico', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   const { data: robo } = await supabaseAdmin.rpc('atendimento_painel_robo', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   // Custo da IA só para quem é ADMIN de todos os hotéis escolhidos
-  const roboFinal = robo && !pedidos.every((h) => chamador.hoteisAdmin.includes(h)) ? { ...robo, custo_usd: null } : robo;
+  const roboFinal = robo && !pedidos.every((h) => chamador.hoteisAdmin.includes(h)) ? { ...robo, custo_usd: null } : (robo ? { ...robo } : null);
+  if (roboFinal) {
+    // Perguntas que o robô não soube responder no período
+    const de = new Date(`${inicio}T03:00:00Z`).toISOString();
+    const ate = new Date(new Date(`${fim}T03:00:00Z`).getTime() + 86400000).toISOString();
+    const { count, error: erroLacunas } = await supabaseAdmin.from('atendimento_robo_lacunas').select('id', { count: 'exact', head: true })
+      .in('hotel_id', pedidos).gte('criado_em', de).lt('criado_em', ate);
+    roboFinal.lacunas = erroLacunas ? null : (count ?? 0);
+  }
+  // Vendas: por atendente, robô, canal, horário e antecedência
+  const { data: vendas } = await supabaseAdmin.rpc('atendimento_painel_vendas', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   // Mensagens e custo do WhatsApp: só dos hotéis em que a pessoa é ADMIN
   const hoteisAdmin = pedidos.filter((h) => chamador.hoteisAdmin.includes(h));
   let whatsapp = null;
@@ -433,7 +445,7 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
     const { data: uso } = await supabaseAdmin.rpc('atendimento_whatsapp_uso', { p_hoteis: hoteisAdmin, p_inicio: inicio, p_fim: fim });
     whatsapp = uso || null; // sem o SQL da economia: a seção não aparece
   }
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp }, inicio, fim });
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS

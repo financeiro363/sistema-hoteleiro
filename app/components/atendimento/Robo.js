@@ -328,6 +328,32 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
   const [colar, setColar] = useState(null);
   const [versoes, setVersoes] = useState(null);
   const [aberto, setAberto] = useState(null);
+  const [lacunas, setLacunas] = useState(null); // perguntas que o robô não soube
+
+  useEffect(() => {
+    let ativo = true;
+    supabase.from('atendimento_robo_lacunas').select('id, pergunta, conversa_id, criado_em')
+      .eq('hotel_id', Number(hotelId)).eq('situacao', 'NOVA').order('criado_em', { ascending: false }).limit(50)
+      .then(({ data, error }) => { if (ativo) setLacunas(error ? null : data || []); });
+    return () => { ativo = false; };
+  }, [hotelId]);
+
+  async function marcarLacuna(l, situacao) {
+    const { data: sessao } = await supabase.auth.getSession();
+    const { data: eu } = await supabase.from('usuarios').select('id').eq('auth_id', sessao?.session?.user?.id).maybeSingle();
+    const { error } = await supabase.from('atendimento_robo_lacunas')
+      .update({ situacao, resolvida_em: new Date().toISOString(), resolvida_por_id: eu?.id || null }).eq('id', l.id);
+    if (error) { setErro(erroAmigavel(error)); return false; }
+    setLacunas((lista) => (lista || []).filter((x) => x.id !== l.id));
+    return true;
+  }
+
+  async function responderLacuna(l) {
+    if (!(await marcarLacuna(l, 'RESOLVIDA'))) return;
+    const titulo = String(l.pergunta || '').replace(/[?？]+\s*$/, '').trim().slice(0, 80) || 'Novo assunto';
+    adicionar(titulo);
+    setOk(`Assunto “${titulo}” criado no fim da lista. Escreva a resposta, salve o rascunho e publique.`);
+  }
 
   const salvoRascunho = Array.isArray(conteudo?.rascunho) && conteudo.rascunho.length ? conteudo.rascunho : conteudo?.publicado || [];
   const mudouDoSalvo = !iguais(assuntos, salvoRascunho);
@@ -418,6 +444,23 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
         </div>
         <p className="at-dica">{assuntos.length} assunto(s) · {caracteres.toLocaleString('pt-BR')} caracteres{caracteres > 40000 ? ' — está grande; textos muito longos deixam o robô mais caro e mais lento.' : ''}</p>
       </section>
+
+      {lacunas && lacunas.length > 0 && (
+        <section className="at-cartao">
+          <h2>❓ Perguntas que o robô não soube ({lacunas.length})</h2>
+          <p className="at-dica" style={{ marginTop: 0 }}>O robô passou estas conversas para a equipe porque a resposta não estava no conteúdo. Responda aqui uma vez e, depois de publicar, ele passa a saber.</p>
+          {lacunas.map((l) => (
+            <div key={l.id} className="at-linha-config">
+              <span style={{ flex: 1 }}>
+                “{l.pergunta}”
+                <span className="at-dica" style={{ display: 'block', margin: 0 }}>{dataHora(l.criado_em)}{l.conversa_id ? <> · <a href={`/atendimento?conversa=${l.conversa_id}`}>ver conversa</a></> : null}</span>
+              </span>
+              <button type="button" className="at-btn at-btn-verde" onClick={() => responderLacuna(l)}>✍️ Responder no conteúdo</button>
+              <button type="button" className="at-btn" onClick={() => marcarLacuna(l, 'IGNORADA')}>Ignorar</button>
+            </div>
+          ))}
+        </section>
+      )}
 
       {versoes && (
         <section className="at-cartao">

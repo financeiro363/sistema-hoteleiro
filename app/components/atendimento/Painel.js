@@ -179,6 +179,70 @@ function Cartao({ rotulo, valor, detalhe }) {
 }
 
 // ---------------------------------------------------------------------------
+// Vendas pelas cotações: quem vende, por qual canal, dentro ou fora do horário
+// e com quantos dias de antecedência o cliente procura.
+function LinhaVenda({ nome, x }) {
+  return (
+    <tr>
+      <td>{nome}</td><td className="num">{inteiro.format(x.cotacoes || 0)}</td><td className="num">{inteiro.format(x.reservas || 0)}</td>
+      <td className="num">{pct(x.reservas, x.cotacoes)}</td><td className="num">{reaisCurto(x.valor)}</td>
+    </tr>
+  );
+}
+
+function SecaoVendas({ vendas, nomes }) {
+  const dentro = vendas.horario?.dentro || {};
+  const fora = vendas.horario?.fora || {};
+  const robo = vendas.robo || {};
+  const cab = <thead><tr><th /><th className="num">Cotações</th><th className="num">Reservas</th><th className="num">Conversão</th><th className="num">Valor</th></tr></thead>;
+  return (
+    <>
+      <h2 className="pi-secao">💵 Vendas pelas cotações</h2>
+      <div className="pi-cartoes">
+        <Cartao rotulo="Dentro do horário comercial" valor={reaisCurto(dentro.valor)} detalhe={`${fmt(dentro.cotacoes)} cotações · ${fmt(dentro.reservas)} reservas`} />
+        <Cartao rotulo="Fora do horário comercial" valor={reaisCurto(fora.valor)} detalhe={`${fmt(fora.cotacoes)} cotações (${fmt(fora.robo)} do robô) · ${fmt(fora.reservas)} reservas`} />
+        <Cartao rotulo="Antecedência média" valor={vendas.antecedencia?.media_dias != null ? `${String(vendas.antecedencia.media_dias).replace('.', ',')} dias` : '—'} detalhe="Entre o pedido de cotação e a data de entrada" />
+      </div>
+      <section className="at-cartao">
+        <h2>Quem vende</h2>
+        <div className="at-tabela-rolagem">
+          <table className="at-tabela at-tabela-previa">
+            {cab}
+            <tbody>
+              {(vendas.por_atendente || []).map((a) => <LinhaVenda key={a.id} nome={nomes[a.id] || `Usuário #${a.id}`} x={a} />)}
+              {Number(robo.cotacoes) > 0 && <LinhaVenda nome="🤖 Robô" x={robo} />}
+            </tbody>
+          </table>
+        </div>
+        <p className="at-dica">Conta as cotações enviadas pelo sistema no período e as reservas que vieram delas (valor da reserva na Cloudbeds).</p>
+      </section>
+      <section className="at-cartao">
+        <h2>Por canal</h2>
+        <div className="at-tabela-rolagem">
+          <table className="at-tabela at-tabela-previa">
+            {cab}
+            <tbody>{(vendas.por_canal || []).map((c) => <LinhaVenda key={c.canal} nome={`${ICONE_CANAL[c.canal] || ''} ${NOME_CANAL[c.canal] || c.canal}`} x={c} />)}</tbody>
+          </table>
+        </div>
+      </section>
+      <section className="at-cartao">
+        <h2>Com quantos dias de antecedência o cliente procura</h2>
+        <div className="at-tabela-rolagem">
+          <table className="at-tabela at-tabela-previa">
+            <thead><tr><th>Antecedência</th><th className="num">Cotações</th><th className="num">Reservas</th><th className="num">Conversão</th></tr></thead>
+            <tbody>
+              {(vendas.antecedencia?.faixas || []).map((f) => (
+                <tr key={f.faixa}><td>{f.faixa}</td><td className="num">{inteiro.format(f.cotacoes)}</td><td className="num">{inteiro.format(f.reservas)}</td><td className="num">{pct(f.reservas, f.cotacoes)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Mensagens de WhatsApp e custo (só ADMIN). A Meta cobra cada mensagem de
 // atendimento depois das 1.000 grátis do mês, por número.
 const reaisCentavos = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -325,6 +389,7 @@ export function PainelIndicadores({ hoteis, nomes }) {
   Object.keys(reservasPorAtendente).forEach((id) => { if (!atendentes.some((a) => String(a.id) === String(id))) atendentes.push({ id: Number(id), conversas: 0, enviadas: 0 }); });
   const hist = dados?.historico || null;
   const robo = dados?.robo || null;
+  const vendas = dados?.vendas || null;
   const mesesHist = (hist?.meses || []).filter((m) => m.conversas > 0);
   const seriesHist = [
     { nome: 'Conversas', cor: CORES[0], valores: mesesHist.map((m) => m.conversas) },
@@ -405,6 +470,8 @@ export function PainelIndicadores({ hoteis, nomes }) {
             </>
           )}
 
+          {vendas && Number(vendas.total?.cotacoes) > 0 && <SecaoVendas vendas={vendas} nomes={nomes} />}
+
           {robo && (
             <>
               <h2 className="pi-secao">🤖 Robô com IA</h2>
@@ -414,6 +481,9 @@ export function PainelIndicadores({ hoteis, nomes }) {
                 <Cartao rotulo="Cotações enviadas pelo robô" valor={fmt(robo.cotacoes)} detalhe={`${fmt(robo.cliques)} com clique em Reservar · ${fmt(robo.sem_disponibilidade)} sem quarto`} />
                 <Cartao rotulo="Reservas das cotações do robô" valor={fmt(robo.reservas)} detalhe={reaisCurto(robo.valor_reservado)} />
                 <Cartao rotulo="Solicitações registradas" valor={fmt(robo.solicitacoes)} detalhe="Grupos, pedidos especiais, reservas existentes…" />
+                {robo.lacunas != null && (
+                  <Cartao rotulo="Perguntas que o robô não soube" valor={fmt(robo.lacunas)} detalhe="Complete o conteúdo em Robô (IA) → Conteúdo" />
+                )}
                 {robo.custo_usd != null && (
                   <Cartao rotulo="Custo da IA no período" valor={Number(robo.custo_usd).toLocaleString('pt-BR', { style: 'currency', currency: 'USD' })} detalhe="Cobrado em dólar pela Anthropic (inclui testes)" />
                 )}
