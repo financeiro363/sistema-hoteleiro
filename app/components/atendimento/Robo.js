@@ -19,7 +19,7 @@ import {
 } from '../../../lib/atendimento/roboConfig';
 
 const SEM_SQL = 'Falta rodar no Supabase o SQL da Fase 4 (sql/caixa_de_entrada_fase4.sql).';
-const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '' };
+const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '', modo_economico: true };
 
 function erroAmigavel(e) {
   const m = String(e?.message || e || '');
@@ -68,6 +68,7 @@ export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
     setForm(c.data ? {
       ligado: c.data.ligado, canais: c.data.canais || [], modelo: c.data.modelo || MODELO_PADRAO, nome_assistente: c.data.nome_assistente || '',
       horas_retomar: c.data.horas_retomar ?? 12, limite_mensal_usd: c.data.limite_mensal_usd ?? 30, email_solicitacoes: c.data.email_solicitacoes || '',
+      modo_economico: c.data.modo_economico !== false,
     } : PADRAO);
     setConteudo(ct.data || { hotel_id: hotelId, rascunho: [], publicado: [] });
     setResumo(r.data || null);
@@ -248,6 +249,14 @@ function Configuracao({
             </label>
           ))}
         </div>
+
+        <label className="at-reserva" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', margin: '10px 0 0' }}>
+          <input type="checkbox" checked={form.modo_economico !== false} onChange={(e) => setForm({ ...form, modo_economico: e.target.checked })} style={{ marginTop: 4 }} />
+          <span>
+            <strong>💸 Modo econômico (recomendado)</strong>
+            <span className="at-dica" style={{ display: 'block', margin: 0 }}>O robô responde tudo numa mensagem só, com a cotação junto, e não manda “vou verificar…” separado. Desde 1º/10/2026 a Meta cobra cada mensagem enviada depois das 1.000 grátis do mês.</span>
+          </span>
+        </label>
 
         <div className="at-grade" style={{ marginTop: 6 }}>
           <div>
@@ -499,7 +508,8 @@ function Testar({ hotelId, nomeHotel, config, conteudo }) {
       const r = await chamarApi('/api/atendimento', { acao: 'robo_testar', hotelId, mensagens: historico, usarRascunho });
       const novas = (r.respostas || []).map((x) => ({ papel: x.tipo === 'texto' ? 'robo' : x.tipo, texto: x.texto }));
       if (!novas.length) novas.push({ papel: 'acao', texto: '(o robô não escreveu nada desta vez)' });
-      setMensagens([...lista, ...novas, { papel: 'custo', texto: `${dolares(r.custo, 4)} · ${MODELOS_IA[r.modelo]?.nome || r.modelo}` }]);
+      const qtd = Number(r.mensagensWhatsApp ?? novas.filter((m) => m.papel === 'robo' || m.papel === 'cotacao').length);
+      setMensagens([...lista, ...novas, { papel: 'custo', texto: `${dolares(r.custo, 4)} · ${MODELOS_IA[r.modelo]?.nome || r.modelo} · ${qtd} ${qtd === 1 ? 'mensagem' : 'mensagens'} no WhatsApp${r.economico ? ' (modo econômico)' : ''}` }]);
       setCusto((c) => c + Number(r.custo || 0));
     } catch (e) {
       setMensagens([...lista, { papel: 'erro', texto: erroAmigavel(e) }]);

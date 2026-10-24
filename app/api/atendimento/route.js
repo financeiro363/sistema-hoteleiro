@@ -426,7 +426,14 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   const { data: robo } = await supabaseAdmin.rpc('atendimento_painel_robo', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   // Custo da IA só para quem é ADMIN de todos os hotéis escolhidos
   const roboFinal = robo && !pedidos.every((h) => chamador.hoteisAdmin.includes(h)) ? { ...robo, custo_usd: null } : robo;
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null }, inicio, fim });
+  // Mensagens e custo do WhatsApp: só dos hotéis em que a pessoa é ADMIN
+  const hoteisAdmin = pedidos.filter((h) => chamador.hoteisAdmin.includes(h));
+  let whatsapp = null;
+  if (hoteisAdmin.length) {
+    const { data: uso } = await supabaseAdmin.rpc('atendimento_whatsapp_uso', { p_hoteis: hoteisAdmin, p_inicio: inicio, p_fim: fim });
+    whatsapp = uso || null; // sem o SQL da economia: a seção não aparece
+  }
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS
@@ -624,11 +631,18 @@ async function acaoRoboConfig(supabaseAdmin, chamador, corpo) {
     if (!Array.isArray(conteudo?.publicado) || !conteudo.publicado.length) return respostaErro('Para ligar o robô, primeiro publique o conteúdo do hotel (aba Conteúdo).');
     if (!canais.length) return respostaErro('Marque pelo menos um canal em que o robô vai responder.');
   }
-  const { data, error } = await supabaseAdmin.from('atendimento_robo').upsert({
+  const registro = {
     hotel_id: hotelId, ligado: !!c.ligado, canais, modelo, horas_retomar: horas, limite_mensal_usd: limite,
     nome_assistente: String(c.nome_assistente || '').trim().slice(0, 40) || null, email_solicitacoes: email || null,
     atualizado_por_id: chamador.id, atualizado_em: new Date().toISOString(),
-  }, { onConflict: 'hotel_id' }).select().single();
+    ...(typeof c.modo_economico === 'boolean' ? { modo_economico: c.modo_economico } : {}),
+  };
+  let { data, error } = await supabaseAdmin.from('atendimento_robo').upsert(registro, { onConflict: 'hotel_id' }).select().single();
+  if (error && 'modo_economico' in registro && /modo_economico/i.test(error.message || '')) {
+    if (registro.modo_economico === false) return respostaErro('Para desligar o modo econômico, primeiro rode no Supabase o SQL da economia (sql/caixa_de_entrada_economia.sql).');
+    delete registro.modo_economico; // sem o SQL novo: salva o resto (o robô já fica econômico)
+    ({ data, error } = await supabaseAdmin.from('atendimento_robo').upsert(registro, { onConflict: 'hotel_id' }).select().single());
+  }
   if (error) throw error;
   return Response.json({ sucesso: true, config: data });
 }
