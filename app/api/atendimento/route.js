@@ -18,6 +18,7 @@
 //   cotacao_enviar    → envia a cotação com o link "Reservar agora" de cada quarto
 //   motor_detectar    → descobre o link do motor de reservas na Cloudbeds (ADMIN)
 //   reservas_verificar→ procura reservas novas na Cloudbeds e marca "Reservou"
+//   importar_asksuite → importa a planilha de conversas do Asksuite (histórico)
 // Acesso: ADMIN ou COLABORADOR com "Pode usar a Caixa de Entrada" — nos dois
 // hotéis, quando a pessoa tem vínculo com os dois.
 // ============================================================================
@@ -40,6 +41,7 @@ import {
   verificarReservasHotel, reais, dataBR,
 } from '../../../lib/atendimento/cotacao';
 import { origemDoSite } from '../../../lib/atendimento/servidor';
+import { importarLote, limparImportacaoAnterior } from '../../../lib/atendimento/asksuite';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,6 +85,7 @@ export async function POST(request) {
       case 'cotacao_buscar': return await acaoCotacaoBuscar(supabaseAdmin, chamador, corpo);
       case 'cotacao_enviar': return await acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request);
       case 'motor_detectar': return await acaoMotorDetectar(supabaseAdmin, chamador, corpo);
+      case 'importar_asksuite': return await acaoImportarAsksuite(supabaseAdmin, chamador, corpo);
       case 'reservas_verificar':
         return Response.json({ resultados: await verificarReservasTodos(supabaseAdmin, chamador.hoteis, true) });
       default: return respostaErro('Ação desconhecida.');
@@ -529,7 +532,8 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   const { data, error } = await supabaseAdmin.rpc('atendimento_painel', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   if (error) throw error;
   const { data: cotacoes } = await supabaseAdmin.rpc('atendimento_painel_cotacoes', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null }, inicio, fim });
+  const { data: historico } = await supabaseAdmin.rpc('atendimento_painel_historico', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS
@@ -648,6 +652,7 @@ async function acaoCotacaoBuscar(supabaseAdmin, chamador, corpo) {
   let cb;
   try { cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id); } catch (e) { return respostaErro(e.message); }
   const resultado = await buscarDisponibilidade(cb, corpo);
+  if (!resultado.itens.length) await registrarSemDisponibilidade(supabaseAdmin, chamador, conversa, resultado);
   const motor = await linkDoMotor(supabaseAdmin, cb, conversa.hotel_id);
   const pref = await preferenciasCotacao(supabaseAdmin, conversa.hotel_id);
   const { data: hotel } = await supabaseAdmin.from('hoteis').select('nome_fantasia').eq('id', conversa.hotel_id).maybeSingle();
@@ -739,4 +744,36 @@ async function verificarReservasTodos(supabaseAdmin, hoteis, forcar) {
     }
   }
   return resultados;
+}
+
+// Pedido de cotação sem quarto disponível: fica registrado (demanda perdida)
+async function registrarSemDisponibilidade(supabaseAdmin, chamador, conversa, r) {
+  try {
+    const { data: repetido } = await supabaseAdmin.from('atendimento_cotacoes').select('id')
+      .eq('conversa_id', conversa.id).eq('status', 'SEM_DISPONIBILIDADE').eq('checkin', r.checkin).eq('checkout', r.checkout)
+      .eq('adultos', r.adultos).gte('criado_em', new Date(Date.now() - 86400000).toISOString()).limit(1);
+    if (repetido?.length) return;
+    const { error } = await supabaseAdmin.from('atendimento_cotacoes').insert({
+      hotel_id: conversa.hotel_id, conversa_id: conversa.id, contato_id: conversa.contato_id, codigo: novoCodigo(),
+      checkin: r.checkin, checkout: r.checkout, adultos: r.adultos, criancas: r.criancas, quartos: r.quartos,
+      itens: [], status: 'SEM_DISPONIBILIDADE', enviado_por_id: chamador.id,
+    });
+    if (error) return;
+    await supabaseAdmin.rpc('atendimento_adicionar_etiqueta', { p_conversa: conversa.id, p_nome: 'Indisponibilidade na cotação' });
+    await supabaseAdmin.from('atendimento_mensagens').insert({
+      hotel_id: conversa.hotel_id, conversa_id: conversa.id, direcao: 'NOTA', tipo: 'sistema', enviado_por_id: chamador.id,
+      data_original: new Date().toISOString(),
+      texto: `🔎 Sem quarto disponível para ${dataBR(r.checkin)} a ${dataBR(r.checkout)} (${r.adultos} adulto(s)${r.criancas ? `, ${r.criancas} criança(s)` : ''}). Ficou registrado como demanda perdida.`,
+    });
+  } catch (e) { /* o registro é um extra; a busca continua */ }
+}
+
+// ---------------------------------------------------------------- HISTÓRICO DO ASKSUITE
+async function acaoImportarAsksuite(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelPermitido(chamador, corpo.hotelId);
+  const linhas = Array.isArray(corpo.linhas) ? corpo.linhas.slice(0, 400) : [];
+  if (!linhas.length) return respostaErro('A planilha não tem conversas.');
+  const limpeza = corpo.limpar ? await limparImportacaoAnterior(supabaseAdmin, hotelId) : null;
+  const resultado = await importarLote(supabaseAdmin, hotelId, linhas);
+  return Response.json({ sucesso: true, ...resultado, limpeza });
 }

@@ -17,7 +17,7 @@ import {
 import { ChipEtiqueta } from './Conversa';
 
 export function CartaoConversa({
-  c, ativo, compacto, nomeHotel, nomeResponsavel, souEu, etiquetasPorId, alertaMinutos, agora, onAbrir, extra,
+  c, ativo, compacto, nomeHotel, nomeResponsavel, souEu, etiquetasPorId, alertaMinutos, agora, onAbrir, extra, jaReservou,
 }) {
   const nome = c.contato_nome || c.contato_endereco || 'Cliente';
   const espera = minutosEsperando(c, agora);
@@ -54,6 +54,7 @@ export function CartaoConversa({
           {c.responsavel_id
             ? <span className="at-chip at-chip-resp">{souEu ? 'Comigo' : primeiroNome(nomeResponsavel || '—')}</span>
             : <span className="at-chip">Sem responsável</span>}
+          {jaReservou && <span className="at-chip at-chip-estrela" title="Este cliente já reservou antes">⭐ Já reservou</span>}
           {temAnuncio && <span className="at-chip at-chip-ad" title={c.origem?.titulo || 'Veio de anúncio'}>📣 AD</span>}
           {c.valor_cotacao ? <span className="at-chip">{dinheiro(c.valor_cotacao)}</span> : null}
           {c.cloudbeds_reservation_id && <span className="at-chip">🏨 {c.cloudbeds_reservation_id}</span>}
@@ -81,7 +82,7 @@ export function colunasDoQuadro(etapas) {
 
 export function Quadro({
   conversas, etapas, etiquetasPorId, nomesHoteis, multiHotel, nomes, usuarioId, alertas, agora, selecionadaId,
-  onAbrir, onMover, limite,
+  onAbrir, onMover, limite, reservaram,
 }) {
   const colunas = useMemo(() => colunasDoQuadro(etapas), [etapas]);
   const chavePorEtapa = useMemo(() => Object.fromEntries((etapas || []).map((e) => [e.id, e.ativa ? chaveNome(e.nome) : null])), [etapas]);
@@ -157,6 +158,7 @@ export function Quadro({
                     etiquetasPorId={etiquetasPorId}
                     alertaMinutos={alertas[c.hotel_id]}
                     agora={agora}
+                    jaReservou={reservaram?.has(c.contato_id)}
                     onAbrir={() => onAbrir(c.id)}
                     extra={(
                       <select

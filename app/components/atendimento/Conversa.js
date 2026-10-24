@@ -848,6 +848,8 @@ export function DetalhesConversa({ conversa, etapas, etiquetas, salvando, onAlte
 function PainelContato({ conversa, onAbrirConversa }) {
   const [contato, setContato] = useState(null);
   const [historico, setHistorico] = useState([]);
+  const [asksuite, setAsksuite] = useState([]);
+  const [verAsksuite, setVerAsksuite] = useState(false);
   const [editando, setEditando] = useState(null);
   const [erro, setErro] = useState('');
   const [salvando, setSalvando] = useState(false);
@@ -855,16 +857,19 @@ function PainelContato({ conversa, onAbrirConversa }) {
 
   useEffect(() => {
     let ativo = true;
-    setContato(null); setHistorico([]); setEditando(null); setErro('');
+    setContato(null); setHistorico([]); setAsksuite([]); setVerAsksuite(false); setEditando(null); setErro('');
     if (!conversa.contato_id) return undefined;
     Promise.all([
       supabase.from('atendimento_contatos').select('*').eq('id', conversa.contato_id).maybeSingle(),
       supabase.from('atendimento_conversas').select('id, canal_tipo, assunto, status, criado_em, ultima_mensagem_em, ultima_mensagem_resumo')
         .eq('contato_id', conversa.contato_id).order('ultima_mensagem_em', { ascending: false, nullsFirst: false }).limit(30),
-    ]).then(([c, h]) => {
+      supabase.from('atendimento_historico_externo').select('*').eq('contato_id', conversa.contato_id)
+        .order('criado_origem', { ascending: false, nullsFirst: false }).limit(50),
+    ]).then(([c, h, a]) => {
       if (!ativo) return;
       setContato(c.data || null);
       setHistorico(h.data || []);
+      setAsksuite(a.error ? [] : (a.data || []));
     });
     return () => { ativo = false; };
   }, [conversa.id, conversa.contato_id, versao]);
@@ -895,7 +900,7 @@ function PainelContato({ conversa, onAbrirConversa }) {
     <>
       <div className="at-lateral-bloco">
         <div className="at-canal-topo">
-          <p className="at-lateral-titulo" style={{ margin: 0 }}>Contato</p>
+          <p className="at-lateral-titulo" style={{ margin: 0 }}>Contato{contato?.ja_reservou ? <span className="at-chip at-chip-estrela" style={{ marginLeft: 6 }}>⭐ Já reservou</span> : null}</p>
           {contato && !editando && <button type="button" className="at-link-pequeno" onClick={() => setEditando({ ...contato })}>Editar</button>}
         </div>
         {erro && <div className="aviso-erro" style={{ fontSize: 13 }}>{erro}</div>}
@@ -935,6 +940,35 @@ function PainelContato({ conversa, onAbrirConversa }) {
           {conversa.origem.titulo && <div style={{ fontWeight: 700, fontSize: 13.5 }}>{conversa.origem.titulo}</div>}
           {conversa.origem.texto && <div className="at-dica" style={{ whiteSpace: 'pre-wrap' }}>{conversa.origem.texto}</div>}
           {conversa.origem.url && <a className="at-link-pequeno" href={conversa.origem.url} target="_blank" rel="noopener noreferrer">Ver o anúncio ↗</a>}
+        </div>
+      )}
+
+      {asksuite.length > 0 && (
+        <div className="at-lateral-bloco">
+          <div className="at-canal-topo">
+            <p className="at-lateral-titulo" style={{ margin: 0 }}>No Asksuite ({asksuite.length})</p>
+            {asksuite.length > 3 && <button type="button" className="at-link-pequeno" onClick={() => setVerAsksuite(!verAsksuite)}>{verAsksuite ? 'Ver menos' : 'Ver todas'}</button>}
+          </div>
+          <p className="at-dica" style={{ marginTop: 2 }}>
+            {asksuite.filter((x) => x.pediu_cotacao).length} cotação(ões) · {asksuite.filter((x) => x.clicou_reservar).length} clique(s) em Reservar · {asksuite.filter((x) => x.reservou).length} reserva(s)
+          </p>
+          {(verAsksuite ? asksuite : asksuite.slice(0, 3)).map((h) => (
+            <div key={h.id} className="ct-item">
+              <div className="at-canal-topo">
+                <strong>{h.criado_origem ? dataHora(h.criado_origem) : '—'}</strong>
+                <span className="at-chip">{h.fonte || h.plataforma || 'Asksuite'}</span>
+              </div>
+              <small>
+                {h.reservou ? `🎉 Reservou${h.reserva_valor ? ` ${dinheiro(h.reserva_valor)}` : ''}${h.reserva_codigo ? ` (${h.reserva_codigo})` : ''}`
+                  : h.clicou_reservar ? '🖱️ Clicou em Reservar agora' : h.pediu_cotacao ? '💰 Pediu cotação' : 'Conversa'}
+                {h.chegada ? ` · ${dataCurta(h.chegada)} a ${dataCurta(h.partida)}` : ''}
+                {h.adultos ? ` · ${h.adultos} adulto(s)` : ''}
+              </small>
+              {h.agente && <small>Atendente: {h.agente}</small>}
+              {h.etiquetas?.length > 0 && <small>{h.etiquetas.filter((e) => !/^tag - /i.test(e)).join(' · ')}</small>}
+              {h.link && <a className="at-link-pequeno" href={h.link} target="_blank" rel="noopener noreferrer">Abrir no Asksuite ↗</a>}
+            </div>
+          ))}
         </div>
       )}
 
