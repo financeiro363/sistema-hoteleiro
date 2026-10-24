@@ -9,6 +9,8 @@
 // Netlify) — não é preciso criar variável nova.
 // Quando alguém está com a Caixa de Entrada aberta, a própria tela também pede
 // a sincronização a cada minuto.
+// Robô (Fase 4): a mesma chamada pede ao robô para responder as mensagens que
+// ficaram sem resposta (quando o webhook não teve tempo), em paralelo.
 // Funções agendadas só rodam no site publicado (não nas prévias de deploy).
 // ============================================================================
 
@@ -22,17 +24,20 @@ export default async function sincronizarEmails() {
     return;
   }
   const senha = crypto.createHmac('sha256', segredo).update('atendimento-sincronizacao-agendada').digest('base64url');
-  try {
-    const resposta = await fetch(`${site}/api/atendimento`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-atendimento-agendado': senha },
-      body: JSON.stringify({ acao: 'sincronizar' }),
-    });
-    const resultado = await resposta.json().catch(() => ({}));
-    console.log('Caixa de Entrada — sincronização de e-mails:', resposta.status, JSON.stringify(resultado));
-  } catch (e) {
-    console.log('Caixa de Entrada — falha ao sincronizar:', e.message);
-  }
+  const chamar = async (acao, rotulo) => {
+    try {
+      const resposta = await fetch(`${site}/api/atendimento`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-atendimento-agendado': senha },
+        body: JSON.stringify({ acao }),
+      });
+      const resultado = await resposta.json().catch(() => ({}));
+      console.log(`Caixa de Entrada — ${rotulo}:`, resposta.status, JSON.stringify(resultado));
+    } catch (e) {
+      console.log(`Caixa de Entrada — falha (${rotulo}):`, e.message);
+    }
+  };
+  await Promise.all([chamar('sincronizar', 'sincronização de e-mails'), chamar('robo_pendentes', 'robô')]);
 }
 
 export const config = {
