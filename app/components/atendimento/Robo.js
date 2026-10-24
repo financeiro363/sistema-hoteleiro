@@ -19,7 +19,7 @@ import {
 } from '../../../lib/atendimento/roboConfig';
 
 const SEM_SQL = 'Falta rodar no Supabase o SQL da Fase 4 (sql/caixa_de_entrada_fase4.sql).';
-const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '' };
+const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '', modo_economico: true };
 
 function erroAmigavel(e) {
   const m = String(e?.message || e || '');
@@ -68,6 +68,7 @@ export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
     setForm(c.data ? {
       ligado: c.data.ligado, canais: c.data.canais || [], modelo: c.data.modelo || MODELO_PADRAO, nome_assistente: c.data.nome_assistente || '',
       horas_retomar: c.data.horas_retomar ?? 12, limite_mensal_usd: c.data.limite_mensal_usd ?? 30, email_solicitacoes: c.data.email_solicitacoes || '',
+      modo_economico: c.data.modo_economico !== false,
     } : PADRAO);
     setConteudo(ct.data || { hotel_id: hotelId, rascunho: [], publicado: [] });
     setResumo(r.data || null);
@@ -249,6 +250,14 @@ function Configuracao({
           ))}
         </div>
 
+        <label className="at-reserva" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', margin: '10px 0 0' }}>
+          <input type="checkbox" checked={form.modo_economico !== false} onChange={(e) => setForm({ ...form, modo_economico: e.target.checked })} style={{ marginTop: 4 }} />
+          <span>
+            <strong>💸 Modo econômico (recomendado)</strong>
+            <span className="at-dica" style={{ display: 'block', margin: 0 }}>O robô responde tudo numa mensagem só, com a cotação junto, e não manda “vou verificar…” separado. Desde 1º/10/2026 a Meta cobra cada mensagem enviada depois das 1.000 grátis do mês.</span>
+          </span>
+        </label>
+
         <div className="at-grade" style={{ marginTop: 6 }}>
           <div>
             <label className="rotulo" htmlFor="rb-nome">Nome do assistente (opcional)</label>
@@ -319,6 +328,32 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
   const [colar, setColar] = useState(null);
   const [versoes, setVersoes] = useState(null);
   const [aberto, setAberto] = useState(null);
+  const [lacunas, setLacunas] = useState(null); // perguntas que o robô não soube
+
+  useEffect(() => {
+    let ativo = true;
+    supabase.from('atendimento_robo_lacunas').select('id, pergunta, conversa_id, criado_em')
+      .eq('hotel_id', Number(hotelId)).eq('situacao', 'NOVA').order('criado_em', { ascending: false }).limit(50)
+      .then(({ data, error }) => { if (ativo) setLacunas(error ? null : data || []); });
+    return () => { ativo = false; };
+  }, [hotelId]);
+
+  async function marcarLacuna(l, situacao) {
+    const { data: sessao } = await supabase.auth.getSession();
+    const { data: eu } = await supabase.from('usuarios').select('id').eq('auth_id', sessao?.session?.user?.id).maybeSingle();
+    const { error } = await supabase.from('atendimento_robo_lacunas')
+      .update({ situacao, resolvida_em: new Date().toISOString(), resolvida_por_id: eu?.id || null }).eq('id', l.id);
+    if (error) { setErro(erroAmigavel(error)); return false; }
+    setLacunas((lista) => (lista || []).filter((x) => x.id !== l.id));
+    return true;
+  }
+
+  async function responderLacuna(l) {
+    if (!(await marcarLacuna(l, 'RESOLVIDA'))) return;
+    const titulo = String(l.pergunta || '').replace(/[?？]+\s*$/, '').trim().slice(0, 80) || 'Novo assunto';
+    adicionar(titulo);
+    setOk(`Assunto “${titulo}” criado no fim da lista. Escreva a resposta, salve o rascunho e publique.`);
+  }
 
   const salvoRascunho = Array.isArray(conteudo?.rascunho) && conteudo.rascunho.length ? conteudo.rascunho : conteudo?.publicado || [];
   const mudouDoSalvo = !iguais(assuntos, salvoRascunho);
@@ -410,6 +445,23 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
         <p className="at-dica">{assuntos.length} assunto(s) · {caracteres.toLocaleString('pt-BR')} caracteres{caracteres > 40000 ? ' — está grande; textos muito longos deixam o robô mais caro e mais lento.' : ''}</p>
       </section>
 
+      {lacunas && lacunas.length > 0 && (
+        <section className="at-cartao">
+          <h2>❓ Perguntas que o robô não soube ({lacunas.length})</h2>
+          <p className="at-dica" style={{ marginTop: 0 }}>O robô passou estas conversas para a equipe porque a resposta não estava no conteúdo. Responda aqui uma vez e, depois de publicar, ele passa a saber.</p>
+          {lacunas.map((l) => (
+            <div key={l.id} className="at-linha-config">
+              <span style={{ flex: 1 }}>
+                “{l.pergunta}”
+                <span className="at-dica" style={{ display: 'block', margin: 0 }}>{dataHora(l.criado_em)}{l.conversa_id ? <> · <a href={`/atendimento?conversa=${l.conversa_id}`}>ver conversa</a></> : null}</span>
+              </span>
+              <button type="button" className="at-btn at-btn-verde" onClick={() => responderLacuna(l)}>✍️ Responder no conteúdo</button>
+              <button type="button" className="at-btn" onClick={() => marcarLacuna(l, 'IGNORADA')}>Ignorar</button>
+            </div>
+          ))}
+        </section>
+      )}
+
       {versoes && (
         <section className="at-cartao">
           <h2>🕘 Versões publicadas</h2>
@@ -499,7 +551,8 @@ function Testar({ hotelId, nomeHotel, config, conteudo }) {
       const r = await chamarApi('/api/atendimento', { acao: 'robo_testar', hotelId, mensagens: historico, usarRascunho });
       const novas = (r.respostas || []).map((x) => ({ papel: x.tipo === 'texto' ? 'robo' : x.tipo, texto: x.texto }));
       if (!novas.length) novas.push({ papel: 'acao', texto: '(o robô não escreveu nada desta vez)' });
-      setMensagens([...lista, ...novas, { papel: 'custo', texto: `${dolares(r.custo, 4)} · ${MODELOS_IA[r.modelo]?.nome || r.modelo}` }]);
+      const qtd = Number(r.mensagensWhatsApp ?? novas.filter((m) => m.papel === 'robo' || m.papel === 'cotacao').length);
+      setMensagens([...lista, ...novas, { papel: 'custo', texto: `${dolares(r.custo, 4)} · ${MODELOS_IA[r.modelo]?.nome || r.modelo} · ${qtd} ${qtd === 1 ? 'mensagem' : 'mensagens'} no WhatsApp${r.economico ? ' (modo econômico)' : ''}` }]);
       setCusto((c) => c + Number(r.custo || 0));
     } catch (e) {
       setMensagens([...lista, { papel: 'erro', texto: erroAmigavel(e) }]);

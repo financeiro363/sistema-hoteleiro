@@ -11,6 +11,7 @@
 // ============================================================================
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { supabase } from '../../../lib/supabaseClient';
 import { chamarApi, NOME_CANAL, ICONE_CANAL } from './util';
 
 const FUSO = 'America/Fortaleza';
@@ -178,6 +179,174 @@ function Cartao({ rotulo, valor, detalhe }) {
 }
 
 // ---------------------------------------------------------------------------
+// Vendas pelas cotações: quem vende, por qual canal, dentro ou fora do horário
+// e com quantos dias de antecedência o cliente procura.
+function LinhaVenda({ nome, x }) {
+  return (
+    <tr>
+      <td>{nome}</td><td className="num">{inteiro.format(x.cotacoes || 0)}</td><td className="num">{inteiro.format(x.reservas || 0)}</td>
+      <td className="num">{pct(x.reservas, x.cotacoes)}</td><td className="num">{reaisCurto(x.valor)}</td>
+    </tr>
+  );
+}
+
+function SecaoVendas({ vendas, nomes }) {
+  const dentro = vendas.horario?.dentro || {};
+  const fora = vendas.horario?.fora || {};
+  const robo = vendas.robo || {};
+  const cab = <thead><tr><th /><th className="num">Cotações</th><th className="num">Reservas</th><th className="num">Conversão</th><th className="num">Valor</th></tr></thead>;
+  return (
+    <>
+      <h2 className="pi-secao">💵 Vendas pelas cotações</h2>
+      <div className="pi-cartoes">
+        <Cartao rotulo="Dentro do horário comercial" valor={reaisCurto(dentro.valor)} detalhe={`${fmt(dentro.cotacoes)} cotações · ${fmt(dentro.reservas)} reservas`} />
+        <Cartao rotulo="Fora do horário comercial" valor={reaisCurto(fora.valor)} detalhe={`${fmt(fora.cotacoes)} cotações (${fmt(fora.robo)} do robô) · ${fmt(fora.reservas)} reservas`} />
+        <Cartao rotulo="Antecedência média" valor={vendas.antecedencia?.media_dias != null ? `${String(vendas.antecedencia.media_dias).replace('.', ',')} dias` : '—'} detalhe="Entre o pedido de cotação e a data de entrada" />
+      </div>
+      <section className="at-cartao">
+        <h2>Quem vende</h2>
+        <div className="at-tabela-rolagem">
+          <table className="at-tabela at-tabela-previa">
+            {cab}
+            <tbody>
+              {(vendas.por_atendente || []).map((a) => <LinhaVenda key={a.id} nome={nomes[a.id] || `Usuário #${a.id}`} x={a} />)}
+              {Number(robo.cotacoes) > 0 && <LinhaVenda nome="🤖 Robô" x={robo} />}
+            </tbody>
+          </table>
+        </div>
+        <p className="at-dica">Conta as cotações enviadas pelo sistema no período e as reservas que vieram delas (valor da reserva na Cloudbeds).</p>
+      </section>
+      <section className="at-cartao">
+        <h2>Por canal</h2>
+        <div className="at-tabela-rolagem">
+          <table className="at-tabela at-tabela-previa">
+            {cab}
+            <tbody>{(vendas.por_canal || []).map((c) => <LinhaVenda key={c.canal} nome={`${ICONE_CANAL[c.canal] || ''} ${NOME_CANAL[c.canal] || c.canal}`} x={c} />)}</tbody>
+          </table>
+        </div>
+      </section>
+      <section className="at-cartao">
+        <h2>Com quantos dias de antecedência o cliente procura</h2>
+        <div className="at-tabela-rolagem">
+          <table className="at-tabela at-tabela-previa">
+            <thead><tr><th>Antecedência</th><th className="num">Cotações</th><th className="num">Reservas</th><th className="num">Conversão</th></tr></thead>
+            <tbody>
+              {(vendas.antecedencia?.faixas || []).map((f) => (
+                <tr key={f.faixa}><td>{f.faixa}</td><td className="num">{inteiro.format(f.cotacoes)}</td><td className="num">{inteiro.format(f.reservas)}</td><td className="num">{pct(f.reservas, f.cotacoes)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mensagens de WhatsApp e custo (só ADMIN). A Meta cobra cada mensagem de
+// atendimento depois das 1.000 grátis do mês, por número.
+const reaisCentavos = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+// Preço por mensagem cobrada (por hotel) — o ADMIN ajusta conforme a fatura da Meta
+function PrecoMensagem({ hotelId, preco, onMudou }) {
+  const [editando, setEditando] = useState(false);
+  const [valor, setValor] = useState('');
+  const [erro, setErro] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  async function salvar() {
+    const n = Number(String(valor).replace(',', '.'));
+    if (!(n >= 0 && n <= 5)) { setErro('Use um valor entre R$ 0,00 e R$ 5,00.'); return; }
+    setSalvando(true); setErro('');
+    const { error } = await supabase.from('atendimento_preferencias')
+      .upsert({ hotel_id: hotelId, whatsapp_preco_mensagem: n, atualizado_em: new Date().toISOString() }, { onConflict: 'hotel_id' });
+    setSalvando(false);
+    if (error) { setErro(/whatsapp_preco/i.test(error.message) ? 'Falta rodar no Supabase o SQL da economia (sql/caixa_de_entrada_economia.sql).' : error.message); return; }
+    setEditando(false);
+    onMudou?.();
+  }
+  if (!editando) {
+    return (
+      <span className="at-dica" style={{ margin: 0 }}>
+        Preço por mensagem cobrada: <strong>{reaisCentavos(preco)}</strong>{' '}
+        <button type="button" className="at-link-pequeno" onClick={() => { setValor(String(preco).replace('.', ',')); setEditando(true); }}>Alterar</button>
+      </span>
+    );
+  }
+  return (
+    <span className="at-botoes" style={{ marginTop: 0, alignItems: 'center' }}>
+      <label className="at-dica" style={{ margin: 0 }} htmlFor={`preco-${hotelId}`}>Preço por mensagem cobrada (R$)</label>
+      <input id={`preco-${hotelId}`} className="at-select" style={{ width: 90 }} inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)} />
+      <button type="button" className="at-btn at-btn-verde" onClick={salvar} disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
+      <button type="button" className="at-btn" onClick={() => setEditando(false)}>Cancelar</button>
+      {erro && <span className="at-ruim" style={{ fontSize: 13 }}>{erro}</span>}
+    </span>
+  );
+}
+
+function SecaoWhatsApp({ whatsapp, multi, hoteis, onMudou }) {
+  const numeros = (whatsapp?.numeros || []).filter((n) => n.meses.length > 0);
+  const franquia = Number(whatsapp?.franquia || 1000);
+  const mesAtual = hojeLocal().slice(0, 7);
+  if (!(whatsapp?.numeros || []).length) return null;
+  return (
+    <>
+      <h2 className="pi-secao">📱 Mensagens de WhatsApp e custo</h2>
+      <p className="at-dica" style={{ marginTop: 0 }}>
+        Desde 1º/10/2026 a Meta cobra cada mensagem que o hotel envia na conversa, depois das {inteiro.format(franquia)} grátis do mês em cada número.
+        Conversas que começam por anúncio (Clique para o WhatsApp) ou pelo botão da página do Facebook não são cobradas. Só administradores veem esta parte.
+      </p>
+      {numeros.length === 0 && <div className="at-vazio">Nenhuma mensagem de WhatsApp enviada neste período.</div>}
+      {numeros.map((n) => {
+        const atual = n.meses.find((m) => m.mes === mesAtual);
+        const usadas = atual ? atual.entregues : 0;
+        const tot = n.meses.reduce((a, m) => ({
+          atendimento: a.atendimento + m.atendimento, robo: a.robo + m.robo, equipe: a.equipe + m.equipe, modelos: a.modelos + m.modelos,
+          gratis_anuncio: a.gratis_anuncio + m.gratis_anuncio, cobradas: a.cobradas + m.cobradas, custo: a.custo + Number(m.custo || 0),
+        }), { atendimento: 0, robo: 0, equipe: 0, modelos: 0, gratis_anuncio: 0, cobradas: 0, custo: 0 });
+        const estimado = n.meses.some((m) => m.estimado && m.cobradas > 0);
+        return (
+          <section key={n.canal_id} className="at-cartao">
+            <div className="at-canal-topo">
+              <h2>{n.nome}{n.numero ? ` · ${n.numero}` : ''}{multi ? ` — ${hoteis.find((h) => h.id === n.hotel_id)?.nome || ''}` : ''}</h2>
+              <PrecoMensagem hotelId={n.hotel_id} preco={Number(n.preco)} onMudou={onMudou} />
+            </div>
+            {atual && (
+              <>
+                <div className={`at-whats-barra ${usadas > franquia ? 'passou' : ''}`}><span style={{ width: `${Math.min(100, (usadas / franquia) * 100)}%` }} /></div>
+                <p className="at-dica" style={{ margin: '0 0 8px' }}>
+                  Este mês: {inteiro.format(usadas)} de {inteiro.format(franquia)} mensagens grátis usadas
+                  {usadas > franquia ? ` — passou da franquia; a partir daqui cada mensagem custa cerca de ${reaisCentavos(n.preco)}.` : ` — faltam ${inteiro.format(franquia - usadas)}.`}
+                </p>
+              </>
+            )}
+            <div className="pi-cartoes">
+              <Cartao rotulo="Mensagens enviadas" valor={fmt(tot.atendimento)} detalhe={`${fmt(tot.robo)} do robô · ${fmt(tot.equipe)} da equipe`} />
+              <Cartao rotulo="Cobradas pela Meta" valor={`${estimado ? '≈ ' : ''}${fmt(tot.cobradas)}`} detalhe={`${fmt(tot.gratis_anuncio)} grátis por anúncio`} />
+              <Cartao rotulo="Custo estimado" valor={`${estimado ? '≈ ' : ''}${reaisCentavos(tot.custo)}`} detalhe={`A ${reaisCentavos(n.preco)} por mensagem cobrada`} />
+            </div>
+            <div className="at-tabela-rolagem">
+              <table className="at-tabela at-tabela-previa">
+                <thead><tr><th>Mês</th><th className="num">Enviadas</th><th className="num">Robô</th><th className="num">Equipe</th><th className="num">Grátis (anúncio)</th><th className="num">Cobradas</th><th className="num">Custo</th></tr></thead>
+                <tbody>
+                  {n.meses.map((m) => (
+                    <tr key={m.mes}>
+                      <td>{rotuloMes(m.mes)}</td><td className="num">{inteiro.format(m.atendimento)}</td><td className="num">{inteiro.format(m.robo)}</td>
+                      <td className="num">{inteiro.format(m.equipe)}</td><td className="num">{inteiro.format(m.gratis_anuncio)}</td>
+                      <td className="num">{m.estimado && m.cobradas > 0 ? '≈ ' : ''}{inteiro.format(m.cobradas)}</td><td className="num">{reaisCentavos(m.custo)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {tot.modelos > 0 && <p className="at-dica">Também saíram {inteiro.format(tot.modelos)} modelo(s) aprovado(s) (para reabrir conversa). Esses a Meta cobra à parte, por outro preço.</p>}
+          </section>
+        );
+      })}
+      <p className="at-dica">“≈” = estimativa (mensagens antigas, de antes de a Meta informar a cobrança: conta tudo o que passou de {inteiro.format(franquia)} no mês). O preço por mensagem é aproximado: confira na fatura da Meta e ajuste em “Alterar”.</p>
+    </>
+  );
+}
+
 export function PainelIndicadores({ hoteis, nomes }) {
   const [hotel, setHotel] = useState('');
   const [periodo, setPeriodo] = useState('6m');
@@ -187,6 +356,7 @@ export function PainelIndicadores({ hoteis, nomes }) {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
   const [verTabela, setVerTabela] = useState(false);
+  const [recarregar, setRecarregar] = useState(0);
 
   const [inicio, fim] = intervalo(periodo, de, ate);
   const idsHoteis = hoteis.map((h) => h.id).join(',');
@@ -200,7 +370,7 @@ export function PainelIndicadores({ hoteis, nomes }) {
       .catch((e) => { if (ativo) setErro(/atendimento_painel|schema cache|function/i.test(e.message) ? 'Falta rodar no Supabase o SQL da Fase 2 da Caixa de Entrada.' : e.message); })
       .finally(() => { if (ativo) setCarregando(false); });
     return () => { ativo = false; };
-  }, [hotel, inicio, fim, idsHoteis]);
+  }, [hotel, inicio, fim, idsHoteis, recarregar]);
 
   const t = dados?.totais || {};
   const cot = dados?.cotacoes || null;
@@ -219,6 +389,7 @@ export function PainelIndicadores({ hoteis, nomes }) {
   Object.keys(reservasPorAtendente).forEach((id) => { if (!atendentes.some((a) => String(a.id) === String(id))) atendentes.push({ id: Number(id), conversas: 0, enviadas: 0 }); });
   const hist = dados?.historico || null;
   const robo = dados?.robo || null;
+  const vendas = dados?.vendas || null;
   const mesesHist = (hist?.meses || []).filter((m) => m.conversas > 0);
   const seriesHist = [
     { nome: 'Conversas', cor: CORES[0], valores: mesesHist.map((m) => m.conversas) },
@@ -299,6 +470,8 @@ export function PainelIndicadores({ hoteis, nomes }) {
             </>
           )}
 
+          {vendas && Number(vendas.total?.cotacoes) > 0 && <SecaoVendas vendas={vendas} nomes={nomes} />}
+
           {robo && (
             <>
               <h2 className="pi-secao">🤖 Robô com IA</h2>
@@ -308,12 +481,17 @@ export function PainelIndicadores({ hoteis, nomes }) {
                 <Cartao rotulo="Cotações enviadas pelo robô" valor={fmt(robo.cotacoes)} detalhe={`${fmt(robo.cliques)} com clique em Reservar · ${fmt(robo.sem_disponibilidade)} sem quarto`} />
                 <Cartao rotulo="Reservas das cotações do robô" valor={fmt(robo.reservas)} detalhe={reaisCurto(robo.valor_reservado)} />
                 <Cartao rotulo="Solicitações registradas" valor={fmt(robo.solicitacoes)} detalhe="Grupos, pedidos especiais, reservas existentes…" />
+                {robo.lacunas != null && (
+                  <Cartao rotulo="Perguntas que o robô não soube" valor={fmt(robo.lacunas)} detalhe="Complete o conteúdo em Robô (IA) → Conteúdo" />
+                )}
                 {robo.custo_usd != null && (
                   <Cartao rotulo="Custo da IA no período" valor={Number(robo.custo_usd).toLocaleString('pt-BR', { style: 'currency', currency: 'USD' })} detalhe="Cobrado em dólar pela Anthropic (inclui testes)" />
                 )}
               </div>
             </>
           )}
+
+          {dados.whatsapp && <SecaoWhatsApp whatsapp={dados.whatsapp} multi={hoteis.length > 1 && !hotel} hoteis={hoteis} onMudou={() => setRecarregar((n) => n + 1)} />}
 
           <section className="at-cartao">
             <div className="at-canal-topo">

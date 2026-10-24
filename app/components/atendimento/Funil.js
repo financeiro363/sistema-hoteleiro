@@ -41,6 +41,7 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
   const [editEtiqueta, setEditEtiqueta] = useState(null);
   const [horario, setHorario] = useState(HORARIO_PADRAO);
   const [alerta, setAlerta] = useState(15);
+  const [arquivar, setArquivar] = useState('');
   const [motor, setMotor] = useState('');
   const [abertura, setAbertura] = useState('');
   const [finalTexto, setFinalTexto] = useState('');
@@ -55,6 +56,7 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
   useEffect(() => {
     setHorario(pref?.horario_comercial || HORARIO_PADRAO);
     setAlerta(pref?.alerta_espera_minutos ?? 15);
+    setArquivar(pref?.arquivar_apos_dias ? String(pref.arquivar_apos_dias) : '');
     setMotor(pref?.motor_url || '');
     setAbertura(pref?.cotacao_texto_abertura || '');
     setFinalTexto(pref?.cotacao_texto_final || '');
@@ -179,6 +181,18 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
     executar(async () => verificar_(await supabase.from('atendimento_preferencias').upsert({
       hotel_id: Number(hotelId), horario_comercial: horario, alerta_espera_minutos: minutos, atualizado_em: new Date().toISOString(),
     }, { onConflict: 'hotel_id' })), 'Horário e alerta salvos.');
+  }
+
+  // ---- Arquivar sozinho ----
+  function salvarArquivar() {
+    const dias = arquivar === '' ? null : Math.trunc(Number(arquivar));
+    if (dias !== null && !(dias >= 1 && dias <= 90)) { setErro('Escolha entre 1 e 90 dias (ou “Nunca”).'); return; }
+    executar(async () => {
+      const { error } = await supabase.from('atendimento_preferencias')
+        .upsert({ hotel_id: Number(hotelId), arquivar_apos_dias: dias, atualizado_em: new Date().toISOString() }, { onConflict: 'hotel_id' });
+      if (error && /arquivar_apos_dias/i.test(error.message)) throw new Error('Falta rodar no Supabase o SQL dos ajustes (sql/caixa_de_entrada_ajustes.sql).');
+      verificar_({ error });
+    }, dias ? `Pronto: atendimentos sem conversa há mais de ${dias} dia(s) vão para Arquivados sozinhos.` : 'Arquivar sozinho desligado.');
   }
 
   // ---- Copiar para outro hotel ----
@@ -354,6 +368,19 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
         <input id="fa-alerta" className="campo" style={{ maxWidth: 140 }} type="number" min={1} max={1440} value={alerta} onChange={(e) => setAlerta(e.target.value)} />
         <div className="at-botoes">
           <button type="button" className="at-btn at-btn-verde" onClick={salvarPreferencias} disabled={ocupado}>Salvar horário e alerta</button>
+        </div>
+      </section>
+
+      <section className="at-cartao">
+        <h2>🗄️ Arquivar sozinho</h2>
+        <p className="at-dica" style={{ marginTop: 0 }}>Atendimentos sem nenhuma mensagem há mais de alguns dias saem da lista e vão para “Arquivados”. Se o cliente escrever de novo, a conversa volta sozinha.</p>
+        <label className="rotulo" htmlFor="fa-arquivar">Arquivar depois de quantos dias sem conversa</label>
+        <select id="fa-arquivar" className="at-select" value={arquivar} onChange={(e) => setArquivar(e.target.value)}>
+          <option value="">Nunca (arquivar só à mão)</option>
+          {[1, 2, 3, 5, 7, 10, 15, 20, 30, 60, 90].map((d) => <option key={d} value={d}>{d} dia{d > 1 ? 's' : ''}</option>)}
+        </select>
+        <div className="at-botoes">
+          <button type="button" className="at-btn at-btn-verde" onClick={salvarArquivar} disabled={ocupado}>Salvar</button>
         </div>
       </section>
     </>

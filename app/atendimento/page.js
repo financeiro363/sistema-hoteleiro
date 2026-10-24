@@ -79,6 +79,8 @@ export default function CaixaDeEntrada() {
   const [preferencias, setPreferencias] = useState([]);
   const [modelos, setModelos] = useState([]);
   const [robos, setRobos] = useState({}); // hotel_id → configuração do robô (Fase 4)
+  const [usoWhats, setUsoWhats] = useState([]); // franquia de mensagens grátis do mês (só ADMIN)
+  const [avisosFechados, setAvisosFechados] = useState({});
   const [solicitacoesNovas, setSolicitacoesNovas] = useState(0);
   const [faltaFase2, setFaltaFase2] = useState(false);
 
@@ -138,6 +140,33 @@ export default function CaixaDeEntrada() {
   const multiHotel = hoteisIds.length > 1;
   const nomesHoteis = useMemo(() => Object.fromEntries(equipe.hoteis.map((h) => [h.id, h.nome])), [equipe.hoteis]);
   const souAdminDeAlgum = souAdmin || equipe.hoteis.some((h) => h.souAdmin);
+
+  // ADMIN: aviso quando um número do WhatsApp está perto de passar das 1.000
+  // mensagens grátis do mês (depois disso a Meta cobra cada mensagem)
+  const idsAdmin = (equipe.hoteis.length ? equipe.hoteis.filter((h) => h.souAdmin).map((h) => h.id) : (souAdmin && usuario ? [Number(usuario.hotel_id)] : [])).join(',');
+  useEffect(() => {
+    if (!idsAdmin) return undefined;
+    let ativo = true;
+    const ler = async () => {
+      const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+      const { data } = await supabase.rpc('atendimento_whatsapp_uso', { p_hoteis: idsAdmin.split(',').map(Number), p_inicio: `${hoje.slice(0, 7)}-01`, p_fim: hoje });
+      if (!ativo) return;
+      const franquia = Number(data?.franquia || 1000);
+      setUsoWhats((data?.numeros || []).map((n) => ({ ...n, franquia, usadas: (n.meses || []).reduce((t, m) => t + Number(m.entregues || 0), 0), mes: hoje.slice(0, 7) }))
+        .filter((n) => n.usadas >= franquia * 0.9));
+    };
+    ler();
+    const id = setInterval(ler, 10 * 60 * 1000);
+    return () => { ativo = false; clearInterval(id); };
+  }, [idsAdmin]);
+  useEffect(() => {
+    try { setAvisosFechados(JSON.parse(sessionStorage.getItem('at-avisos-whats') || '{}')); } catch (e) { /* nada */ }
+  }, []);
+  function fecharAvisoWhats(chave) {
+    const novo = { ...avisosFechados, [chave]: true };
+    setAvisosFechados(novo);
+    try { sessionStorage.setItem('at-avisos-whats', JSON.stringify(novo)); } catch (e) { /* nada */ }
+  }
   const nomesTodos = useMemo(() => {
     const n = { ...equipe.nomes, ...Object.fromEntries(equipe.pessoas.map((p) => [p.id, p.nome])) };
     if (usuario && !n[usuario.id]) n[usuario.id] = usuario.nome;
@@ -526,6 +555,22 @@ export default function CaixaDeEntrada() {
           <button type="button" className="at-link-pequeno" onClick={() => setAviso('')}>Fechar</button>
         </div>
       )}
+      {usoWhats.filter((n) => !avisosFechados[`${n.canal_id}-${n.mes}-${n.usadas > n.franquia ? 'passou' : 'perto'}`]).map((n) => {
+        const chave = `${n.canal_id}-${n.mes}-${n.usadas > n.franquia ? 'passou' : 'perto'}`;
+        const preco = Number(n.preco || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        return (
+          <div key={chave} className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600', display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+            <span>
+              📱 O WhatsApp <strong>{n.nome}</strong> já enviou {n.usadas.toLocaleString('pt-BR')} mensagens este mês.{' '}
+              {n.usadas > n.franquia
+                ? `Passou das ${n.franquia.toLocaleString('pt-BR')} grátis: cada mensagem enviada agora custa cerca de ${preco}. Juntar as mensagens num balão só economiza.`
+                : `Faltam ${(n.franquia - n.usadas).toLocaleString('pt-BR')} para acabar as ${n.franquia.toLocaleString('pt-BR')} grátis do mês.`}
+              {' '}Veja os detalhes no Painel.
+            </span>
+            <button type="button" className="at-link-pequeno" onClick={() => fecharAvisoWhats(chave)}>Fechar</button>
+          </div>
+        );
+      })}
       {aba === 'conversas' && !erroLista && canais.length === 0 && (
         <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600' }}>
           Nenhum canal ligado ainda. {souAdmin ? 'Conecte o WhatsApp e as caixas de e-mail na aba “Canais”.' : 'Peça ao administrador para conectar o WhatsApp e os e-mails.'}

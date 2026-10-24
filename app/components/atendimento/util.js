@@ -382,6 +382,13 @@ export const ESTILOS_ATENDIMENTO = `
   /* Escrever */
   .at-escrever { border-top: 1px solid var(--borda); padding: 8px 10px 10px; background: #fff; position: relative; }
   .at-escrever.nota { background: #FFFBEA; }
+  .at-fila-juntar { border: 1px dashed #86C79A; background: #EEF9F1; border-radius: 9px; padding: 8px 10px; margin-bottom: 8px; }
+  .at-fila-texto { white-space: pre-wrap; font-size: 14px; color: var(--tinta); max-height: 120px; overflow: auto; }
+  .at-fila-acoes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 13px; color: #1E6B3A; }
+  .at-fila-acoes span { flex: 1 1 220px; }
+  .at-whats-barra { height: 10px; background: #E7EBF0; border-radius: 6px; overflow: hidden; margin: 6px 0 2px; }
+  .at-whats-barra > span { display: block; height: 100%; background: #2E9E5B; }
+  .at-whats-barra.passou > span { background: #D9822B; }
   .at-aviso-janela { font-size: 13px; background: #FFF4D6; color: #7A5600; border-radius: 9px; padding: 8px 10px; margin-bottom: 8px; display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
   .at-escrever-linha { display: flex; gap: 8px; align-items: flex-end; }
   .at-textarea { flex: 1; resize: none; min-height: 44px; max-height: 200px; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 12px; font-size: 15px; font-family: inherit; line-height: 1.4; }

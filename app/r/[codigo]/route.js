@@ -1,5 +1,6 @@
 // ============================================================================
 // LINK "RESERVAR AGORA" DA COTAÇÃO:  /r/<código>-<opção>
+// (/r/<código>-0 = botão "Reservar agora" do WhatsApp: motor sem quarto escolhido)
 // ============================================================================
 // O cliente clica no link da cotação → o sistema conta o clique, move o
 // cartão para "Reservar agora" e manda o cliente para o motor de reservas da
@@ -28,6 +29,7 @@ async function tratar(request, { params }) {
   const m = /^([A-Za-z0-9]{6,20})(?:-(\d{1,2}))?$/.exec(String(params?.codigo || ''));
   if (!m) return paginaSimples('Link inválido', 'Confira o link recebido ou fale com o hotel.');
   const codigo = m[1];
+  const geral = m[2] === '0';
   const item = m[2] ? Math.max(0, Number(m[2]) - 1) : 0;
   const agente = request.headers.get('user-agent') || '';
   const robo = request.method === 'HEAD' || !agente || ROBOS.test(agente);
@@ -51,7 +53,7 @@ async function tratar(request, { params }) {
   if (!dados) return paginaSimples('Cotação não encontrada', 'Este link de cotação não existe mais. Fale com o hotel para receber uma nova cotação.');
 
   const destino = montarLinkMotor(dados.motor_url, {
-    checkin: dados.checkin, checkout: dados.checkout, adultos: dados.adultos, criancas: dados.criancas, abreviacao: dados.abreviacao,
+    checkin: dados.checkin, checkout: dados.checkout, adultos: dados.adultos, criancas: dados.criancas, abreviacao: geral ? undefined : dados.abreviacao,
   });
   if (!destino) return paginaSimples('Quase lá!', 'Fale com o hotel para concluir a sua reserva.', 200);
   return new Response(null, { status: 302, headers: { location: destino, 'cache-control': 'no-store' } });

@@ -288,6 +288,15 @@ export function ModalModelo({ canal, destino, nomeContato, onFechar, onEnviado }
 
 // ---------------------------------------------------------------------------
 // Caixa de escrever
+// Juntar mensagens (WhatsApp): desde 1º/10/2026 a Meta cobra cada mensagem
+// enviada. Depois do Enter a mensagem espera alguns segundos; o que a pessoa
+// escrever nesse tempo vai junto, no mesmo balão. Cada um pode desligar.
+const ESPERA_JUNTAR_S = 6;
+const CHAVE_JUNTAR = 'at-juntar-mensagens';
+function lerJuntar() {
+  try { return localStorage.getItem(CHAVE_JUNTAR) !== 'nao'; } catch (e) { return true; }
+}
+
 function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, janelaAberta, onEnviado, onAbrirModelo, onAbrirCotacao }) {
   const [texto, setTexto] = useState('');
   const [htmlModelo, setHtmlModelo] = useState(null); // e-mail com modelo formatado
@@ -304,12 +313,99 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
   const campoRef = useRef(null);
   const arquivoRef = useRef(null);
   const ehEmail = canal?.tipo === 'EMAIL';
+  // Fila de mensagens esperando para sair juntas
+  const [juntar, setJuntar] = useState(true);
+  const [fila, setFila] = useState(null); // { conversaId, textos: [] }
+  const [restante, setRestante] = useState(0);
+  const filaRef = useRef(null);
+  const prazoRef = useRef(0);
+  const relogioRef = useRef(null);
+  const conversaRef = useRef(conversa.id);
+  conversaRef.current = conversa.id;
+  const tokenRef = useRef(null); // para mandar a fila mesmo se a pessoa fechar a aba
+  useEffect(() => { setJuntar(lerJuntar()); }, []);
+
+  function pararRelogio() {
+    if (relogioRef.current) clearInterval(relogioRef.current);
+    relogioRef.current = null;
+  }
+
+  async function despacharFila() {
+    const f = filaRef.current;
+    if (!f) return;
+    filaRef.current = null;
+    setFila(null);
+    pararRelogio();
+    const junto = f.textos.join('\n');
+    try {
+      await chamarApi('/api/atendimento', { acao: 'enviar', conversaId: f.conversaId, texto: junto, nota: false });
+    } catch (e) {
+      setErro(e.message);
+      // Não perde o texto: volta para a caixa (se ainda for a mesma conversa)
+      if (f.conversaId === conversaRef.current) setTexto((t) => (t.trim() ? `${junto}\n${t}` : junto));
+    }
+    onEnviado();
+  }
+
+  function colocarNaFila(t) {
+    supabase.auth.getSession().then(({ data }) => { tokenRef.current = data?.session?.access_token || null; }).catch(() => {});
+    const atual = filaRef.current?.conversaId === conversa.id ? filaRef.current.textos : [];
+    filaRef.current = { conversaId: conversa.id, textos: [...atual, t] };
+    setFila(filaRef.current);
+    prazoRef.current = Date.now() + ESPERA_JUNTAR_S * 1000;
+    setRestante(ESPERA_JUNTAR_S);
+    pararRelogio();
+    relogioRef.current = setInterval(() => {
+      const falta = Math.ceil((prazoRef.current - Date.now()) / 1000);
+      if (falta <= 0) despacharFila();
+      else setRestante(falta);
+    }, 250);
+  }
+
+  function desfazerFila() {
+    const f = filaRef.current;
+    if (!f) return;
+    filaRef.current = null;
+    setFila(null);
+    pararRelogio();
+    const junto = f.textos.join('\n');
+    setTexto((t) => (t.trim() ? `${junto}\n${t}` : junto));
+    setTimeout(() => campoRef.current?.focus(), 0);
+  }
+
+  function trocarJuntar() {
+    const novo = !juntar;
+    setJuntar(novo);
+    try { localStorage.setItem(CHAVE_JUNTAR, novo ? 'sim' : 'nao'); } catch (e) { /* nada */ }
+    if (!novo) despacharFila();
+  }
+
+  // Saiu da conversa ou fechou a tela: o que estava esperando sai na hora
+  useEffect(() => () => { despacharFila(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    // Fechou a aba ou recarregou: manda com "keepalive" (o navegador termina o envio sozinho)
+    const aoSair = () => {
+      const f = filaRef.current;
+      if (!f || !tokenRef.current) return;
+      filaRef.current = null;
+      try {
+        fetch('/api/atendimento', {
+          method: 'POST', keepalive: true,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenRef.current}` },
+          body: JSON.stringify({ acao: 'enviar', conversaId: f.conversaId, texto: f.textos.join('\n'), nota: false }),
+        });
+      } catch (e) { /* nada */ }
+    };
+    window.addEventListener('pagehide', aoSair);
+    return () => window.removeEventListener('pagehide', aoSair);
+  }, []);
 
   // Rascunho por conversa (só neste navegador)
   useEffect(() => {
+    if (filaRef.current && filaRef.current.conversaId !== conversa.id) despacharFila();
     try { setTexto(sessionStorage.getItem(`at-rascunho-${conversa.id}`) || ''); } catch (e) { setTexto(''); }
     setAnexos([]); setErro(''); setNota(false); setCc(''); setMostrarCc(false); setHtmlModelo(null);
-  }, [conversa.id]);
+  }, [conversa.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     try { sessionStorage.setItem(`at-rascunho-${conversa.id}`, texto); } catch (e) { /* nada */ }
   }, [texto, conversa.id]);
@@ -366,7 +462,19 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
     if (enviando || subindo) return;
     const usandoModelo = ehEmail && !nota && htmlModelo !== null;
     const conteudo = usandoModelo ? htmlParaTextoTela(htmlModelo) : texto.trim();
-    if (!conteudo && !anexos.length) return;
+    if (!conteudo && !anexos.length) {
+      if (filaRef.current) despacharFila(); // Enter com a caixa vazia: manda o que está esperando
+      return;
+    }
+    // WhatsApp com "juntar" ligado: espera alguns segundos para ir junto com a próxima
+    if (juntar && canal?.tipo === 'WHATSAPP' && !nota && !anexos.length && !usandoModelo) {
+      colocarNaFila(conteudo);
+      setTexto('');
+      try { sessionStorage.removeItem(`at-rascunho-${conversa.id}`); } catch (e) { /* nada */ }
+      setTimeout(() => campoRef.current?.focus(), 0);
+      return;
+    }
+    if (filaRef.current && !nota) await despacharFila(); // mantém a ordem das mensagens
     setEnviando(true);
     setErro('');
     try {
@@ -444,10 +552,16 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
             title={ehEmail ? 'Usar um modelo de e-mail formatado' : 'Usar o texto de um modelo de e-mail'}>📄 Modelo de e-mail</button>
         )}
         {!nota && onAbrirCotacao && (
-          <button type="button" className="at-ferramenta at-ferramenta-destaque" onClick={onAbrirCotacao} disabled={canalDesligado}>💰 Cotação</button>
+          <button type="button" className="at-ferramenta at-ferramenta-destaque" onClick={() => { despacharFila(); onAbrirCotacao(); }} disabled={canalDesligado}>💰 Cotação</button>
         )}
         {canal?.tipo === 'WHATSAPP' && !nota && (
-          <button type="button" className="at-ferramenta" onClick={onAbrirModelo} disabled={canalDesligado}>📋 Modelo</button>
+          <button type="button" className="at-ferramenta" onClick={() => { despacharFila(); onAbrirModelo(); }} disabled={canalDesligado}>📋 Modelo</button>
+        )}
+        {canal?.tipo === 'WHATSAPP' && !nota && (
+          <button type="button" className={`at-ferramenta ${juntar ? 'ativa' : ''}`} onClick={trocarJuntar}
+            title={`Ligado: depois do Enter a mensagem espera ${ESPERA_JUNTAR_S} segundos, e o que você escrever nesse tempo vai no mesmo balão (a Meta cobra cada mensagem).`}>
+            ⏳ Juntar mensagens: {juntar ? 'ligado' : 'desligado'}
+          </button>
         )}
         {ehEmail && !nota && (
           <button type="button" className="at-ferramenta" onClick={() => setMostrarCc(!mostrarCc)}>Cc</button>
@@ -470,6 +584,17 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
             </span>
           ))}
           {subindo > 0 && <span className="at-anexo-chip">Enviando {subindo} arquivo(s)…</span>}
+        </div>
+      )}
+
+      {fila && fila.conversaId === conversa.id && (
+        <div className="at-fila-juntar" role="status">
+          <div className="at-fila-texto">{fila.textos.join('\n')}</div>
+          <div className="at-fila-acoes">
+            <span>⏳ Sai em {restante} s — o que você escrever agora vai junto, no mesmo balão.</span>
+            <button type="button" className="at-btn at-btn-verde" onClick={despacharFila}>Enviar agora</button>
+            <button type="button" className="at-btn" onClick={desfazerFila}>Desfazer</button>
+          </div>
         </div>
       )}
 
