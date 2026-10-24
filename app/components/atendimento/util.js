@@ -358,6 +358,15 @@ export const ESTILOS_ATENDIMENTO = `
   .at-nota { background: #FFF6D8; border: 1px dashed #D9B44A; border-radius: 10px; padding: 7px 12px; font-size: 13.5px; max-width: 80%; white-space: pre-wrap; }
   .at-nota-autor { font-size: 11.5px; color: #7A5600; font-weight: 700; }
   .at-sistema { font-size: 12px; color: var(--texto-suave); background: #ECEEEA; border-radius: 8px; padding: 4px 10px; }
+  .at-sistema-alerta { background: #FDEBD9; color: #8A3B00; }
+  .at-bolha-robo { box-shadow: inset 3px 0 0 #2a78d6, 0 1px 1px rgba(0,0,0,.06); }
+  .at-faixa-robo { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 7px 14px; background: #EAF2FC; border-bottom: 1px solid var(--borda); font-size: 13px; color: #1B4F8A; }
+  .at-faixa-robo.pausado { background: #FFF6E5; color: #7A4B00; }
+  .at-chip-robo { background: #EAF2FC; color: #1B4F8A; }
+  .at-chip-humano { background: #FDEBD9; color: #8A3B00; }
+  .at-teste { border: 1px solid var(--borda); border-radius: 12px; background: #F4F5F1; padding: 10px; height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .at-teste .at-linha { display: flex; }
+  .at-aba-badge.at-aba-badge-laranja { background: #E65100; }
   .at-email-cab { font-size: 12px; color: #4A5550; border-bottom: 1px solid rgba(0,0,0,.07); padding-bottom: 5px; margin-bottom: 6px; }
   .at-email-cab div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .at-citado { white-space: pre-wrap; color: #6A7570; border-left: 3px solid #C9CFC8; padding-left: 8px; margin-top: 6px; font-size: 13px; }

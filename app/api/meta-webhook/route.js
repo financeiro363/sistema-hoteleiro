@@ -12,11 +12,14 @@
 //
 // Responde 200 mesmo quando uma mensagem não pôde ser processada (o erro fica
 // registrado no canal), para a Meta não reenviar sem parar.
+// Robô (Fase 4): depois de gravar a mensagem, o robô responde aqui mesmo, se
+// estiver ligado. Se não der tempo, a função agendada tenta de novo.
 // Instagram e Facebook (Parte B) vão usar esta mesma rota.
 // ============================================================================
 
-import { clienteAdmin, lerSegredo } from '../../../lib/atendimento/servidor';
+import { clienteAdmin, lerSegredo, origemDoSite } from '../../../lib/atendimento/servidor';
 import { assinaturaValida, processarValorWebhook } from '../../../lib/atendimento/whatsapp';
+import { responderPendentes } from '../../../lib/atendimento/robo';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +41,10 @@ export async function GET(request) {
   }
 }
 
+const TEMPO_TOTAL_MS = 8500; // a Netlify encerra a função em 10 s
+
 export async function POST(request) {
+  const inicio = Date.now();
   const corpoBruto = await request.text();
   let corpo;
   try { corpo = JSON.parse(corpoBruto); } catch (e) { return new Response('JSON inválido', { status: 400 }); }
@@ -53,6 +59,7 @@ export async function POST(request) {
   const assinatura = request.headers.get('x-hub-signature-256') || '';
   const segredosConferidos = {}; // hotel_id → true/false
   let algumaInvalida = false;
+  const paraORobo = [];
 
   for (const entrada of corpo.entry || []) {
     for (const mudanca of entrada.changes || []) {
@@ -82,6 +89,7 @@ export async function POST(request) {
 
       try {
         const r = await processarValorWebhook(supabaseAdmin, canal, valor);
+        paraORobo.push(...r.conversas);
         await supabaseAdmin.from('atendimento_canais').update({
           status: r.erros.length ? 'ERRO' : 'OK',
           erro: r.erros.length ? r.erros.slice(0, 3).join(' | ').slice(0, 500) : null,
@@ -94,5 +102,11 @@ export async function POST(request) {
   }
 
   if (algumaInvalida) return new Response('Assinatura inválida', { status: 401 });
+
+  if (paraORobo.length) {
+    try {
+      await responderPendentes(supabaseAdmin, { origem: origemDoSite(request), prazo: inicio + TEMPO_TOTAL_MS, conversas: [...new Set(paraORobo)] });
+    } catch (e) { /* a função agendada tenta de novo */ }
+  }
   return Response.json({ ok: true });
 }

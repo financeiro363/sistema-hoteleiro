@@ -218,6 +218,7 @@ export function PainelIndicadores({ hoteis, nomes }) {
   const atendentes = [...(dados?.atendentes || [])];
   Object.keys(reservasPorAtendente).forEach((id) => { if (!atendentes.some((a) => String(a.id) === String(id))) atendentes.push({ id: Number(id), conversas: 0, enviadas: 0 }); });
   const hist = dados?.historico || null;
+  const robo = dados?.robo || null;
   const mesesHist = (hist?.meses || []).filter((m) => m.conversas > 0);
   const seriesHist = [
     { nome: 'Conversas', cor: CORES[0], valores: mesesHist.map((m) => m.conversas) },
@@ -295,6 +296,22 @@ export function PainelIndicadores({ hoteis, nomes }) {
                   </table>
                 </section>
               )}
+            </>
+          )}
+
+          {robo && (
+            <>
+              <h2 className="pi-secao">🤖 Robô com IA</h2>
+              <div className="pi-cartoes">
+                <Cartao rotulo="Conversas atendidas pelo robô" valor={fmt(robo.conversas)} detalhe={`${fmt(robo.fora_horario)} fora do horário comercial · ${fmt(robo.respostas)} resposta(s)`} />
+                <Cartao rotulo="Resolveu sem a equipe" valor={fmt(robo.resolveu_sozinho)} detalhe={`${pct(robo.resolveu_sozinho, robo.conversas)} das conversas · ${fmt(robo.passou_equipe)} passada(s) para a equipe`} />
+                <Cartao rotulo="Cotações enviadas pelo robô" valor={fmt(robo.cotacoes)} detalhe={`${fmt(robo.cliques)} com clique em Reservar · ${fmt(robo.sem_disponibilidade)} sem quarto`} />
+                <Cartao rotulo="Reservas das cotações do robô" valor={fmt(robo.reservas)} detalhe={reaisCurto(robo.valor_reservado)} />
+                <Cartao rotulo="Solicitações registradas" valor={fmt(robo.solicitacoes)} detalhe="Grupos, pedidos especiais, reservas existentes…" />
+                {robo.custo_usd != null && (
+                  <Cartao rotulo="Custo da IA no período" valor={Number(robo.custo_usd).toLocaleString('pt-BR', { style: 'currency', currency: 'USD' })} detalhe="Cobrado em dólar pela Anthropic (inclui testes)" />
+                )}
+              </div>
             </>
           )}
 
