@@ -32,6 +32,7 @@ function aplicarFiltros(q, { hotel, busca, mostrar, periodo }) {
   }
   if (mostrar === 'importados') r = r.eq('origem', 'IMPORTADO');
   if (mostrar === 'conversaram') r = r.neq('origem', 'IMPORTADO');
+  if (mostrar === 'reservaram') r = r.eq('ja_reservou', true);
   const termo = limparBusca(busca);
   if (termo) {
     const t = `%${termo}%`;
@@ -95,14 +96,23 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
       });
       setQtdConversas((antes) => ({ ...(mais ? antes : {}), ...Object.fromEntries(ids.map((id) => [id, contagem[id] || 0])) }));
       setAtendentes((antes) => ({ ...(mais ? antes : {}), ...ultimoAtendente }));
-      const { data: cots } = await supabase.from('atendimento_cotacoes').select('contato_id, status, cliques').in('contato_id', ids).limit(5000);
+      const [{ data: cots }, { data: hist }] = await Promise.all([
+        supabase.from('atendimento_cotacoes').select('contato_id, status, cliques').in('contato_id', ids).limit(5000),
+        supabase.from('atendimento_historico_externo').select('contato_id, pediu_cotacao, clicou_reservar, reservou').in('contato_id', ids).limit(10000),
+      ]);
       const porContato = {};
+      const pegar = (id) => { porContato[id] = porContato[id] || { cotacoes: 0, clicou: false, reservou: false }; return porContato[id]; };
       (cots || []).forEach((c) => {
-        const f = porContato[c.contato_id] || { cotacoes: 0, clicou: false, reservou: false };
-        f.cotacoes += c.status === 'CANCELADA' ? 0 : 1;
+        const f = pegar(c.contato_id);
+        f.cotacoes += ['CANCELADA', 'SEM_DISPONIBILIDADE'].includes(c.status) ? 0 : 1;
         f.clicou = f.clicou || c.cliques > 0;
         f.reservou = f.reservou || c.status === 'RESERVOU';
-        porContato[c.contato_id] = f;
+      });
+      (hist || []).forEach((h) => {
+        const f = pegar(h.contato_id);
+        f.cotacoes += h.pediu_cotacao ? 1 : 0;
+        f.clicou = f.clicou || h.clicou_reservar;
+        f.reservou = f.reservou || h.reservou;
       });
       setFunil((antes) => ({ ...(mais ? antes : {}), ...porContato }));
     }
@@ -174,6 +184,7 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
             <option value="">Todos</option>
             <option value="conversaram">Que já conversaram</option>
             <option value="importados">Importados de planilha</option>
+            <option value="reservaram">⭐ Já reservaram</option>
           </select>
         </label>
         <label><span>Ordem</span>
@@ -199,7 +210,7 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
           <tbody>
             {lista.map((c) => (
               <tr key={c.id} onClick={() => setAberto(c)} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') setAberto(c); }}>
-                <td data-rotulo="Nome"><span className="at-avatar at-avatar-mini">{iniciais(c.nome || c.email || c.telefone)}</span> <strong>{c.nome || '—'}</strong></td>
+                <td data-rotulo="Nome"><span className="at-avatar at-avatar-mini">{iniciais(c.nome || c.email || c.telefone)}</span> <strong>{c.nome || '—'}</strong>{c.ja_reservou ? <span title="Já reservou" aria-label="Já reservou"> ⭐</span> : null}</td>
                 <td data-rotulo="Telefone">{telefoneBonito(c.telefone) || '—'}</td>
                 <td data-rotulo="E-mail">{c.email || '—'}</td>
                 <td data-rotulo="Plataforma">{PLATAFORMA[c.origem] || c.origem || '—'}</td>
@@ -412,8 +423,51 @@ const CAMPOS = [
   ['observacoes', 'Observações', /(obs|nota|note|coment)/i],
 ];
 
+// ---- Planilha de CONVERSAS do Asksuite (uma linha por conversa) ------------
+const COLUNAS_ASKSUITE = {
+  criado: 'data de criacao', atualizado: 'data de atualizacao', plataforma: 'plataforma', fonte: 'fonte',
+  cotou: 'pediu cotacao?', clicou: 'clicou em "reservar agora"', cidade: 'cidade', pais: 'pais', idioma: 'idioma',
+  telefone: 'telefone do contato', email: 'email', nome: 'nome', reservaValor: 'ultima reserva - valor',
+  reservaCodigo: 'ultima reserva - codigo pms', reservaAgente: 'ultima reserva - agente',
+  chegada: 'data de chegada da ultima cotacao', partida: 'data de partida da ultima cotacao',
+  adultos: 'quantidade de adultos', criancas: 'quantidade de criancas', agente: 'agente', link: 'conversa',
+};
+const normalCab = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+function ehPlanilhaAsksuite(cab) {
+  const n = cab.map(normalCab);
+  return n.includes('pediu cotacao?') && n.includes('conversa') && n.includes('telefone do contato');
+}
+
+function montarAsksuite(cab, linhas) {
+  const n = cab.map(normalCab);
+  const indice = Object.fromEntries(Object.entries(COLUNAS_ASKSUITE).map(([k, v]) => [k, n.indexOf(v)]));
+  indice.reservaEm = n.findIndex((c) => c.startsWith('ultima reserva - ') && !/valor|codigo|agente/.test(c));
+  const usados = new Set(Object.values(indice));
+  // Colunas de etiqueta: só "Sim"/"Não"
+  const etiquetas = cab.map((c, i) => i).filter((i) => !usados.has(i) && String(cab[i] || '').trim()
+    && linhas.every((l) => !String(l[i] ?? '').trim() || /^(sim|não|nao)$/i.test(String(l[i]).trim())));
+  const vazio = (v) => !String(v ?? '').trim() || /^-{3,}$/.test(String(v).trim());
+  const registros = linhas.map((l) => {
+    const o = Object.fromEntries(Object.keys(indice).map((k) => [k, indice[k] >= 0 ? (l[indice[k]] ?? '') : '']));
+    o.etiquetas = etiquetas.filter((i) => /^sim$/i.test(String(l[i] ?? '').trim())).map((i) => String(cab[i]).trim());
+    return o;
+  });
+  const datas = registros.map((r) => String(r.criado).match(/(\d{2})\/(\d{2})\/(\d{4})/)).filter(Boolean).map((m) => `${m[3]}-${m[2]}-${m[1]}`).sort();
+  return {
+    registros,
+    total: registros.length,
+    comTelefone: registros.filter((r) => !vazio(r.telefone)).length,
+    comEmail: registros.filter((r) => !vazio(r.email)).length,
+    reservas: registros.filter((r) => !vazio(r.reservaCodigo)).length,
+    etiquetas: etiquetas.length,
+    de: datas[0], ate: datas[datas.length - 1],
+  };
+}
+
 function ImportarContatos({ hoteis, multiHotel, onFechar, onImportado }) {
-  const [hotelId, setHotelId] = useState(hoteis[0]?.id || '');
+  const [hotelId, setHotelId] = useState(multiHotel ? '' : (hoteis[0]?.id || ''));
+  const [asksuite, setAsksuite] = useState(null);
   const [linhas, setLinhas] = useState(null);
   const [colunas, setColunas] = useState([]);
   const [mapa, setMapa] = useState({});
@@ -434,6 +488,12 @@ function ImportarContatos({ hoteis, multiHotel, onFechar, onImportado }) {
     const tabela = lerCsv(texto);
     if (tabela.length < 2) { setErro('Não encontrei contatos nesse arquivo. Confira se a primeira linha tem os títulos das colunas.'); return; }
     const cab = tabela[0].map((c) => String(c).trim());
+    if (ehPlanilhaAsksuite(cab)) {
+      setLinhas(null);
+      setAsksuite(montarAsksuite(cab, tabela.slice(1)));
+      return;
+    }
+    setAsksuite(null);
     const novoMapa = {};
     CAMPOS.forEach(([chave, , regra]) => {
       const i = cab.findIndex((c, idx) => regra.test(c) && !Object.values(novoMapa).includes(idx) && !(chave === 'nome' && /hotel/i.test(c)));
@@ -444,7 +504,30 @@ function ImportarContatos({ hoteis, multiHotel, onFechar, onImportado }) {
     setLinhas(tabela.slice(1));
   }
 
+  async function importarAsksuite() {
+    if (!hotelId) { setErro('Escolha de qual hotel é esta planilha.'); return; }
+    setErro('');
+    const soma = { tipo: 'asksuite', linhas: 0, contatosNovos: 0, contatosAtualizados: 0, semContato: 0, limpeza: null };
+    const regs = asksuite.registros;
+    try {
+      for (let i = 0; i < regs.length; i += 400) {
+        setProgresso({ feito: i, total: regs.length });
+        const r = await chamarApi('/api/atendimento', {
+          acao: 'importar_asksuite', hotelId: Number(hotelId), linhas: regs.slice(i, i + 400), limpar: i === 0,
+        });
+        soma.linhas += r.linhas; soma.contatosNovos += r.contatosNovos; soma.contatosAtualizados += r.contatosAtualizados; soma.semContato += r.semContato;
+        if (r.limpeza) soma.limpeza = r.limpeza;
+      }
+      setResultado(soma);
+      onImportado();
+    } catch (e) {
+      setErro(/atendimento_historico_externo|ja_reservou|schema cache/i.test(e.message) ? 'Falta rodar no Supabase o SQL do histórico (caixa_de_entrada_historico.sql).' : e.message);
+    }
+    setProgresso(null);
+  }
+
   async function importar() {
+    if (!hotelId) { setErro('Escolha para qual hotel são os contatos.'); return; }
     if (mapa.telefone === undefined && mapa.email === undefined) { setErro('Escolha qual coluna tem o telefone ou o e-mail.'); return; }
     setErro('');
     const registros = linhas.map((l) => Object.fromEntries(CAMPOS.map(([chave]) => [chave, mapa[chave] !== undefined ? (l[mapa[chave]] ?? '') : ''])));
@@ -470,7 +553,7 @@ function ImportarContatos({ hoteis, multiHotel, onFechar, onImportado }) {
           <button type="button" className="at-btn" onClick={onFechar} aria-label="Fechar">✕</button>
         </div>
         <ol className="at-passos">
-          <li>No Asksuite, vá em <strong>Contatos → Exportar</strong> (ou use qualquer planilha com nome, telefone e e-mail).</li>
+          <li>No Asksuite, vá em <strong>Contatos → Exportar</strong> (ou use qualquer planilha com nome, telefone e e-mail). A planilha de <strong>Conversas</strong> do Asksuite também serve: o sistema reconhece sozinho e traz o histórico de cada cliente.</li>
           <li>Se o arquivo for Excel (.xlsx), salve como <strong>CSV</strong>.</li>
           <li>Escolha o arquivo abaixo, confira as colunas e clique em Importar.</li>
         </ol>
@@ -478,8 +561,9 @@ function ImportarContatos({ hoteis, multiHotel, onFechar, onImportado }) {
 
         {multiHotel && (
           <>
-            <label className="rotulo" htmlFor="ic-hotel">Importar para o hotel</label>
+            <label className="rotulo" htmlFor="ic-hotel">Esta planilha é do hotel</label>
             <select id="ic-hotel" className="campo" value={hotelId} onChange={(e) => setHotelId(e.target.value)}>
+              <option value="">— escolha o hotel —</option>
               {hoteis.map((h) => <option key={h.id} value={h.id}>{h.nome}</option>)}
             </select>
           </>
@@ -512,15 +596,35 @@ function ImportarContatos({ hoteis, multiHotel, onFechar, onImportado }) {
           </>
         )}
 
+        {asksuite && !resultado && (
+          <div className="at-canal" style={{ background: '#FAFBF9' }}>
+            <p style={{ fontWeight: 700, margin: '0 0 6px' }}>📜 Planilha de conversas do Asksuite reconhecida</p>
+            <div className="at-dado"><span>Conversas</span><span>{asksuite.total.toLocaleString('pt-BR')}{asksuite.de ? ` (${asksuite.de.split('-').reverse().join('/')} a ${asksuite.ate.split('-').reverse().join('/')})` : ''}</span></div>
+            <div className="at-dado"><span>Com telefone / com e-mail</span><span>{asksuite.comTelefone.toLocaleString('pt-BR')} / {asksuite.comEmail.toLocaleString('pt-BR')}</span></div>
+            <div className="at-dado"><span>Com reserva</span><span>{asksuite.reservas.toLocaleString('pt-BR')}</span></div>
+            <div className="at-dado"><span>Colunas de etiqueta</span><span>{asksuite.etiquetas}</span></div>
+            <p className="at-dica">Cada telefone ou e-mail vira um contato (sem duplicar), com as etiquetas que estavam “Sim” e a ⭐ de quem já reservou. Todas as conversas entram no histórico do contato e no Painel. Também corrige o que uma importação anterior desta planilha deixou (etiquetas “Sim/Não”, nome “---------” e e-mails automáticos). Pode importar de novo depois: atualiza, não duplica.</p>
+          </div>
+        )}
+
         {progresso && <p className="at-dica">Importando… {progresso.feito.toLocaleString('pt-BR')} de {progresso.total.toLocaleString('pt-BR')}</p>}
-        {resultado && (
+        {resultado?.tipo === 'asksuite' && (
+          <div className="aviso-erro" style={{ background: '#DDF2E4', color: '#1E6B3C', marginTop: 10 }}>
+            Pronto! {resultado.linhas.toLocaleString('pt-BR')} conversa(s) no histórico; {resultado.contatosNovos.toLocaleString('pt-BR')} contato(s) novo(s) e {resultado.contatosAtualizados.toLocaleString('pt-BR')} completado(s).
+            {resultado.semContato ? ` ${resultado.semContato.toLocaleString('pt-BR')} conversa(s) sem telefone nem e-mail entraram só nos números do Painel.` : ''}
+            {resultado.limpeza && (resultado.limpeza.etiquetas || resultado.limpeza.nomes || resultado.limpeza.sistema || resultado.limpeza.emails)
+              ? ` Limpeza: ${resultado.limpeza.etiquetas} etiqueta(s) “Sim/Não” corrigida(s), ${resultado.limpeza.nomes} nome(s) “---------” apagado(s), ${resultado.limpeza.sistema} contato(s) de e-mail automático removido(s) e ${resultado.limpeza.emails || 0} e-mail(s) automático(s) tirado(s) de contatos com telefone.` : ''}
+          </div>
+        )}
+        {resultado && resultado.tipo !== 'asksuite' && (
           <div className="aviso-erro" style={{ background: '#DDF2E4', color: '#1E6B3C', marginTop: 10 }}>
             Pronto! {resultado.novos} contato(s) novo(s), {resultado.atualizados} completado(s){resultado.ignorados ? ` e ${resultado.ignorados} linha(s) sem telefone nem e-mail ignorada(s)` : ''}.
           </div>
         )}
         {erro && <div className="aviso-erro" style={{ marginTop: 10 }}>{erro}</div>}
         <div className="at-botoes">
-          {!resultado && <button type="button" className="at-btn at-btn-verde" onClick={importar} disabled={!linhas || !!progresso}>Importar</button>}
+          {!resultado && asksuite && <button type="button" className="at-btn at-btn-verde" onClick={importarAsksuite} disabled={!!progresso}>Importar histórico do Asksuite</button>}
+          {!resultado && !asksuite && <button type="button" className="at-btn at-btn-verde" onClick={importar} disabled={!linhas || !!progresso}>Importar</button>}
           <button type="button" className="at-btn" onClick={onFechar}>{resultado ? 'Fechar' : 'Cancelar'}</button>
         </div>
       </div>

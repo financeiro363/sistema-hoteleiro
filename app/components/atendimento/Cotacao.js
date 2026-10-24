@@ -124,6 +124,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
             {resultado.itens.length === 0 ? (
               <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600', marginTop: 10 }}>
                 Nenhum quarto disponível para {dataBR(resultado.checkin)} a {dataBR(resultado.checkout)} com {Number(adultos) + Number(criancas)} hóspede(s). Tente outras datas.
+                {' '}O pedido ficou registrado como demanda perdida (etiqueta “Indisponibilidade na cotação”).
               </div>
             ) : (
               <div className="ct-quartos">
@@ -198,6 +199,7 @@ const STATUS_COTACAO = {
   CLICOU: ['Clicou em Reservar agora', 'at-chip-pendente'],
   RESERVOU: ['Reservou ✓', 'at-chip-resolvida'],
   CANCELADA: ['Não enviada', 'at-chip-atrasada'],
+  SEM_DISPONIBILIDADE: ['Sem disponibilidade', 'at-chip-atrasada'],
 };
 
 export function ListaCotacoes({ conversa }) {
@@ -223,7 +225,7 @@ export function ListaCotacoes({ conversa }) {
               <strong>{dataBR(c.checkin)} a {dataBR(c.checkout)}</strong>
               <span className={`at-chip ${classe}`}>{rotulo}</span>
             </div>
-            <small>{c.adultos} adulto(s){c.criancas ? `, ${c.criancas} criança(s)` : ''}{c.quartos > 1 ? `, ${c.quartos} quartos` : ''} · enviada {dataHora(c.criado_em)}</small>
+            <small>{c.adultos} adulto(s){c.criancas ? `, ${c.criancas} criança(s)` : ''}{c.quartos > 1 ? `, ${c.quartos} quartos` : ''} · {c.status === 'SEM_DISPONIBILIDADE' ? 'procurada' : 'enviada'} {dataHora(c.criado_em)}</small>
             {(c.itens || []).map((i, n) => (
               <div key={n} className="at-dado"><span>{i.nome}{c.item_clicado === n && c.cliques ? ' 🖱️' : ''}</span><span>{reais(i.total)}</span></div>
             ))}

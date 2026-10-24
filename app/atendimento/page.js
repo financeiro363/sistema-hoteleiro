@@ -78,6 +78,7 @@ export default function CaixaDeEntrada() {
   const [faltaFase2, setFaltaFase2] = useState(false);
 
   const [conversas, setConversas] = useState([]);
+  const [reservaram, setReservaram] = useState(new Set()); // contatos com ⭐
   const [carregandoLista, setCarregandoLista] = useState(true);
   const [erroLista, setErroLista] = useState('');
   const [aviso, setAviso] = useState('');
@@ -226,6 +227,11 @@ export default function CaixaDeEntrada() {
     } else {
       setErroLista('');
       setConversas(data || []);
+      const ids = [...new Set((data || []).map((c) => c.contato_id).filter(Boolean))];
+      if (ids.length) {
+        const { data: ct } = await supabase.from('atendimento_contatos').select('id').eq('ja_reservou', true).in('id', ids.slice(0, 600));
+        setReservaram(new Set((ct || []).map((x) => x.id)));
+      }
     }
     setCarregandoLista(false);
   }, [usuario, montarConsulta, visao]);
@@ -633,7 +639,7 @@ export default function CaixaDeEntrada() {
                 <Quadro
                   conversas={conversas} etapas={etapas} etiquetasPorId={etiquetasPorId} nomesHoteis={nomesHoteis}
                   multiHotel={multiHotel} nomes={nomes} usuarioId={usuario.id} alertas={alertas} agora={agora}
-                  selecionadaId={selecionadaId} onAbrir={abrirConversa} onMover={moverConversa} limite={LIMITE_QUADRO}
+                  selecionadaId={selecionadaId} onAbrir={abrirConversa} onMover={moverConversa} limite={LIMITE_QUADRO} reservaram={reservaram}
                 />
               )}
               {selecionada && (
@@ -663,6 +669,7 @@ export default function CaixaDeEntrada() {
                       etiquetasPorId={etiquetasPorId}
                       alertaMinutos={alertas[c.hotel_id]}
                       agora={agora}
+                      jaReservou={reservaram.has(c.contato_id)}
                       onAbrir={() => abrirConversa(c.id)}
                     />
                   ))}

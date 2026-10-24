@@ -445,6 +445,7 @@ export const ESTILOS_ATENDIMENTO = `
   .at-chip-espera { background: #FFF4D6; color: #7A5600; }
   .at-chip-atrasada { background: #FDECEC; color: #B3261E; }
   .at-chip-ad { background: #E3EEFB; color: #1D4E89; }
+  .at-chip-estrela { background: #FFF1C2; color: #6B4E00; }
   .at-espera-alerta { color: #B3261E !important; font-weight: 700; }
   .at-bolinha { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; flex-shrink: 0; }
   .at-etq { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #fff; border: 1px solid var(--borda); color: var(--tinta); white-space: nowrap; }

@@ -38,6 +38,7 @@ function intervalo(periodo, de, ate) {
   if (periodo === '6m') { const [a, m] = voltar(5); return [primeiroDia(a, m), hoje]; }
   if (periodo === '12m') { const [a, m] = voltar(11); return [primeiroDia(a, m), hoje]; }
   if (periodo === 'ano') return [`${ano}-01-01`, hoje];
+  if (periodo === '24m') { const [a, m] = voltar(23); return [primeiroDia(a, m), hoje]; }
   return [de || hoje, ate || hoje];
 }
 
@@ -50,6 +51,11 @@ function minutosTexto(min) {
   return `${Math.round(h / 24)} dias`;
 }
 
+const NOMES_CANAL = { WHATSAPP: 'WhatsApp', INSTAGRAM: 'Instagram', EMAIL: 'E-mail', BOOKING: 'Mensagens do Booking.com', SITE: 'Chat do site', FACEBOOK: 'Facebook' };
+function nomeCanal(f) {
+  const t = String(f || '').trim();
+  return NOMES_CANAL[t.toUpperCase().replace(/[^A-Z]/g, '')] || t || 'Não informado';
+}
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
 const reaisCurto = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 
@@ -208,7 +214,16 @@ export function PainelIndicadores({ hoteis, nomes }) {
   const seriesHora = [{ nome: 'Atendimentos', cor: CORES[0], valores: horas.map((h) => Number(dados?.por_hora?.[h] || 0)) }];
   const canais = Object.entries(dados?.canais || {}).sort((a, b) => b[1] - a[1]);
   const maxCanal = Math.max(1, ...canais.map(([, n]) => n));
-  const atendentes = dados?.atendentes || [];
+  const reservasPorAtendente = Object.fromEntries((dados?.cotacoes?.reservas_por_atendente || []).map((x) => [x.id, x.reservas]));
+  const atendentes = [...(dados?.atendentes || [])];
+  Object.keys(reservasPorAtendente).forEach((id) => { if (!atendentes.some((a) => String(a.id) === String(id))) atendentes.push({ id: Number(id), conversas: 0, enviadas: 0 }); });
+  const hist = dados?.historico || null;
+  const mesesHist = (hist?.meses || []).filter((m) => m.conversas > 0);
+  const seriesHist = [
+    { nome: 'Conversas', cor: CORES[0], valores: mesesHist.map((m) => m.conversas) },
+    { nome: 'Cotações', cor: CORES[1], valores: mesesHist.map((m) => m.cotacoes) },
+    { nome: 'Reservas', cor: CORES[2], valores: mesesHist.map((m) => m.reservas) },
+  ];
 
   return (
     <div className={`pi ${carregando && dados ? 'pi-recarregando' : ''}`}>
@@ -221,6 +236,7 @@ export function PainelIndicadores({ hoteis, nomes }) {
             <option value="6m">Últimos 6 meses</option>
             <option value="12m">Últimos 12 meses</option>
             <option value="ano">Este ano</option>
+            <option value="24m">Últimos 24 meses</option>
             <option value="outro">Escolher datas…</option>
           </select>
         </label>
@@ -264,7 +280,21 @@ export function PainelIndicadores({ hoteis, nomes }) {
                 <Cartao rotulo="Clicaram em Reservar agora" valor={fmt(cot.clicadas)} detalhe={`${pct(cot.clicadas, cot.enviadas)} das cotações`} />
                 <Cartao rotulo="Reservaram" valor={fmt(cot.reservadas)} detalhe={`${pct(cot.reservadas, cot.enviadas)} das cotações · ${reaisCurto(cot.valor_reservado)}`} />
                 <Cartao rotulo="Reservas ligadas a conversas" valor={fmt(cot.reservas_detectadas)} detalhe="Encontradas na Cloudbeds pelo telefone ou e-mail" />
+                <Cartao rotulo="Pedidos sem disponibilidade" valor={fmt(cot.sem_disponibilidade)} detalhe="Cotações em que não havia quarto (demanda perdida)" />
               </div>
+              {(cot.datas_sem_disponibilidade || []).length > 0 && (
+                <section className="at-cartao">
+                  <h2>Datas mais procuradas sem quarto disponível</h2>
+                  <table className="at-tabela at-tabela-previa">
+                    <thead><tr><th>Entrada</th><th>Saída</th><th className="num">Pedidos</th></tr></thead>
+                    <tbody>
+                      {cot.datas_sem_disponibilidade.map((d) => (
+                        <tr key={`${d.checkin}-${d.checkout}`}><td>{d.checkin.split('-').reverse().join('/')}</td><td>{d.checkout.split('-').reverse().join('/')}</td><td className="num">{inteiro.format(d.pedidos)}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              )}
             </>
           )}
 
@@ -313,16 +343,53 @@ export function PainelIndicadores({ hoteis, nomes }) {
               <h2 style={{ marginTop: 18 }}>Por atendente</h2>
               {atendentes.length === 0 ? <p className="at-dica">Ninguém respondeu no período.</p> : (
                 <table className="at-tabela at-tabela-previa">
-                  <thead><tr><th>Atendente</th><th className="num">Conversas (responsável)</th><th className="num">Mensagens enviadas</th></tr></thead>
+                  <thead><tr><th>Atendente</th><th className="num">Conversas (responsável)</th><th className="num">Mensagens enviadas</th><th className="num">Reservas</th></tr></thead>
                   <tbody>
                     {atendentes.map((a) => (
-                      <tr key={a.id}><td>{nomes[a.id] || `Usuário #${a.id}`}</td><td className="num">{inteiro.format(a.conversas)}</td><td className="num">{inteiro.format(a.enviadas)}</td></tr>
+                      <tr key={a.id}><td>{nomes[a.id] || `Usuário #${a.id}`}</td><td className="num">{inteiro.format(a.conversas)}</td><td className="num">{inteiro.format(a.enviadas)}</td><td className="num">{inteiro.format(reservasPorAtendente[a.id] || 0)}</td></tr>
                     ))}
                   </tbody>
                 </table>
               )}
             </section>
           </div>
+          {hist && (
+            <>
+              <h2 className="pi-secao">📜 Histórico do Asksuite (importado)</h2>
+              <p className="at-dica" style={{ marginTop: -6 }}>Números da planilha de conversas exportada do Asksuite, no período escolhido. Ficam separados para não somar duas vezes com o que já entra pelo sistema.</p>
+              <div className="pi-cartoes">
+                <Cartao rotulo="Conversas" valor={fmt(hist.conversas)} detalhe={`${fmt(hist.pelo_robo)} atendidas pelo robô`} />
+                <Cartao rotulo="Pediram cotação" valor={fmt(hist.cotacoes)} detalhe={`${pct(hist.cotacoes, hist.conversas)} das conversas`} />
+                <Cartao rotulo="Clicaram em Reservar agora" valor={fmt(hist.cliques)} detalhe={`${pct(hist.cliques, hist.cotacoes)} das cotações`} />
+                <Cartao rotulo="Reservas" valor={fmt(hist.reservas)} detalhe={`${reaisCurto(hist.valor_reservado)} · ${fmt(hist.reservas_robo)} fechadas pelo robô`} />
+                <Cartao rotulo="Sem disponibilidade" valor={fmt(hist.sem_disponibilidade)} detalhe={`${pct(hist.sem_disponibilidade, hist.cotacoes)} das cotações`} />
+              </div>
+              <div className="at-grade">
+                <section className="at-cartao">
+                  <h2>Mês a mês (Asksuite)</h2>
+                  {mesesHist.length ? (
+                    <>
+                      <Legenda series={seriesHist} />
+                      <GraficoColunas titulo="Conversas, cotações e reservas por mês no Asksuite" categorias={mesesHist.map((m) => m.mes)} series={seriesHist}
+                        rotuloCategoria={rotuloMes} mostrarRotulosACada={mesesHist.length > 12 ? 2 : 1} />
+                    </>
+                  ) : <p className="at-dica">Sem conversas no período.</p>}
+                </section>
+                <section className="at-cartao">
+                  <h2>Por canal (Asksuite)</h2>
+                  <table className="at-tabela at-tabela-previa">
+                    <thead><tr><th>Canal</th><th className="num">Conversas</th><th className="num">Cotações</th><th className="num">Reservas</th></tr></thead>
+                    <tbody>
+                      {(hist.por_fonte || []).map((f) => (
+                        <tr key={f.fonte}><td>{nomeCanal(f.fonte)}</td><td className="num">{inteiro.format(f.conversas)}</td><td className="num">{inteiro.format(f.cotacoes)}</td><td className="num">{inteiro.format(f.reservas)}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              </div>
+            </>
+          )}
+
           <p className="at-dica">Cotações e reservas contam as conversas com as etiquetas “Cotação” e “Reservou”. Elas entram sozinhas quando o cartão é movido para essas etapas no Quadro (ou podem ser colocadas à mão na conversa).</p>
         </>
       )}
