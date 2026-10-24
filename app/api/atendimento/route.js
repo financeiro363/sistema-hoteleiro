@@ -19,33 +19,42 @@
 //   motor_detectar    → descobre o link do motor de reservas na Cloudbeds (ADMIN)
 //   reservas_verificar→ procura reservas novas na Cloudbeds e marca "Reservou"
 //   importar_asksuite → importa a planilha de conversas do Asksuite (histórico)
+//   robo_config       → liga/desliga e configura o robô com IA (ADMIN)
+//   robo_chave        → guarda (criptografada) e testa a chave da Anthropic (ADMIN)
+//   robo_info_hotel   → lê de novo os dados do hotel na Cloudbeds para o robô (ADMIN)
+//   robo_testar       → conversa de teste com o robô, sem enviar nada (ADMIN)
+//   robo_pendentes    → robô responde mensagens que ficaram sem resposta (agendada)
 // Acesso: ADMIN ou COLABORADOR com "Pode usar a Caixa de Entrada" — nos dois
 // hotéis, quando a pessoa tem vínculo com os dois.
 // ============================================================================
 
 import {
   autenticar, clienteAdmin, respostaErro, erroBanco, chamadaAgendadaValida, lerAnexo, guardarAnexo,
-  caminhoAnexo, PASTA_ANEXOS, resumoTexto, hotelPermitido, soDigitos,
+  caminhoAnexo, PASTA_ANEXOS, hotelPermitido, soDigitos,
 } from '../../../lib/atendimento/servidor';
 import {
-  tokenDoCanal, enviarTexto, enviarArquivo, enviarModelo, marcarComoLida, listarModelos, normalizarNumero,
-  obterConversaWhatsApp, formatarNumero, baixarMidia, variantesNumero,
+  tokenDoCanal, marcarComoLida, listarModelos, baixarMidia, variantesNumero,
 } from '../../../lib/atendimento/whatsapp';
 import {
-  tokenDaCaixa, sincronizarCaixa, montarEmail, enviarEmail, dadosParaResponder, assuntoDeResposta,
-  marcarFioComoLido, baixarAnexoGmail, listaDeEnderecos,
+  tokenDaCaixa, sincronizarCaixa, marcarFioComoLido, baixarAnexoGmail,
 } from '../../../lib/atendimento/gmail';
 import { conexaoCloudbeds, procurarReservas, detalheReserva } from '../../../lib/atendimento/cloudbeds';
 import {
-  buscarDisponibilidade, linkDoMotor, detectarMotor, novoCodigo, textoCotacao, htmlCotacao, limparHtml,
-  verificarReservasHotel, reais, dataBR,
+  buscarDisponibilidade, linkDoMotor, detectarMotor, verificarReservasHotel, reais, dataBR,
 } from '../../../lib/atendimento/cotacao';
+import {
+  enviarWhatsApp, enviarEmailDaConversa, enviarCotacao, registrarSemDisponibilidade, preferenciasCotacao,
+} from '../../../lib/atendimento/envio';
 import { origemDoSite } from '../../../lib/atendimento/servidor';
 import { importarLote, limparImportacaoAnterior } from '../../../lib/atendimento/asksuite';
+import {
+  pausar as pausarRobo, responderPendentes, atualizarInfosVelhas, atualizarInfoHotel, testarRobo, testarChave, CHAVE_SEGREDO,
+} from '../../../lib/atendimento/robo';
+import { MODELOS_IA, CANAIS_ROBO } from '../../../lib/atendimento/roboConfig';
+import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 
 export const dynamic = 'force-dynamic';
 
-const JANELA_WHATSAPP_MS = 24 * 60 * 60 * 1000;
 const LIMITE_ANEXOS_MB = { WHATSAPP: 100, EMAIL: 25 };
 const INTERVALO_MINIMO_SINCRONIZACAO_MS = 30 * 1000;
 
@@ -61,6 +70,16 @@ export async function POST(request) {
       const emails = await sincronizarEmails(supabaseAdmin, null, 60 * 1000);
       const reservas = await verificarReservasTodos(supabaseAdmin, null, false);
       return Response.json({ ...emails, reservas });
+    } catch (e) { return respostaErro(e.message, 500); }
+  }
+  // Robô: mensagens que ficaram sem resposta (o webhook não teve tempo)
+  if (corpo?.acao === 'robo_pendentes' && chamadaAgendadaValida(request)) {
+    try {
+      const supabaseAdmin = clienteAdmin();
+      const inicio = Date.now();
+      const r = await responderPendentes(supabaseAdmin, { origem: origemDoSite(request), prazo: inicio + 8500 });
+      const info = Date.now() - inicio < 4000 ? await atualizarInfosVelhas(supabaseAdmin) : null;
+      return Response.json({ ...r, infoAtualizada: info });
     } catch (e) { return respostaErro(e.message, 500); }
   }
 
@@ -86,6 +105,10 @@ export async function POST(request) {
       case 'cotacao_enviar': return await acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request);
       case 'motor_detectar': return await acaoMotorDetectar(supabaseAdmin, chamador, corpo);
       case 'importar_asksuite': return await acaoImportarAsksuite(supabaseAdmin, chamador, corpo);
+      case 'robo_config': return await acaoRoboConfig(supabaseAdmin, chamador, corpo);
+      case 'robo_chave': return await acaoRoboChave(supabaseAdmin, chamador, corpo);
+      case 'robo_info_hotel': return await acaoRoboInfoHotel(supabaseAdmin, chamador, corpo);
+      case 'robo_testar': return await acaoRoboTestar(supabaseAdmin, chamador, corpo, request);
       case 'reservas_verificar':
         return Response.json({ resultados: await verificarReservasTodos(supabaseAdmin, chamador.hoteis, true) });
       default: return respostaErro('Ação desconhecida.');
@@ -128,17 +151,6 @@ async function lerAnexosEnviados(supabaseAdmin, hotelId, anexos, tipoCanal) {
   return arquivos;
 }
 
-const metaAnexo = (a) => ({ nome: a.nome, mime: a.mime, tamanho: a.dados.length, caminho: a.caminho });
-
-async function gravarSaida(supabaseAdmin, chamador, conversa, campos) {
-  const { data, error } = await supabaseAdmin.from('atendimento_mensagens').insert({
-    hotel_id: conversa.hotel_id, conversa_id: conversa.id, direcao: 'SAIDA', enviado_por_id: chamador.id,
-    data_original: new Date().toISOString(), ...campos,
-  }).select().single();
-  if (error) throw error;
-  return data;
-}
-
 // ---------------------------------------------------------------- ENVIAR
 async function acaoEnviar(supabaseAdmin, chamador, corpo) {
   const texto = String(corpo.texto || '').replace(/\r\n/g, '\n').trim();
@@ -168,142 +180,20 @@ async function acaoEnviar(supabaseAdmin, chamador, corpo) {
   const arquivos = await lerAnexosEnviados(supabaseAdmin, canal.hotel_id, corpo.anexos, canal.tipo);
   if (!texto && !arquivos.length && !corpo.modelo && !corpo.html) return respostaErro('Escreva a mensagem ou escolha um anexo.');
 
+  const autor = { id: chamador.id };
   const mensagens = canal.tipo === 'WHATSAPP'
-    ? await enviarWhatsApp(supabaseAdmin, chamador, { canal, conversa, corpo, texto, arquivos })
-    : await enviarEmailDaConversa(supabaseAdmin, chamador, { canal, conversa, corpo, texto, arquivos });
+    ? await enviarWhatsApp(supabaseAdmin, autor, { canal, conversa, corpo, texto, arquivos })
+    : await enviarEmailDaConversa(supabaseAdmin, autor, { canal, conversa, corpo, texto, arquivos });
 
   // Quem responde vira o responsável, se a conversa estava sem ninguém
   const conversaFinal = mensagens.conversa;
   if (conversaFinal && !conversaFinal.responsavel_id) {
     await supabaseAdmin.from('atendimento_conversas').update({ responsavel_id: chamador.id }).eq('id', conversaFinal.id);
   }
+  // Alguém da equipe respondeu: o robô para de responder esta conversa
+  if (conversaFinal && mensagens.lista.some((m) => m.status_envio !== 'FALHOU')) await pausarRobo(supabaseAdmin, conversaFinal.id);
   if (mensagens.erro) return respostaErro(mensagens.erro, 400, { mensagens: mensagens.lista, conversaId: conversaFinal?.id });
   return Response.json({ sucesso: true, mensagens: mensagens.lista, conversaId: conversaFinal?.id });
-}
-
-async function enviarWhatsApp(supabaseAdmin, chamador, { canal, conversa, corpo, texto, arquivos }) {
-  const token = await tokenDoCanal(supabaseAdmin, canal);
-  const lista = [];
-  let para = conversa?.chave_externa;
-
-  // Conversa nova: o WhatsApp só deixa a empresa começar com um modelo aprovado
-  if (!conversa) {
-    para = normalizarNumero(corpo.para);
-    if (para.length < 12) return { lista, erro: 'Informe o número com DDD (ex.: 83 98888-7777).' };
-    if (!corpo.modelo?.nome) return { lista, erro: 'Para começar uma conversa no WhatsApp é preciso usar um modelo aprovado.' };
-  } else if (!corpo.modelo) {
-    const ultimaEntrada = conversa.ultima_entrada_em ? new Date(conversa.ultima_entrada_em).getTime() : 0;
-    if (Date.now() - ultimaEntrada > JANELA_WHATSAPP_MS) {
-      return { lista, conversa, erro: 'Já passaram mais de 24 horas desde a última mensagem do cliente. Pela regra do WhatsApp, agora só dá para enviar um modelo aprovado (botão "Modelo").' };
-    }
-  }
-
-  // Modelo (template)
-  if (corpo.modelo?.nome) {
-    const modelo = {
-      nome: String(corpo.modelo.nome), idioma: String(corpo.modelo.idioma || 'pt_BR'),
-      variaveisCorpo: (corpo.modelo.variaveisCorpo || []).map((v) => String(v ?? '').trim()),
-      variaveisCabecalho: (corpo.modelo.variaveisCabecalho || []).map((v) => String(v ?? '').trim()),
-    };
-    if ([...modelo.variaveisCorpo, ...modelo.variaveisCabecalho].some((v) => !v)) {
-      return { lista, conversa, erro: 'Preencha todas as variáveis do modelo.' };
-    }
-    let enviado;
-    try { enviado = await enviarModelo({ token, canal, para, modelo }); }
-    catch (e) {
-      if (conversa) lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, { tipo: 'modelo', texto: resumoTexto(corpo.modelo.textoFinal || modelo.nome, 2000), status_envio: 'FALHOU', erro: e.message }));
-      return { lista, conversa, erro: e.message };
-    }
-    if (!conversa) {
-      conversa = await obterConversaWhatsApp(supabaseAdmin, canal, enviado.waId || para, String(corpo.nome || '').trim() || null);
-    }
-    lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, {
-      tipo: 'modelo', texto: String(corpo.modelo.textoFinal || `[Modelo: ${modelo.nome}]`).slice(0, 4000),
-      para: formatarNumero(para), id_externo: enviado.idExterno, status_envio: 'ENVIADA',
-    }));
-    return { lista, conversa };
-  }
-
-  // Texto e/ou arquivos
-  const legendaNoArquivo = arquivos.length === 1 && texto && texto.length <= 1000;
-  try {
-    if (texto && !legendaNoArquivo) {
-      const r = await enviarTexto({ token, canal, para, texto, previa: !corpo.semPrevia });
-      lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, { tipo: 'texto', texto, id_externo: r.idExterno, status_envio: 'ENVIADA' }));
-    }
-    for (const arquivo of arquivos) {
-      const legenda = legendaNoArquivo ? texto : null;
-      const r = await enviarArquivo({ token, canal, para, arquivo, legenda });
-      const nomeTipo = { image: 'imagem', video: 'video', audio: 'audio', document: 'documento' }[r.tipo];
-      lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, {
-        tipo: nomeTipo, texto: legenda, anexos: [metaAnexo(arquivo)], id_externo: r.idExterno, status_envio: 'ENVIADA',
-      }));
-    }
-  } catch (e) {
-    lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, {
-      tipo: arquivos.length ? 'documento' : 'texto', texto: texto || null, anexos: arquivos.map(metaAnexo), status_envio: 'FALHOU', erro: e.message,
-    }));
-    return { lista, conversa, erro: e.message };
-  }
-  return { lista, conversa };
-}
-
-async function enviarEmailDaConversa(supabaseAdmin, chamador, { canal, conversa, corpo, texto, arquivos }) {
-  const token = await tokenDaCaixa(supabaseAdmin, canal);
-  const lista = [];
-  const cc = listaDeEnderecos(corpo.cc).join(', ');
-
-  let para;
-  let assunto;
-  let threadId = null;
-  let emResposta = null;
-  let referencias = null;
-  if (conversa) {
-    para = conversa.contato_endereco;
-    threadId = conversa.chave_externa;
-    const dados = await dadosParaResponder(token, threadId).catch(() => ({}));
-    emResposta = dados.emResposta || null;
-    referencias = dados.referencias || null;
-    assunto = assuntoDeResposta(dados.assunto || conversa.assunto);
-  } else {
-    para = listaDeEnderecos(corpo.para)[0];
-    assunto = String(corpo.assunto || '').trim();
-    if (!para) return { lista, erro: 'Informe um e-mail válido para o destinatário.' };
-    if (!assunto) return { lista, erro: 'Informe o assunto do e-mail.' };
-  }
-  const htmlCorpo = corpo.html ? limparHtml(corpo.html) : null;
-  if (!texto && !htmlCorpo) return { lista, conversa, erro: 'Escreva o texto do e-mail.' };
-
-  const { mime, html } = montarEmail({
-    de: canal.identificador, nomeRemetente: canal.config?.nomeExibicao || canal.nome, para, cc, assunto, texto, html: htmlCorpo,
-    assinaturaHtml: canal.config?.usarAssinatura === false ? null : canal.config?.assinatura || null,
-    emResposta, referencias, anexos: arquivos,
-  });
-
-  let enviado;
-  try { enviado = await enviarEmail({ token, threadId, mime }); }
-  catch (e) {
-    if (conversa) {
-      lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, {
-        tipo: 'email', texto: texto || null, html: htmlCorpo, para, cc: cc || null, assunto, anexos: arquivos.map(metaAnexo), status_envio: 'FALHOU', erro: e.message,
-      }));
-    }
-    return { lista, conversa, erro: e.message };
-  }
-
-  if (!conversa) {
-    const { data: nova, error } = await supabaseAdmin.from('atendimento_conversas').insert({
-      hotel_id: canal.hotel_id, canal_id: canal.id, canal_tipo: 'EMAIL', chave_externa: enviado.threadId,
-      contato_nome: String(corpo.nome || '').trim() || null, contato_endereco: para, assunto, status: 'ABERTA',
-    }).select().single();
-    if (error) throw error;
-    conversa = nova;
-  }
-  lista.push(await gravarSaida(supabaseAdmin, chamador, conversa, {
-    tipo: 'email', texto: texto || null, html, de: canal.identificador, para, cc: cc || null, assunto,
-    anexos: arquivos.map(metaAnexo), id_externo: `gmail:${enviado.id}`, status_envio: 'ENVIADA',
-  }));
-  return { lista, conversa };
 }
 
 // ---------------------------------------------------------------- LER
@@ -533,7 +423,10 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   if (error) throw error;
   const { data: cotacoes } = await supabaseAdmin.rpc('atendimento_painel_cotacoes', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   const { data: historico } = await supabaseAdmin.rpc('atendimento_painel_historico', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null }, inicio, fim });
+  const { data: robo } = await supabaseAdmin.rpc('atendimento_painel_robo', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
+  // Custo da IA só para quem é ADMIN de todos os hotéis escolhidos
+  const roboFinal = robo && !pedidos.every((h) => chamador.hoteisAdmin.includes(h)) ? { ...robo, custo_usd: null } : robo;
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS
@@ -641,18 +534,12 @@ async function acaoImportarContatos(supabaseAdmin, chamador, corpo) {
 }
 
 // ---------------------------------------------------------------- COTAÇÃO
-async function preferenciasCotacao(supabaseAdmin, hotelId) {
-  const { data } = await supabaseAdmin.from('atendimento_preferencias')
-    .select('cotacao_texto_abertura, cotacao_texto_final').eq('hotel_id', hotelId).maybeSingle();
-  return data || {};
-}
-
 async function acaoCotacaoBuscar(supabaseAdmin, chamador, corpo) {
   const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
   let cb;
   try { cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id); } catch (e) { return respostaErro(e.message); }
   const resultado = await buscarDisponibilidade(cb, corpo);
-  if (!resultado.itens.length) await registrarSemDisponibilidade(supabaseAdmin, chamador, conversa, resultado);
+  if (!resultado.itens.length) await registrarSemDisponibilidade(supabaseAdmin, { id: chamador.id }, conversa, resultado);
   const motor = await linkDoMotor(supabaseAdmin, cb, conversa.hotel_id);
   const pref = await preferenciasCotacao(supabaseAdmin, conversa.hotel_id);
   const { data: hotel } = await supabaseAdmin.from('hoteis').select('nome_fantasia').eq('id', conversa.hotel_id).maybeSingle();
@@ -667,54 +554,10 @@ async function acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request) {
   const canal = await carregarCanal(supabaseAdmin, chamador, conversa.canal_id);
   let cb;
   try { cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id); } catch (e) { return respostaErro(e.message); }
-
-  // Preço buscado de novo aqui (é sempre o preço do motor, sem alteração)
-  const resultado = await buscarDisponibilidade(cb, corpo);
-  const escolhidos = Array.isArray(corpo.tipos) ? corpo.tipos.map(String) : [];
-  const itens = resultado.itens.filter((i) => !escolhidos.length || escolhidos.includes(i.tipoId)).slice(0, 8);
-  if (!itens.length) return respostaErro('Os quartos escolhidos não estão mais disponíveis para essas datas. Busque de novo.');
-
-  const motor = await linkDoMotor(supabaseAdmin, cb, conversa.hotel_id);
-  if (!motor) {
-    return respostaErro('Falta o link do motor de reservas. O administrador coloca em Caixa de Entrada → Funil e etiquetas → Motor de reservas e cotação.');
-  }
-
-  const pref = await preferenciasCotacao(supabaseAdmin, conversa.hotel_id);
-  const { data: hotel } = await supabaseAdmin.from('hoteis').select('nome_fantasia').eq('id', conversa.hotel_id).maybeSingle();
-  const codigo = novoCodigo();
-  const origem = origemDoSite(request);
-  const links = itens.map((_, n) => `${origem}/r/${codigo}-${n + 1}`);
-  const dados = {
-    cot: resultado, itens, links,
-    abertura: String(corpo.abertura || '').trim() || pref.cotacao_texto_abertura,
-    final: String(corpo.final || '').trim() || pref.cotacao_texto_final,
-    nomeCliente: conversa.contato_nome, nomeHotel: hotel?.nome_fantasia,
-  };
-  const texto = textoCotacao(dados);
-  const valores = itens.map((i) => i.total);
-
-  // A cotação é gravada antes do envio: o link já tem que funcionar quando chegar
-  const { data: cotacao, error } = await supabaseAdmin.from('atendimento_cotacoes').insert({
-    hotel_id: conversa.hotel_id, conversa_id: conversa.id, contato_id: conversa.contato_id, codigo,
-    checkin: resultado.checkin, checkout: resultado.checkout, adultos: resultado.adultos, criancas: resultado.criancas, quartos: resultado.quartos,
-    itens: itens.map(({ tipoId, nome, abreviacao, total, porNoite, disponiveis, foto }) => ({ tipoId, nome, abreviacao, total, porNoite, disponiveis, foto })),
-    valor_minimo: Math.min(...valores), valor_maximo: Math.max(...valores), mensagem: texto, canal_tipo: canal.tipo, enviado_por_id: chamador.id,
-  }).select().single();
-  if (error) throw error;
-
-  const envio = canal.tipo === 'WHATSAPP'
-    ? await enviarWhatsApp(supabaseAdmin, chamador, { canal, conversa, corpo: { semPrevia: true }, texto, arquivos: [] })
-    : await enviarEmailDaConversa(supabaseAdmin, chamador, { canal, conversa, corpo: { html: htmlCotacao(dados) }, texto, arquivos: [] });
-  if (envio.erro) {
-    await supabaseAdmin.from('atendimento_cotacoes').update({ status: 'CANCELADA' }).eq('id', cotacao.id);
-    return respostaErro(envio.erro, 400, { mensagens: envio.lista });
-  }
-
-  await supabaseAdmin.from('atendimento_conversas').update({
-    valor_cotacao: Math.min(...valores), ...(conversa.responsavel_id ? {} : { responsavel_id: chamador.id }),
-  }).eq('id', conversa.id);
-  await supabaseAdmin.rpc('atendimento_avancar_etapa', { p_conversa: conversa.id, p_nome: 'Cotação' });
-  return Response.json({ sucesso: true, cotacao, mensagens: envio.lista });
+  const r = await enviarCotacao(supabaseAdmin, { id: chamador.id }, { conversa, canal, cb, pedido: corpo, origem: origemDoSite(request) });
+  if (r.erro) return respostaErro(r.erro, 400, r.mensagens ? { mensagens: r.mensagens } : {});
+  await pausarRobo(supabaseAdmin, conversa.id);
+  return Response.json({ sucesso: true, cotacao: r.cotacao, mensagens: r.mensagens });
 }
 
 async function acaoMotorDetectar(supabaseAdmin, chamador, corpo) {
@@ -746,28 +589,6 @@ async function verificarReservasTodos(supabaseAdmin, hoteis, forcar) {
   return resultados;
 }
 
-// Pedido de cotação sem quarto disponível: fica registrado (demanda perdida)
-async function registrarSemDisponibilidade(supabaseAdmin, chamador, conversa, r) {
-  try {
-    const { data: repetido } = await supabaseAdmin.from('atendimento_cotacoes').select('id')
-      .eq('conversa_id', conversa.id).eq('status', 'SEM_DISPONIBILIDADE').eq('checkin', r.checkin).eq('checkout', r.checkout)
-      .eq('adultos', r.adultos).gte('criado_em', new Date(Date.now() - 86400000).toISOString()).limit(1);
-    if (repetido?.length) return;
-    const { error } = await supabaseAdmin.from('atendimento_cotacoes').insert({
-      hotel_id: conversa.hotel_id, conversa_id: conversa.id, contato_id: conversa.contato_id, codigo: novoCodigo(),
-      checkin: r.checkin, checkout: r.checkout, adultos: r.adultos, criancas: r.criancas, quartos: r.quartos,
-      itens: [], status: 'SEM_DISPONIBILIDADE', enviado_por_id: chamador.id,
-    });
-    if (error) return;
-    await supabaseAdmin.rpc('atendimento_adicionar_etiqueta', { p_conversa: conversa.id, p_nome: 'Indisponibilidade na cotação' });
-    await supabaseAdmin.from('atendimento_mensagens').insert({
-      hotel_id: conversa.hotel_id, conversa_id: conversa.id, direcao: 'NOTA', tipo: 'sistema', enviado_por_id: chamador.id,
-      data_original: new Date().toISOString(),
-      texto: `🔎 Sem quarto disponível para ${dataBR(r.checkin)} a ${dataBR(r.checkout)} (${r.adultos} adulto(s)${r.criancas ? `, ${r.criancas} criança(s)` : ''}). Ficou registrado como demanda perdida.`,
-    });
-  } catch (e) { /* o registro é um extra; a busca continua */ }
-}
-
 // ---------------------------------------------------------------- HISTÓRICO DO ASKSUITE
 async function acaoImportarAsksuite(supabaseAdmin, chamador, corpo) {
   const hotelId = hotelPermitido(chamador, corpo.hotelId);
@@ -776,4 +597,77 @@ async function acaoImportarAsksuite(supabaseAdmin, chamador, corpo) {
   const limpeza = corpo.limpar ? await limparImportacaoAnterior(supabaseAdmin, hotelId) : null;
   const resultado = await importarLote(supabaseAdmin, hotelId, linhas);
   return Response.json({ sucesso: true, ...resultado, limpeza });
+}
+
+// ---------------------------------------------------------------- ROBÔ (FASE 4)
+function hotelDoAdmin(chamador, hotelId) {
+  const h = hotelPermitido(chamador, hotelId);
+  if (!chamador.hoteisAdmin.includes(h)) throw Object.assign(new Error('Só o administrador do hotel pode configurar o robô.'), { codigo: 'SEM_ACESSO' });
+  return h;
+}
+
+async function acaoRoboConfig(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  const c = corpo.config || {};
+  const modelo = MODELOS_IA[c.modelo] ? c.modelo : 'claude-haiku-5-5';
+  const canais = (Array.isArray(c.canais) ? c.canais : []).filter((t) => CANAIS_ROBO.some((x) => x.tipo === t && x.pronto));
+  const horas = Math.trunc(Number(c.horas_retomar));
+  const limite = Number(c.limite_mensal_usd);
+  const email = String(c.email_solicitacoes || '').trim().toLowerCase();
+  if (!(horas >= 1 && horas <= 168)) return respostaErro('“Voltar a responder depois de” tem que ser entre 1 e 168 horas.');
+  if (!(limite >= 0 && limite <= 5000)) return respostaErro('O limite de gasto tem que ser entre US$ 0 e US$ 5.000 por mês.');
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return respostaErro('Confira o e-mail que recebe as solicitações.');
+
+  if (c.ligado) {
+    if (!await lerSegredo(supabaseAdmin, hotelId, CHAVE_SEGREDO)) return respostaErro('Para ligar o robô, primeiro guarde a chave da Anthropic.');
+    const { data: conteudo } = await supabaseAdmin.from('atendimento_robo_conteudo').select('publicado').eq('hotel_id', hotelId).maybeSingle();
+    if (!Array.isArray(conteudo?.publicado) || !conteudo.publicado.length) return respostaErro('Para ligar o robô, primeiro publique o conteúdo do hotel (aba Conteúdo).');
+    if (!canais.length) return respostaErro('Marque pelo menos um canal em que o robô vai responder.');
+  }
+  const { data, error } = await supabaseAdmin.from('atendimento_robo').upsert({
+    hotel_id: hotelId, ligado: !!c.ligado, canais, modelo, horas_retomar: horas, limite_mensal_usd: limite,
+    nome_assistente: String(c.nome_assistente || '').trim().slice(0, 40) || null, email_solicitacoes: email || null,
+    atualizado_por_id: chamador.id, atualizado_em: new Date().toISOString(),
+  }, { onConflict: 'hotel_id' }).select().single();
+  if (error) throw error;
+  return Response.json({ sucesso: true, config: data });
+}
+
+async function acaoRoboChave(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  if (corpo.apagar) {
+    await supabaseAdmin.from('atendimento_segredos').delete().eq('hotel_id', hotelId).eq('canal_id', 0).eq('chave', CHAVE_SEGREDO);
+    await supabaseAdmin.from('atendimento_robo').upsert({ hotel_id: hotelId, ligado: false, chave_salva_em: null }, { onConflict: 'hotel_id' });
+    return Response.json({ sucesso: true });
+  }
+  const chave = String(corpo.chave || '').trim();
+  let usar = chave;
+  if (!chave) {
+    usar = await lerSegredo(supabaseAdmin, hotelId, CHAVE_SEGREDO);
+    if (!usar) return respostaErro('Cole a chave da Anthropic (começa com sk-ant-).');
+  } else if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(chave)) {
+    return respostaErro('Essa não parece uma chave da Anthropic. Ela começa com “sk-ant-” e é bem comprida. Copie de novo no console da Anthropic.');
+  }
+  const { data: config } = await supabaseAdmin.from('atendimento_robo').select('modelo').eq('hotel_id', hotelId).maybeSingle();
+  try { await testarChave(usar, MODELOS_IA[config?.modelo] ? config.modelo : 'claude-haiku-5-5'); }
+  catch (e) { return respostaErro(`A chave não funcionou: ${e.message}`); }
+  if (chave) {
+    await gravarSegredo(supabaseAdmin, hotelId, CHAVE_SEGREDO, chave);
+    await supabaseAdmin.from('atendimento_robo').upsert({ hotel_id: hotelId, chave_salva_em: new Date().toISOString() }, { onConflict: 'hotel_id' });
+  }
+  return Response.json({ sucesso: true, testada: true });
+}
+
+async function acaoRoboInfoHotel(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  try { return Response.json({ sucesso: true, info: await atualizarInfoHotel(supabaseAdmin, hotelId) }); }
+  catch (e) { return respostaErro(e.message); }
+}
+
+async function acaoRoboTestar(supabaseAdmin, chamador, corpo, request) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  try {
+    const r = await testarRobo(supabaseAdmin, hotelId, { mensagens: corpo.mensagens, usarRascunho: !!corpo.usarRascunho, origem: origemDoSite(request) });
+    return Response.json({ sucesso: true, ...r });
+  } catch (e) { return respostaErro(e.message); }
 }

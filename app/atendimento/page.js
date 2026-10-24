@@ -11,6 +11,7 @@
 //   - Contatos (lista, editar, juntar, importar e exportar planilha)
 //   - Painel (indicadores mês a mês)
 //   - Respostas prontas; Funil e etiquetas (ADMIN); Canais (ADMIN)
+//   - Fase 4: Solicitações (registradas pelo robô) e Robô com IA (ADMIN)
 // Os dois hotéis aparecem juntos para quem atende nos dois (vínculo do usuário).
 // Acesso: ADMIN, ou COLABORADOR com "Pode usar a Caixa de Entrada".
 // Atualiza ao vivo (Supabase Realtime) e, por garantia, a cada 20 segundos.
@@ -31,6 +32,8 @@ import { Contatos } from '../components/atendimento/Contatos';
 import { PainelIndicadores } from '../components/atendimento/Painel';
 import { FunilEtiquetas } from '../components/atendimento/Funil';
 import { ModelosEmail } from '../components/atendimento/ModelosEmail';
+import { Solicitacoes } from '../components/atendimento/Solicitacoes';
+import { RoboIA } from '../components/atendimento/Robo';
 
 const FILTROS = [
   ['abertas', 'Abertas'],
@@ -51,7 +54,7 @@ const PERIODOS = [
   ['90', 'Últimos 90 dias'],
 ];
 
-const ABAS = ['conversas', 'contatos', 'painel', 'respostas', 'modelos', 'funil', 'canais'];
+const ABAS = ['conversas', 'contatos', 'solicitacoes', 'painel', 'respostas', 'modelos', 'funil', 'robo', 'canais'];
 const FECHADAS = '(RESOLVIDA,ARQUIVADA)';
 const LIMITE_LISTA = 300;
 const LIMITE_QUADRO = 600;
@@ -75,6 +78,8 @@ export default function CaixaDeEntrada() {
   const [etiquetas, setEtiquetas] = useState([]);
   const [preferencias, setPreferencias] = useState([]);
   const [modelos, setModelos] = useState([]);
+  const [robos, setRobos] = useState({}); // hotel_id → configuração do robô (Fase 4)
+  const [solicitacoesNovas, setSolicitacoesNovas] = useState(0);
   const [faltaFase2, setFaltaFase2] = useState(false);
 
   const [conversas, setConversas] = useState([]);
@@ -146,13 +151,14 @@ export default function CaixaDeEntrada() {
       eq = await chamarApi('/api/atendimento', { acao: 'equipe' });
       setEquipe({ hoteis: eq.hoteis || [], pessoas: eq.pessoas || [], nomes: eq.nomes || {} });
     } catch (e) { /* segue com o hotel atual */ }
-    const [c, r, et, eg, pr, me] = await Promise.all([
+    const [c, r, et, eg, pr, me, rb] = await Promise.all([
       supabase.from('atendimento_canais').select('id, hotel_id, tipo, nome, endereco_exibicao, ativo, status, erro, ultima_sincronizacao, config, identificador').order('nome'),
       supabase.from('atendimento_respostas_prontas').select('*').order('atalho'),
       supabase.from('atendimento_etapas').select('*').order('ordem').order('id'),
       supabase.from('atendimento_etiquetas').select('*').order('nome'),
       supabase.from('atendimento_preferencias').select('*'),
       supabase.from('atendimento_modelos_email').select('*').order('categoria').order('nome'),
+      supabase.from('atendimento_robo').select('hotel_id, ligado, canais, horas_retomar, nome_assistente'),
     ]);
     if (c.error) setErroLista(/atendimento_|does not exist|schema cache/i.test(c.error.message) ? mensagemSemSql : 'Não foi possível carregar os canais: ' + c.error.message);
     setCanais(c.data || []);
@@ -162,6 +168,7 @@ export default function CaixaDeEntrada() {
     setEtiquetas(eg.data || []);
     setPreferencias(pr.data || []);
     setModelos(me.data || []);
+    setRobos(Object.fromEntries((rb.data || []).map((x) => [x.hotel_id, x])));
   }, []);
 
   // ---- Filtros → consulta ----------------------------------------------------
@@ -232,6 +239,8 @@ export default function CaixaDeEntrada() {
         const { data: ct } = await supabase.from('atendimento_contatos').select('id').eq('ja_reservou', true).in('id', ids.slice(0, 600));
         setReservaram(new Set((ct || []).map((x) => x.id)));
       }
+      const { count, error: erroSol } = await supabase.from('atendimento_solicitacoes').select('id', { count: 'exact', head: true }).eq('situacao', 'NOVA');
+      if (!erroSol) setSolicitacoesNovas(count || 0);
     }
     setCarregandoLista(false);
   }, [usuario, montarConsulta, visao]);
@@ -466,6 +475,7 @@ export default function CaixaDeEntrada() {
       nomeHotel={multiHotel ? nomesHoteis[selecionada.hotel_id] : null}
       nomeHotelReal={nomesHoteis[selecionada.hotel_id] || ''}
       modelos={modelos.filter((m) => m.hotel_id === selecionada.hotel_id)}
+      robo={robos[selecionada.hotel_id]}
       alertaMinutos={alertas[selecionada.hotel_id]}
       lateralAberta={lateralAberta}
       onAlternarLateral={() => setLateralAberta(!lateralAberta)}
@@ -496,10 +506,11 @@ export default function CaixaDeEntrada() {
           {[
             ['conversas', <>💬 Conversas{totalNaoLidas > 0 && <span className="at-aba-badge">{totalNaoLidas > 99 ? '99+' : totalNaoLidas}</span>}</>],
             ['contatos', '👥 Contatos'],
+            ['solicitacoes', <>📋 Solicitações{solicitacoesNovas > 0 && <span className="at-aba-badge at-aba-badge-laranja">{solicitacoesNovas > 99 ? '99+' : solicitacoesNovas}</span>}</>],
             ['painel', '📊 Painel'],
             ['respostas', '⚡ Respostas prontas'],
             ['modelos', '✉️ Modelos de e-mail'],
-            ...(souAdminDeAlgum ? [['funil', '🧩 Funil e etiquetas']] : []),
+            ...(souAdminDeAlgum ? [['funil', '🧩 Funil e etiquetas'], ['robo', '🤖 Robô (IA)']] : []),
             ...(souAdmin ? [['canais', '⚙️ Canais']] : []),
           ].map(([chave, rotulo]) => (
             <button key={chave} type="button" role="tab" aria-selected={aba === chave} className={`at-aba ${aba === chave ? 'ativa' : ''}`} onClick={() => setAba(chave)}>{rotulo}</button>
@@ -528,6 +539,18 @@ export default function CaixaDeEntrada() {
           nomes={nomes}
           onAbrirConversa={abrirConversa}
           onNovaConversa={(inicial) => { setAba('conversas'); setNovaConversa(inicial); }}
+        />
+      )}
+      {aba === 'solicitacoes' && (
+        <Solicitacoes
+          usuario={usuario} hoteis={equipe.hoteis.length ? equipe.hoteis : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual' }]}
+          multiHotel={multiHotel} nomes={nomes} onAbrirConversa={abrirConversa} onMudou={carregarLista}
+        />
+      )}
+      {aba === 'robo' && souAdminDeAlgum && (
+        <RoboIA
+          hoteis={equipe.hoteis.length ? equipe.hoteis.filter((h) => h.souAdmin) : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual', souAdmin: true }]}
+          hotelAtual={usuario.hotel_id} canais={canais} preferencias={preferencias} onMudou={carregarApoio}
         />
       )}
       {aba === 'painel' && (
@@ -639,7 +662,7 @@ export default function CaixaDeEntrada() {
                 <Quadro
                   conversas={conversas} etapas={etapas} etiquetasPorId={etiquetasPorId} nomesHoteis={nomesHoteis}
                   multiHotel={multiHotel} nomes={nomes} usuarioId={usuario.id} alertas={alertas} agora={agora}
-                  selecionadaId={selecionadaId} onAbrir={abrirConversa} onMover={moverConversa} limite={LIMITE_QUADRO} reservaram={reservaram}
+                  selecionadaId={selecionadaId} onAbrir={abrirConversa} onMover={moverConversa} limite={LIMITE_QUADRO} reservaram={reservaram} robos={robos}
                 />
               )}
               {selecionada && (
@@ -670,6 +693,7 @@ export default function CaixaDeEntrada() {
                       alertaMinutos={alertas[c.hotel_id]}
                       agora={agora}
                       jaReservou={reservaram.has(c.contato_id)}
+                      robo={robos[c.hotel_id]}
                       onAbrir={() => abrirConversa(c.id)}
                     />
                   ))}

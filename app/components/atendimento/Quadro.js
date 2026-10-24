@@ -14,10 +14,10 @@ import { useMemo, useState } from 'react';
 import {
   ICONE_CANAL, STATUS_CONVERSA, horaCurta, iniciais, primeiroNome, tempoDesde, minutosEsperando, chaveNome, dinheiro,
 } from './util';
-import { ChipEtiqueta } from './Conversa';
+import { ChipEtiqueta, roboPausado } from './Conversa';
 
 export function CartaoConversa({
-  c, ativo, compacto, nomeHotel, nomeResponsavel, souEu, etiquetasPorId, alertaMinutos, agora, onAbrir, extra, jaReservou,
+  c, ativo, compacto, nomeHotel, nomeResponsavel, souEu, etiquetasPorId, alertaMinutos, agora, onAbrir, extra, jaReservou, robo,
 }) {
   const nome = c.contato_nome || c.contato_endereco || 'Cliente';
   const espera = minutosEsperando(c, agora);
@@ -25,6 +25,9 @@ export function CartaoConversa({
   const etqs = (c.etiquetas || []).map((id) => etiquetasPorId[id]).filter(Boolean);
   const temAnuncio = !!c.origem || etqs.some((e) => chaveNome(e.nome) === 'ad');
   const mostrar = etqs.filter((e) => chaveNome(e.nome) !== 'ad');
+  const comRobo = robo?.ligado && (robo.canais || []).includes(c.canal_tipo);
+  const pausado = comRobo && roboPausado(c, robo, agora);
+  const chamouEquipe = pausado && ['PEDIU_HUMANO', 'ROBO_NAO_SABE', 'ERRO', 'LIMITE'].includes(c.robo_pausa_motivo);
 
   return (
     <div
@@ -54,6 +57,8 @@ export function CartaoConversa({
           {c.responsavel_id
             ? <span className="at-chip at-chip-resp">{souEu ? 'Comigo' : primeiroNome(nomeResponsavel || '—')}</span>
             : <span className="at-chip">Sem responsável</span>}
+          {comRobo && !pausado && c.robo_atendeu && <span className="at-chip at-chip-robo" title="O robô está atendendo esta conversa">🤖 Robô</span>}
+          {chamouEquipe && <span className="at-chip at-chip-humano" title="O robô passou esta conversa para a equipe">🙋 Chamou a equipe</span>}
           {jaReservou && <span className="at-chip at-chip-estrela" title="Este cliente já reservou antes">⭐ Já reservou</span>}
           {temAnuncio && <span className="at-chip at-chip-ad" title={c.origem?.titulo || 'Veio de anúncio'}>📣 AD</span>}
           {c.valor_cotacao ? <span className="at-chip">{dinheiro(c.valor_cotacao)}</span> : null}
@@ -82,7 +87,7 @@ export function colunasDoQuadro(etapas) {
 
 export function Quadro({
   conversas, etapas, etiquetasPorId, nomesHoteis, multiHotel, nomes, usuarioId, alertas, agora, selecionadaId,
-  onAbrir, onMover, limite, reservaram,
+  onAbrir, onMover, limite, reservaram, robos,
 }) {
   const colunas = useMemo(() => colunasDoQuadro(etapas), [etapas]);
   const chavePorEtapa = useMemo(() => Object.fromEntries((etapas || []).map((e) => [e.id, e.ativa ? chaveNome(e.nome) : null])), [etapas]);
@@ -159,6 +164,7 @@ export function Quadro({
                     alertaMinutos={alertas[c.hotel_id]}
                     agora={agora}
                     jaReservou={reservaram?.has(c.contato_id)}
+                    robo={robos?.[c.hotel_id]}
                     onAbrir={() => onAbrir(c.id)}
                     extra={(
                       <select

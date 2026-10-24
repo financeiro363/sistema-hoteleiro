@@ -151,8 +151,9 @@ function MensagemEmail({ m }) {
 
 function Mensagem({ m, nomeAtendente, nomeContato }) {
   if (m.direcao === 'NOTA') {
-    if (m.tipo === 'sistema') {
-      return <div className="at-linha nota"><div className="at-sistema">{m.texto} · {nomeAtendente(m.enviado_por_id)} · {soHora(m.data_original || m.criado_em)}</div></div>;
+    if (m.tipo === 'sistema' || m.tipo === 'robo' || m.tipo === 'robo_passou') {
+      const quem = m.enviado_pelo_robo ? '🤖 Robô' : nomeAtendente(m.enviado_por_id);
+      return <div className="at-linha nota"><div className={`at-sistema ${m.tipo === 'robo_passou' ? 'at-sistema-alerta' : ''}`}>{m.texto} · {quem} · {soHora(m.data_original || m.criado_em)}</div></div>;
     }
     return (
       <div className="at-linha nota">
@@ -164,11 +165,13 @@ function Mensagem({ m, nomeAtendente, nomeContato }) {
     );
   }
   const saida = m.direcao === 'SAIDA';
-  const autor = saida ? (m.enviado_por_id ? nomeAtendente(m.enviado_por_id) : (m.tipo === 'email' ? 'Enviado pelo Gmail' : 'Hotel')) : (nomeContato || m.de || 'Cliente');
+  const autor = saida
+    ? (m.enviado_pelo_robo ? '🤖 Robô' : m.enviado_por_id ? nomeAtendente(m.enviado_por_id) : (m.tipo === 'email' ? 'Enviado pelo Gmail' : 'Hotel'))
+    : (nomeContato || m.de || 'Cliente');
   const anexos = Array.isArray(m.anexos) ? m.anexos : [];
   return (
     <div className={`at-linha ${saida ? 'saida' : 'entrada'}`}>
-      <div className={`at-bolha ${m.tipo === 'email' ? 'at-bolha-email' : ''} ${m.status_envio === 'FALHOU' ? 'falhou' : ''}`}>
+      <div className={`at-bolha ${m.tipo === 'email' ? 'at-bolha-email' : ''} ${m.status_envio === 'FALHOU' ? 'falhou' : ''} ${m.enviado_pelo_robo ? 'at-bolha-robo' : ''}`}>
         <div className="at-bolha-autor">{autor}{m.tipo === 'modelo' ? ' · modelo' : ''}</div>
         {m.tipo === 'email' ? <MensagemEmail m={m} /> : null}
         {anexos.length > 0 && (
@@ -510,10 +513,48 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
 }
 
 // ---------------------------------------------------------------------------
+// Robô (Fase 4): quem está atendendo esta conversa
+const MOTIVOS_PAUSA_TELA = {
+  ASSUMIU: 'alguém da equipe assumiu',
+  PEDIU_HUMANO: 'o cliente pediu para falar com uma pessoa',
+  ROBO_NAO_SABE: 'o robô não sabia responder e chamou a equipe',
+  LIMITE: 'o robô chegou ao limite de gasto do mês',
+  ERRO: 'o robô teve um problema para responder',
+};
+
+export function roboPausado(conversa, robo, agora = Date.now()) {
+  if (!conversa?.robo_pausado_em) return false;
+  const ultimaEquipe = Math.max(new Date(conversa.robo_pausado_em).getTime(), conversa.ultima_saida_em ? new Date(conversa.ultima_saida_em).getTime() : 0);
+  return agora - ultimaEquipe < (Number(robo?.horas_retomar) || 12) * 3600000;
+}
+
+function FaixaRobo({ conversa, robo, usuario, salvando, onAlterar }) {
+  if (!robo?.ligado || !(robo.canais || []).includes(conversa.canal_tipo)) return null;
+  const pausado = roboPausado(conversa, robo);
+  if (!pausado) {
+    return (
+      <div className="at-faixa-robo">
+        <span>🤖 O robô está atendendo esta conversa{conversa.robo_ultima_resposta_em ? ` (última resposta às ${soHora(conversa.robo_ultima_resposta_em)})` : ''}. Ao responder, você assume.</span>
+        <button type="button" className="at-btn" disabled={salvando}
+          onClick={() => onAlterar({ robo_pausado_em: new Date().toISOString(), robo_pausa_motivo: 'ASSUMIU', ...(conversa.responsavel_id ? {} : { responsavel_id: usuario.id }) })}>
+          ✋ Assumir atendimento
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="at-faixa-robo pausado">
+      <span>✋ Robô pausado: {MOTIVOS_PAUSA_TELA[conversa.robo_pausa_motivo] || 'a equipe está atendendo'}. Ele volta quando a conversa for resolvida ou depois de {Number(robo.horas_retomar) || 12} h sem a equipe escrever.</span>
+      <button type="button" className="at-btn" disabled={salvando} onClick={() => onAlterar({ robo_pausado_em: null, robo_pausa_motivo: null })}>↩ Devolver ao robô</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Conversa completa
 export function Conversa({
   conversa, canal, mensagens, carregando, usuario, atendentes, nomes, respostas, etapas, etiquetas, nomeHotel,
-  alertaMinutos, onRecarregar, onVoltar, onAlternarLateral, lateralAberta, rotuloVoltar, modelos, nomeHotelReal,
+  alertaMinutos, onRecarregar, onVoltar, onAlternarLateral, lateralAberta, rotuloVoltar, modelos, nomeHotelReal, robo,
 }) {
   const [mostrarModelo, setMostrarModelo] = useState(false);
   const [mostrarCotacao, setMostrarCotacao] = useState(false);
@@ -602,6 +643,7 @@ export function Conversa({
         </div>
       </div>
       <DetalhesConversa conversa={conversa} etapas={etapas} etiquetas={etiquetas} salvando={salvando} onAlterar={alterar} />
+      <FaixaRobo conversa={conversa} robo={robo} usuario={usuario} salvando={salvando} onAlterar={alterar} />
       {erro && <div className="aviso-erro" style={{ margin: 8 }}>{erro}</div>}
 
       <div className="at-mensagens" ref={listaRef}>
