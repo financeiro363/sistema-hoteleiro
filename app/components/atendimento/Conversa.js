@@ -19,6 +19,7 @@ import {
 } from './util';
 import { ModalCotacao, ListaCotacoes } from './Cotacao';
 import { EditorHtml, EscolherModelo, aplicarVariaveisModelo, htmlParaTextoTela } from './ModelosEmail';
+import { montarTextoModelo, rotuloVariavel, baseDoLink } from '../../../lib/atendimento/modelosTexto';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 
@@ -198,6 +199,7 @@ export function ModalModelo({ canal, destino, nomeContato, onFechar, onEnviado }
   const [escolhido, setEscolhido] = useState(null);
   const [varsCorpo, setVarsCorpo] = useState([]);
   const [varsCab, setVarsCab] = useState([]);
+  const [varsBotao, setVarsBotao] = useState([]);
   const [enviando, setEnviando] = useState(false);
 
   useEffect(() => {
@@ -214,23 +216,24 @@ export function ModalModelo({ canal, destino, nomeContato, onFechar, onEnviado }
     const primeiro = String(nomeContato || '').trim().split(/\s+/)[0] || '';
     setVarsCorpo(Array.from({ length: m?.variaveisCorpo || 0 }, (_, i) => (i === 0 ? primeiro : '')));
     setVarsCab(Array.from({ length: m?.variaveisCabecalho || 0 }, () => ''));
+    setVarsBotao((m?.botoesLink || []).map(() => ''));
   }
 
-  const trocar = (texto, valores) => String(texto || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => valores[Number(n) - 1] || `{{${n}}}`);
-  const previa = escolhido
-    ? [escolhido.cabecalho ? `*${trocar(escolhido.cabecalho, varsCab)}*` : null, trocar(escolhido.corpo, varsCorpo), escolhido.rodape ? `_${escolhido.rodape}_` : null]
-      .filter(Boolean).join('\n')
-    : '';
+  const previa = escolhido ? montarTextoModelo(escolhido, { cabecalho: varsCab, corpo: varsCorpo, botoes: varsBotao }) : '';
 
   async function enviar() {
     if (!escolhido) { setErro('Escolha um modelo.'); return; }
-    if ([...varsCorpo, ...varsCab].some((v) => !String(v).trim())) { setErro('Preencha todas as variáveis.'); return; }
+    if ([...varsCorpo, ...varsCab, ...varsBotao].some((v) => !String(v).trim())) { setErro('Preencha todas as variáveis.'); return; }
     setEnviando(true);
     setErro('');
     try {
       const r = await chamarApi('/api/atendimento', {
         acao: 'enviar', ...destino,
-        modelo: { nome: escolhido.nome, idioma: escolhido.idioma, variaveisCorpo: varsCorpo, variaveisCabecalho: varsCab, textoFinal: previa },
+        modelo: {
+          nome: escolhido.nome, idioma: escolhido.idioma, variaveisCorpo: varsCorpo, variaveisCabecalho: varsCab,
+          nomesCorpo: escolhido.nomesCorpo, nomesCabecalho: escolhido.nomesCabecalho,
+          variaveisBotao: (escolhido.botoesLink || []).map((b, i) => ({ indice: b.indice, texto: varsBotao[i] })), textoFinal: previa,
+        },
       });
       onEnviado(r);
     } catch (e) {
@@ -261,14 +264,20 @@ export function ModalModelo({ canal, destino, nomeContato, onFechar, onEnviado }
             {escolhido?.cabecalhoMidia && <p className="at-erro-envio">Este modelo tem {escolhido.cabecalhoMidia === 'IMAGE' ? 'imagem' : 'arquivo'} no topo — ainda não dá para enviar este tipo por aqui.</p>}
             {varsCab.map((v, i) => (
               <div key={`c${i}`}>
-                <label className="rotulo">Título — variável {`{{${i + 1}}}`}</label>
+                <label className="rotulo">Título — variável {rotuloVariavel(i, escolhido?.nomesCabecalho)}</label>
                 <input className="campo" value={v} onChange={(e) => setVarsCab(varsCab.map((x, j) => (j === i ? e.target.value : x)))} />
               </div>
             ))}
             {varsCorpo.map((v, i) => (
               <div key={`b${i}`}>
-                <label className="rotulo">Variável {`{{${i + 1}}}`}</label>
+                <label className="rotulo">Variável {rotuloVariavel(i, escolhido?.nomesCorpo)}</label>
                 <input className="campo" value={v} onChange={(e) => setVarsCorpo(varsCorpo.map((x, j) => (j === i ? e.target.value : x)))} />
+              </div>
+            ))}
+            {(escolhido?.botoesLink || []).map((b, i) => (
+              <div key={`l${i}`}>
+                <label className="rotulo">Botão “{b.texto}” — final do link ({baseDoLink(b.url)}…)</label>
+                <input className="campo" value={varsBotao[i] || ''} onChange={(e) => setVarsBotao(varsBotao.map((x, j) => (j === i ? e.target.value : x)))} />
               </div>
             ))}
             {escolhido && <div className="at-previa-modelo">{previa}{escolhido.botoes?.length ? `\n\n[${escolhido.botoes.join('] [')}]` : ''}</div>}

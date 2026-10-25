@@ -11,6 +11,7 @@
 // a sincronização a cada minuto.
 // Robô (Fase 4): a mesma chamada pede ao robô para responder as mensagens que
 // ficaram sem resposta (quando o webhook não teve tempo), em paralelo.
+// Automações (Fase 5): também em paralelo, agenda e envia os disparos.
 // Funções agendadas só rodam no site publicado (não nas prévias de deploy).
 // ============================================================================
 
@@ -37,7 +38,7 @@ export default async function sincronizarEmails() {
       console.log(`Caixa de Entrada — falha (${rotulo}):`, e.message);
     }
   };
-  await Promise.all([chamar('sincronizar', 'sincronização de e-mails'), chamar('robo_pendentes', 'robô')]);
+  await Promise.all([chamar('sincronizar', 'sincronização de e-mails'), chamar('robo_pendentes', 'robô'), chamar('automacoes_rodar', 'automações')]);
 }
 
 export const config = {
