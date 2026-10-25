@@ -20,6 +20,7 @@
 import { clienteAdmin, lerSegredo, origemDoSite } from '../../../lib/atendimento/servidor';
 import { assinaturaValida, processarValorWebhook } from '../../../lib/atendimento/whatsapp';
 import { responderPendentes } from '../../../lib/atendimento/robo';
+import { tratarRespostas } from '../../../lib/atendimento/automacoes';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,9 +104,15 @@ export async function POST(request) {
 
   if (algumaInvalida) return new Response('Assinatura inválida', { status: 401 });
 
+  // Automações (Fase 5): "SAIR" e nota da pesquisa de satisfação (o robô não responde a elas)
+  let tratadas = [];
   if (paraORobo.length) {
+    try { tratadas = await tratarRespostas(supabaseAdmin, [...new Set(paraORobo)]); } catch (e) { /* sem o SQL da Fase 5 */ }
+  }
+  const restantes = [...new Set(paraORobo)].filter((id) => !tratadas.includes(id));
+  if (restantes.length) {
     try {
-      await responderPendentes(supabaseAdmin, { origem: origemDoSite(request), prazo: inicio + TEMPO_TOTAL_MS, conversas: [...new Set(paraORobo)] });
+      await responderPendentes(supabaseAdmin, { origem: origemDoSite(request), prazo: inicio + TEMPO_TOTAL_MS, conversas: restantes });
     } catch (e) { /* a função agendada tenta de novo */ }
   }
   return Response.json({ ok: true });

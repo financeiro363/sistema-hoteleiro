@@ -34,6 +34,7 @@ import { FunilEtiquetas } from '../components/atendimento/Funil';
 import { ModelosEmail } from '../components/atendimento/ModelosEmail';
 import { Solicitacoes } from '../components/atendimento/Solicitacoes';
 import { RoboIA } from '../components/atendimento/Robo';
+import { Automacoes } from '../components/atendimento/Automacoes';
 
 const FILTROS = [
   ['abertas', 'Abertas'],
@@ -54,7 +55,7 @@ const PERIODOS = [
   ['90', 'Últimos 90 dias'],
 ];
 
-const ABAS = ['conversas', 'contatos', 'solicitacoes', 'painel', 'respostas', 'modelos', 'funil', 'robo', 'canais'];
+const ABAS = ['conversas', 'contatos', 'solicitacoes', 'painel', 'respostas', 'modelos', 'funil', 'robo', 'automacoes', 'canais'];
 const FECHADAS = '(RESOLVIDA,ARQUIVADA)';
 const LIMITE_LISTA = 300;
 const LIMITE_QUADRO = 600;
@@ -539,7 +540,7 @@ export default function CaixaDeEntrada() {
             ['painel', '📊 Painel'],
             ['respostas', '⚡ Respostas prontas'],
             ['modelos', '✉️ Modelos de e-mail'],
-            ...(souAdminDeAlgum ? [['funil', '🧩 Funil e etiquetas'], ['robo', '🤖 Robô (IA)']] : []),
+            ...(souAdminDeAlgum ? [['funil', '🧩 Funil e etiquetas'], ['robo', '🤖 Robô (IA)'], ['automacoes', '🔁 Automações']] : []),
             ...(souAdmin ? [['canais', '⚙️ Canais']] : []),
           ].map(([chave, rotulo]) => (
             <button key={chave} type="button" role="tab" aria-selected={aba === chave} className={`at-aba ${aba === chave ? 'ativa' : ''}`} onClick={() => setAba(chave)}>{rotulo}</button>
@@ -596,6 +597,12 @@ export default function CaixaDeEntrada() {
         <RoboIA
           hoteis={equipe.hoteis.length ? equipe.hoteis.filter((h) => h.souAdmin) : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual', souAdmin: true }]}
           hotelAtual={usuario.hotel_id} canais={canais} preferencias={preferencias} onMudou={carregarApoio}
+        />
+      )}
+      {aba === 'automacoes' && souAdminDeAlgum && (
+        <Automacoes
+          hoteis={equipe.hoteis.length ? equipe.hoteis.filter((h) => h.souAdmin) : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual', souAdmin: true }]}
+          hotelAtual={usuario.hotel_id} onAbrirConversa={abrirConversa}
         />
       )}
       {aba === 'painel' && (

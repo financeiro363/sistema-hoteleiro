@@ -24,6 +24,11 @@
 //   robo_info_hotel   → lê de novo os dados do hotel na Cloudbeds para o robô (ADMIN)
 //   robo_testar       → conversa de teste com o robô, sem enviar nada (ADMIN)
 //   robo_pendentes    → robô responde mensagens que ficaram sem resposta (agendada)
+//   automacoes_rodar  → automações da Fase 5: agenda e envia os disparos (agendada)
+//   automacoes        → lista as automações, os disparos e os números (ADMIN)
+//   automacao_salvar  → liga/desliga e configura uma automação (ADMIN)
+//   automacao_testar  → manda o modelo de uma automação para um número de teste (ADMIN)
+//   disparo_cancelar  → cancela um disparo agendado (ADMIN)
 // Acesso: ADMIN ou COLABORADOR com "Pode usar a Caixa de Entrada" — nos dois
 // hotéis, quando a pessoa tem vínculo com os dois.
 // ============================================================================
@@ -51,6 +56,7 @@ import {
   pausar as pausarRobo, responderPendentes, atualizarInfosVelhas, atualizarInfoHotel, testarRobo, testarChave, CHAVE_SEGREDO,
 } from '../../../lib/atendimento/robo';
 import { MODELOS_IA, CANAIS_ROBO } from '../../../lib/atendimento/roboConfig';
+import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/atendimento/automacoes';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 
 export const dynamic = 'force-dynamic';
@@ -72,6 +78,13 @@ export async function POST(request) {
       // Arquivar sozinho os atendimentos parados (só nos hotéis que escolheram os dias)
       const { data: arquivadas } = await supabaseAdmin.rpc('atendimento_arquivar_antigos');
       return Response.json({ ...emails, reservas, arquivadas: arquivadas ?? null });
+    } catch (e) { return respostaErro(e.message, 500); }
+  }
+  // Automações (Fase 5): agenda e envia os disparos que chegaram a hora
+  if (corpo?.acao === 'automacoes_rodar' && chamadaAgendadaValida(request)) {
+    try {
+      const supabaseAdmin = clienteAdmin();
+      return Response.json(await rodarAutomacoes(supabaseAdmin, { origem: origemDoSite(request), prazo: Date.now() + 8500 }));
     } catch (e) { return respostaErro(e.message, 500); }
   }
   // Robô: mensagens que ficaram sem resposta (o webhook não teve tempo)
@@ -111,6 +124,18 @@ export async function POST(request) {
       case 'robo_chave': return await acaoRoboChave(supabaseAdmin, chamador, corpo);
       case 'robo_info_hotel': return await acaoRoboInfoHotel(supabaseAdmin, chamador, corpo);
       case 'robo_testar': return await acaoRoboTestar(supabaseAdmin, chamador, corpo, request);
+      case 'automacoes': return await acaoAutomacoes(supabaseAdmin, chamador, corpo);
+      case 'automacao_salvar': {
+        const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+        const r = await salvarAutomacao(supabaseAdmin, chamador, hotelId, corpo.automacao || {}, origemDoSite(request));
+        return r.erro ? respostaErro(r.erro) : Response.json({ sucesso: true, automacao: r.automacao });
+      }
+      case 'automacao_testar': {
+        const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+        const r = await testarAutomacao(supabaseAdmin, hotelId, { tipo: corpo.tipo, telefone: corpo.telefone, origem: origemDoSite(request) });
+        return r.erro ? respostaErro(r.erro) : Response.json(r);
+      }
+      case 'disparo_cancelar': return await acaoDisparoCancelar(supabaseAdmin, chamador, corpo);
       case 'reservas_verificar':
         return Response.json({ resultados: await verificarReservasTodos(supabaseAdmin, chamador.hoteis, true) });
       default: return respostaErro('Ação desconhecida.');
@@ -441,11 +466,14 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   // Mensagens e custo do WhatsApp: só dos hotéis em que a pessoa é ADMIN
   const hoteisAdmin = pedidos.filter((h) => chamador.hoteisAdmin.includes(h));
   let whatsapp = null;
+  let automacoes = null;
   if (hoteisAdmin.length) {
     const { data: uso } = await supabaseAdmin.rpc('atendimento_whatsapp_uso', { p_hoteis: hoteisAdmin, p_inicio: inicio, p_fim: fim });
     whatsapp = uso || null; // sem o SQL da economia: a seção não aparece
+    const { data: aut } = await supabaseAdmin.rpc('atendimento_painel_automacoes', { p_hoteis: hoteisAdmin, p_inicio: inicio, p_fim: fim });
+    automacoes = aut || null; // sem o SQL da Fase 5: não aparece
   }
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null }, inicio, fim });
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS
@@ -619,9 +647,44 @@ async function acaoImportarAsksuite(supabaseAdmin, chamador, corpo) {
 }
 
 // ---------------------------------------------------------------- ROBÔ (FASE 4)
+// ---------------------------------------------------------------- AUTOMAÇÕES (Fase 5)
+async function acaoAutomacoes(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  const { data: automacoes, error } = await supabaseAdmin.from('atendimento_automacoes').select('*').eq('hotel_id', hotelId);
+  if (error) return respostaErro(/atendimento_automacoes|does not exist|schema cache/i.test(error.message) ? 'Falta rodar no Supabase o SQL da Fase 5 (sql/caixa_de_entrada_fase5.sql).' : error.message);
+  const { data: canais } = await supabaseAdmin.from('atendimento_canais').select('id, nome, endereco_exibicao, ativo, config')
+    .eq('hotel_id', hotelId).eq('tipo', 'WHATSAPP').order('id');
+  let consulta = supabaseAdmin.from('atendimento_disparos')
+    .select('id, tipo, situacao, motivo, agendado_para, enviado_em, criado_em, conversa_id, telefone, nome, nota, atendimento_conversas(contato_nome, contato_endereco)')
+    .eq('hotel_id', hotelId).order('criado_em', { ascending: false }).limit(150);
+  if (corpo.tipo) consulta = consulta.eq('tipo', String(corpo.tipo));
+  if (corpo.situacao) consulta = consulta.eq('situacao', String(corpo.situacao));
+  const { data: disparos } = await consulta;
+  const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+  const inicio = new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+  const { data: painel } = await supabaseAdmin.rpc('atendimento_painel_automacoes', { p_hoteis: [hotelId], p_inicio: inicio, p_fim: hoje });
+  return Response.json({
+    automacoes: automacoes || [],
+    canais: (canais || []).map((c) => ({ id: c.id, nome: c.nome, numero: c.endereco_exibicao, ativo: c.ativo, temWaba: !!c.config?.wabaId })),
+    disparos: (disparos || []).map((d) => ({
+      ...d, cliente: d.nome || d.atendimento_conversas?.contato_nome || null, contato: d.telefone || d.atendimento_conversas?.contato_endereco || null, atendimento_conversas: undefined,
+    })),
+    painel: painel || null,
+  });
+}
+
+async function acaoDisparoCancelar(supabaseAdmin, chamador, corpo) {
+  const { data: d } = await supabaseAdmin.from('atendimento_disparos').select('id, hotel_id, situacao').eq('id', Number(corpo.disparoId)).maybeSingle();
+  if (!d) return respostaErro('Disparo não encontrado.');
+  hotelDoAdmin(chamador, d.hotel_id);
+  if (d.situacao !== 'AGENDADO') return respostaErro('Só dá para cancelar o que ainda está agendado.');
+  await supabaseAdmin.from('atendimento_disparos').update({ situacao: 'CANCELADO', motivo: 'cancelado pela equipe', atualizado_em: new Date().toISOString() }).eq('id', d.id);
+  return Response.json({ sucesso: true });
+}
+
 function hotelDoAdmin(chamador, hotelId) {
   const h = hotelPermitido(chamador, hotelId);
-  if (!chamador.hoteisAdmin.includes(h)) throw Object.assign(new Error('Só o administrador do hotel pode configurar o robô.'), { codigo: 'SEM_ACESSO' });
+  if (!chamador.hoteisAdmin.includes(h)) throw Object.assign(new Error('Só o administrador do hotel pode mudar esta configuração.'), { codigo: 'SEM_ACESSO' });
   return h;
 }
 

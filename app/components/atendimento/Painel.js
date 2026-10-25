@@ -179,6 +179,60 @@ function Cartao({ rotulo, valor, detalhe }) {
 }
 
 // ---------------------------------------------------------------------------
+// Automações (Fase 5) e pesquisa de satisfação — só ADMIN
+const NOME_AUTOMACAO = {
+  FUP_RESERVAR: 'Clicou e não reservou', FUP_COTACAO: 'Cotação sem clique', SEM_DISPONIBILIDADE: 'Abriu vaga (lista de espera)',
+  GRUPO: 'Retomar grupo', CONFIRMACAO_RESERVA: 'Confirmação da reserva', PRE_CHECKIN: 'Véspera da chegada',
+  POS_CHECKOUT: 'Depois da saída', PESQUISA: 'Pesquisa de satisfação',
+};
+const notaTexto = (m) => (m == null ? '—' : `${String(m).replace('.', ',')} ⭐`);
+
+function SecaoAutomacoes({ dados, nomes }) {
+  const tipos = Object.entries(dados.por_tipo || {});
+  const notas = dados.notas || {};
+  if (!tipos.length && !Number(notas.quantidade)) return null;
+  return (
+    <>
+      <h2 className="pi-secao">🔁 Automações</h2>
+      {Number(notas.quantidade) > 0 && (
+        <div className="pi-cartoes">
+          <Cartao rotulo="Nota média do atendimento" valor={notaTexto(notas.media)} detalhe={`${fmt(notas.quantidade)} resposta(s) da pesquisa de satisfação`} />
+          {Number(notas.robo?.quantidade) > 0 && <Cartao rotulo="Nota do robô" valor={notaTexto(notas.robo.media)} detalhe={`${fmt(notas.robo.quantidade)} resposta(s)`} />}
+        </div>
+      )}
+      {(notas.por_atendente || []).length > 0 && (
+        <section className="at-cartao">
+          <h2>Nota por atendente</h2>
+          <table className="at-tabela at-tabela-previa">
+            <thead><tr><th>Atendente</th><th className="num">Respostas</th><th className="num">Nota média</th></tr></thead>
+            <tbody>{notas.por_atendente.map((a) => <tr key={a.id}><td>{nomes[a.id] || `Usuário #${a.id}`}</td><td className="num">{inteiro.format(a.quantidade)}</td><td className="num">{notaTexto(a.media)}</td></tr>)}</tbody>
+          </table>
+        </section>
+      )}
+      {tipos.length > 0 && (
+        <section className="at-cartao">
+          <h2>Mensagens automáticas</h2>
+          <div className="at-tabela-rolagem">
+            <table className="at-tabela at-tabela-previa">
+              <thead><tr><th>Automação</th><th className="num">Enviadas</th><th className="num">Responderam</th><th className="num">Reservas depois</th><th className="num">Valor</th><th className="num">Não enviadas</th></tr></thead>
+              <tbody>
+                {tipos.map(([tipo, x]) => (
+                  <tr key={tipo}>
+                    <td>{NOME_AUTOMACAO[tipo] || tipo}</td><td className="num">{inteiro.format(x.enviados)}</td><td className="num">{inteiro.format(x.respostas)}</td>
+                    <td className="num">{inteiro.format(x.reservas)}</td><td className="num">{reaisCurto(x.valor)}</td><td className="num">{inteiro.format(Number(x.pulados) + Number(x.falhas))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="at-dica">Detalhes e o motivo de cada mensagem que não saiu ficam em 🔁 Automações.</p>
+        </section>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Vendas pelas cotações: quem vende, por qual canal, dentro ou fora do horário
 // e com quantos dias de antecedência o cliente procura.
 function LinhaVenda({ nome, x }) {
@@ -490,6 +544,8 @@ export function PainelIndicadores({ hoteis, nomes }) {
               </div>
             </>
           )}
+
+          {dados.automacoes && <SecaoAutomacoes dados={dados.automacoes} nomes={nomes} />}
 
           {dados.whatsapp && <SecaoWhatsApp whatsapp={dados.whatsapp} multi={hoteis.length > 1 && !hotel} hoteis={hoteis} onMudou={() => setRecarregar((n) => n + 1)} />}
 
