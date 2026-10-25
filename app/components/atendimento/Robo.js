@@ -42,6 +42,11 @@ export function separarAssuntos(texto) {
 
 const juntarAssuntos = (lista) => (lista || []).map((a) => `### ${a.titulo}\n${a.texto}`).join('\n\n');
 const iguais = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
+// Como o assunto fica gravado (sem espaços sobrando e sem assunto vazio)
+export const normalizarAssuntos = (lista) => (Array.isArray(lista) ? lista : [])
+  .map((a) => ({ titulo: String(a?.titulo || '').trim().slice(0, 120) || 'Assunto', texto: String(a?.texto || '').trim().slice(0, 8000) }))
+  .filter((a) => a.texto || a.titulo !== 'Assunto');
+const ESPERA_SALVAR_MS = 1500;
 
 export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
   const [hotelId, setHotelId] = useState((hoteis.find((h) => h.id === Number(hotelAtual)) || hoteis[0])?.id);
@@ -70,7 +75,9 @@ export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
       horas_retomar: c.data.horas_retomar ?? 12, limite_mensal_usd: c.data.limite_mensal_usd ?? 30, email_solicitacoes: c.data.email_solicitacoes || '',
       modo_economico: c.data.modo_economico !== false,
     } : PADRAO);
-    setConteudo(ct.data || { hotel_id: hotelId, rascunho: [], publicado: [] });
+    // Se não conseguiu ler o conteúdo, avisa e não deixa editar (para não gravar vazio por cima)
+    if (ct.error) setErro(`Não foi possível ler o conteúdo do robô: ${erroAmigavel(ct.error)}`);
+    setConteudo(ct.error ? { hotel_id: hotelId, rascunho: [], publicado: [], erroLeitura: true } : (ct.data || { hotel_id: hotelId, rascunho: [], publicado: [] }));
     setResumo(r.data || null);
     setCarregando(false);
   }, [hotelId]);
@@ -111,7 +118,8 @@ export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
             />
           )}
           {secao === 'conteudo' && (
-            <Conteudo key={`c-${hotelId}`} hotelId={hotelId} nomeHotel={nomeHotel} conteudo={conteudo} setErro={setErro} setOk={setOk} onMudou={carregar} />
+            <Conteudo key={`c-${hotelId}`} hotelId={hotelId} nomeHotel={nomeHotel} conteudo={conteudo} setErro={setErro} setOk={setOk} onMudou={carregar}
+              onRascunhoSalvo={(rascunho) => setConteudo((c) => (c && Number(c.hotel_id) === Number(hotelId) ? { ...c, rascunho, rascunho_em: new Date().toISOString() } : c))} />
           )}
           {secao === 'testar' && (
             <Testar key={`t-${hotelId}`} hotelId={hotelId} nomeHotel={nomeHotel} config={config} conteudo={conteudo} setErro={setErro} />
@@ -322,7 +330,7 @@ function Configuracao({
 }
 
 // ---------------------------------------------------------------------------
-function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
+function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRascunhoSalvo }) {
   const [assuntos, setAssuntos] = useState(() => (Array.isArray(conteudo?.rascunho) && conteudo.rascunho.length ? conteudo.rascunho : conteudo?.publicado || []));
   const [ocupado, setOcupado] = useState(false);
   const [colar, setColar] = useState(null);
@@ -355,21 +363,67 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
     setOk(`Assunto “${titulo}” criado no fim da lista. Escreva a resposta, salve o rascunho e publique.`);
   }
 
-  const salvoRascunho = Array.isArray(conteudo?.rascunho) && conteudo.rascunho.length ? conteudo.rascunho : conteudo?.publicado || [];
-  const mudouDoSalvo = !iguais(assuntos, salvoRascunho);
-  const diferenteDoPublicado = !iguais(assuntos, conteudo?.publicado);
-  const caracteres = useMemo(() => assuntos.reduce((s, a) => s + a.titulo.length + a.texto.length, 0), [assuntos]);
-  const faltam = ASSUNTOS_SUGERIDOS.filter(([t]) => !assuntos.some((a) => a.titulo.trim().toLowerCase() === t.toLowerCase()));
+  // O rascunho é salvo sozinho (1,5 s depois de mexer, e na hora ao sair desta
+  // aba): trocar para "Testar o robô" ou fechar a página não perde nada.
+  const [salvo, setSalvo] = useState(() => normalizarAssuntos(Array.isArray(conteudo?.rascunho) && conteudo.rascunho.length ? conteudo.rascunho : conteudo?.publicado || []));
+  const [salvando, setSalvando] = useState(false);
+  const [salvoEm, setSalvoEm] = useState(null);
+  const [erroSalvar, setErroSalvar] = useState('');
+  const assuntosRef = useRef(assuntos);
+  assuntosRef.current = assuntos;
+  const salvoRef = useRef(salvo);
+  salvoRef.current = salvo;
+  const bloqueado = !!conteudo?.erroLeitura;
+  const atuais = useMemo(() => normalizarAssuntos(assuntos), [assuntos]);
+  const mudouDoSalvo = !iguais(atuais, salvo);
+  const diferenteDoPublicado = !iguais(atuais, normalizarAssuntos(conteudo?.publicado));
 
-  async function salvarRascunho(lista = assuntos, mensagem = 'Rascunho salvo. Ele só vale para os clientes depois de publicar.') {
-    const limpa = lista.map((a) => ({ titulo: String(a.titulo || '').trim().slice(0, 120) || 'Assunto', texto: String(a.texto || '').trim().slice(0, 8000) }))
-      .filter((a) => a.texto || a.titulo !== 'Assunto');
+  async function gravar(limpa) {
     const { data: sessao } = await supabase.auth.getSession();
     const { data: eu } = await supabase.from('usuarios').select('id').eq('auth_id', sessao?.session?.user?.id).maybeSingle();
     const { error } = await supabase.from('atendimento_robo_conteudo').upsert({
       hotel_id: Number(hotelId), rascunho: limpa, rascunho_em: new Date().toISOString(), rascunho_por_id: eu?.id || null,
     }, { onConflict: 'hotel_id' });
     if (error) throw error;
+    setSalvo(limpa);
+    salvoRef.current = limpa;
+    setSalvoEm(new Date());
+    setErroSalvar('');
+    onRascunhoSalvo?.(limpa); // a tela do robô fica com o rascunho certo (ao voltar para esta aba)
+  }
+
+  async function salvarSozinho() {
+    if (bloqueado) return;
+    const limpa = normalizarAssuntos(assuntosRef.current);
+    if (iguais(limpa, salvoRef.current)) return;
+    setSalvando(true);
+    try { await gravar(limpa); } catch (e) { setErroSalvar(`O rascunho não foi salvo: ${erroAmigavel(e)}`); }
+    setSalvando(false);
+  }
+
+  useEffect(() => {
+    if (bloqueado || !mudouDoSalvo) return undefined;
+    const id = setTimeout(salvarSozinho, ESPERA_SALVAR_MS);
+    return () => clearTimeout(id);
+  }, [atuais, salvo, bloqueado]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Saiu da aba Conteúdo (ou trocou de hotel): salva na hora o que faltava
+  useEffect(() => () => { salvarSozinho(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fechar a página com alteração ainda não salva: o navegador pergunta antes
+  useEffect(() => {
+    if (!mudouDoSalvo) return undefined;
+    const avisar = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', avisar);
+    return () => window.removeEventListener('beforeunload', avisar);
+  }, [mudouDoSalvo]);
+  const caracteres = useMemo(() => assuntos.reduce((s, a) => s + a.titulo.length + a.texto.length, 0), [assuntos]);
+  const faltam = ASSUNTOS_SUGERIDOS.filter(([t]) => !assuntos.some((a) => a.titulo.trim().toLowerCase() === t.toLowerCase()));
+
+  async function salvarRascunho(lista = assuntos, mensagem = 'Rascunho salvo. Ele só vale para os clientes depois de publicar.') {
+    if (bloqueado) throw new Error('O conteúdo não foi lido direito. Recarregue a página antes de salvar.');
+    const limpa = normalizarAssuntos(lista);
+    await gravar(limpa);
     setAssuntos(limpa);
     if (mensagem) setOk(mensagem);
   }
@@ -414,9 +468,13 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
   function aplicarColado(modo) {
     const novos = separarAssuntos(colar);
     if (!novos.length) { setErro('Não achei nenhum texto para importar.'); return; }
-    setAssuntos(modo === 'trocar' ? novos : [...assuntos, ...novos]);
+    const lista = modo === 'trocar' ? novos : [...assuntos, ...novos];
     setColar(null);
-    setOk(`${novos.length} assunto(s) importado(s). Confira e clique em “Salvar rascunho”.`);
+    // Já salva o rascunho na hora (não depende de clicar em "Salvar rascunho")
+    executar(async () => {
+      await salvarRascunho(lista, null);
+      setOk(`${novos.length} assunto(s) importado(s) e salvos no rascunho. Confira e clique em “🚀 Publicar” para o robô começar a usar.`);
+    });
   }
 
   return (
@@ -433,11 +491,22 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou }) {
         </div>
         <div className="at-dado" style={{ maxWidth: 620 }}>
           <span>Rascunho</span>
-          <span>{mudouDoSalvo ? '✏️ alterações não salvas' : diferenteDoPublicado ? 'salvo, com alterações ainda não publicadas' : 'igual ao publicado'}</span>
+          <span>
+            {salvando ? '💾 salvando…' : mudouDoSalvo ? '✏️ salvando em instantes…'
+              : diferenteDoPublicado ? `💾 salvo${salvoEm ? ` às ${salvoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''}, ainda não publicado`
+                : 'igual ao publicado'}
+          </span>
         </div>
+        {erroSalvar && <div className="aviso-erro" style={{ marginTop: 8 }}>{erroSalvar}</div>}
+        {bloqueado && <div className="aviso-erro" style={{ marginTop: 8 }}>Não foi possível ler o conteúdo guardado. Recarregue a página; enquanto isso, nada é salvo (para não apagar o que já existe).</div>}
+        {atuais.length > 0 && diferenteDoPublicado && !bloqueado && (
+          <div className="aviso-erro" style={{ marginTop: 8, background: '#FFF4D6', color: '#7A5600' }}>
+            ⚠️ <strong>O robô ainda não usa este texto.</strong> Ele está guardado como rascunho. Para os clientes receberem estas respostas, clique em <strong>🚀 Publicar</strong>.
+          </div>
+        )}
         <div className="at-botoes">
-          <button type="button" className="at-btn" onClick={() => executar(() => salvarRascunho())} disabled={ocupado || !mudouDoSalvo}>💾 Salvar rascunho</button>
-          <button type="button" className="at-btn at-btn-verde" onClick={publicar} disabled={ocupado || !assuntos.length || !diferenteDoPublicado}>🚀 Publicar</button>
+          <button type="button" className="at-btn" onClick={() => executar(() => salvarRascunho())} disabled={ocupado || bloqueado || !mudouDoSalvo}>💾 Salvar rascunho</button>
+          <button type="button" className="at-btn at-btn-verde" onClick={publicar} disabled={ocupado || bloqueado || !atuais.length || !diferenteDoPublicado}>🚀 Publicar</button>
           {conteudo?.publicado_em && diferenteDoPublicado && <button type="button" className="at-btn" onClick={descartar} disabled={ocupado}>Descartar alterações</button>}
           <button type="button" className="at-btn" onClick={() => setColar('')}>📋 Colar texto pronto</button>
           <button type="button" className="at-btn" onClick={versoes ? () => setVersoes(null) : verVersoes}>{versoes ? 'Esconder versões' : '🕘 Versões publicadas'}</button>
