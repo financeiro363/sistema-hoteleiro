@@ -307,6 +307,7 @@ function PrecoMensagem({ hotelId, preco, onMudou, campo = 'whatsapp_preco_mensag
   const [valor, setValor] = useState('');
   const [erro, setErro] = useState('');
   const [salvando, setSalvando] = useState(false);
+  const idCampo = campo === 'whatsapp_preco_mensagem' ? `preco-${hotelId}` : `preco-${campo}-${hotelId}`;
   async function salvar() {
     const n = Number(String(valor).replace(',', '.'));
     if (!(n >= 0 && n <= 5)) { setErro('Use um valor entre R$ 0,00 e R$ 5,00.'); return; }
@@ -332,8 +333,8 @@ function PrecoMensagem({ hotelId, preco, onMudou, campo = 'whatsapp_preco_mensag
   }
   return (
     <span className="at-botoes" style={{ marginTop: 0, alignItems: 'center' }}>
-      <label className="at-dica" style={{ margin: 0 }} htmlFor={`preco-${campo}-${hotelId}`}>{rotulo} (R$)</label>
-      <input id={`preco-${campo}-${hotelId}`} className="at-select" style={{ width: 90 }} inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)} />
+      <label className="at-dica" style={{ margin: 0 }} htmlFor={idCampo}>{rotulo} (R$)</label>
+      <input id={idCampo} className="at-select" style={{ width: 90 }} inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)} />
       <button type="button" className="at-btn at-btn-verde" onClick={salvar} disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
       <button type="button" className="at-btn" onClick={() => setEditando(false)}>Cancelar</button>
       {erro && <span className="at-ruim" style={{ fontSize: 13 }}>{erro}</span>}
