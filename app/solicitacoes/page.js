@@ -92,6 +92,10 @@ export default function PaginaSolicitacoes() {
 
   // Navegação por abas
   const [aba, setAba] = useState('recebidas');
+  // Aba "Novidades": o que foi aberto agora continua na lista até trocar de aba
+  const [vistasAgora, setVistasAgora] = useState(() => new Set());
+  const [marcandoTodas, setMarcandoTodas] = useState(false);
+  const abaInicialEscolhida = useRef(false);
 
   // Filtros e busca
   const [busca, setBusca] = useState('');
@@ -171,6 +175,7 @@ export default function PaginaSolicitacoes() {
   // menu do topo para atualizar a bolinha vermelha na hora.
   const marcarComoVista = useCallback(async (taskId) => {
     if (!taskId) return;
+    setVistasAgora((atual) => new Set(atual).add(Number(taskId)));
     setNovidades((atual) => {
       if (!atual.has(Number(taskId))) return atual;
       const nova = new Set(atual);
@@ -328,11 +333,21 @@ export default function PaginaSolicitacoes() {
 
   const souAdmin = usuario?.papel === 'ADMIN';
 
+  // Pendente comigo (aba "Minhas tarefas")
+  function pendenteComigo(t) {
+    return !!usuario && t.responsavel_atual_id === usuario.id && t.status !== 'Concluído' && t.status !== 'Cancelado';
+  }
+
   // A solicitação aparece nesta aba? (aba 'todas', só do admin: todas)
+  // "Novidades" = teve novidade que eu ainda não abri e NÃO está pendente
+  // comigo (as pendentes comigo já contam em "Minhas tarefas"). Assim o
+  // número do menu é sempre Minhas tarefas + Novidades.
   function estaNaAba(t, nomeAba) {
     if (!usuario) return false;
-    if (nomeAba === 'recebidas') {
-      return t.responsavel_atual_id === usuario.id && t.status !== 'Concluído' && t.status !== 'Cancelado';
+    if (nomeAba === 'recebidas') return pendenteComigo(t);
+    if (nomeAba === 'novidades') {
+      const id = Number(t.id);
+      return (novidades.has(id) || vistasAgora.has(id)) && !pendenteComigo(t);
     }
     if (nomeAba === 'enviadas') return t.criado_por_id === usuario.id;
     if (nomeAba === 'concluidas') return t.status === 'Concluído';
@@ -343,6 +358,32 @@ export default function PaginaSolicitacoes() {
   function abaTemNovidade(nomeAba) {
     if (!novidades.size) return false;
     return tarefas.some((t) => novidades.has(Number(t.id)) && estaNaAba(t, nomeAba));
+  }
+
+  function trocarAba(nova) {
+    setVistasAgora(new Set());
+    setAba(nova);
+  }
+
+  // Limpa todas as novidades do hotel escolhido no topo
+  async function marcarTodasVistas() {
+    if (marcandoTodas) return;
+    setMarcandoTodas(true);
+    try {
+      const { error } = await supabase.rpc('solicitacoes_marcar_todas_vistas');
+      if (error) {
+        // Sem o SQL novo: marca uma por uma
+        for (const id of [...novidades]) await supabase.rpc('solicitacoes_marcar_vista', { p_task: id });
+      }
+      setVistasAgora(new Set());
+      await carregarNovidades();
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('solicitacoes-mudaram'));
+      mostrarAviso('Pronto: todas as novidades foram marcadas como vistas.', 'sucesso');
+    } catch (e) {
+      mostrarAviso('Não foi possível marcar como vistas agora.', 'erro');
+    } finally {
+      setMarcandoTodas(false);
+    }
   }
 
   // Lista de tarefas de acordo com a aba escolhida
@@ -384,6 +425,10 @@ export default function PaginaSolicitacoes() {
     : 0;
   const totalEnviadas = usuario ? tarefas.filter((t) => t.criado_por_id === usuario.id).length : 0;
   const totalConcluidas = tarefas.filter((t) => t.status === 'Concluído').length;
+  // Novidades fora de "Minhas tarefas" e o que está no outro hotel
+  const totalNovidades = usuario ? tarefas.filter((t) => novidades.has(Number(t.id)) && !pendenteComigo(t)).length : 0;
+  const totalOutroHotel = outrosHoteis.reduce((soma, o) => soma + (Number(o.quantidade) || 0), 0);
+  const totalMenu = totalRecebidas + totalNovidades + totalOutroHotel;
 
   // ---- Histórico da tarefa aberta -------------------------------------------
 
@@ -398,6 +443,13 @@ export default function PaginaSolicitacoes() {
     setCarregandoHistorico(false);
   }, []);
   useEffect(() => { carregarHistoricoRef.current = carregarHistorico; }, [carregarHistorico]);
+
+  // Primeira abertura: quem chegou pelo número do menu cai onde estão as coisas
+  useEffect(() => {
+    if (carregando || abaInicialEscolhida.current || !usuario) return;
+    abaInicialEscolhida.current = true;
+    if (totalRecebidas === 0 && totalNovidades > 0) setAba('novidades');
+  }, [carregando, usuario, totalRecebidas, totalNovidades]);
 
   function abrirTarefa(t) {
     setTarefaAberta(t);
@@ -911,38 +963,62 @@ export default function PaginaSolicitacoes() {
         <button
           type="button"
           className={aba === 'recebidas' ? 'sol-aba sol-aba-ativa' : 'sol-aba'}
-          onClick={() => setAba('recebidas')}
+          onClick={() => trocarAba('recebidas')}
         >
-          Minhas tarefas <span className="sol-contador">{totalRecebidas}</span>
-          {abaTemNovidade('recebidas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
+          Minhas tarefas <span className={`sol-contador ${totalRecebidas ? 'sol-contador-vermelho' : ''}`}>{totalRecebidas}</span>
+          {abaTemNovidade('recebidas') && <span className="sol-ponto-novo" title="Alguma delas tem novidade" aria-label="Alguma delas tem novidade" />}
         </button>
+        {(totalNovidades > 0 || aba === 'novidades') && (
+          <button
+            type="button"
+            className={aba === 'novidades' ? 'sol-aba sol-aba-ativa' : 'sol-aba'}
+            onClick={() => trocarAba('novidades')}
+          >
+            Novidades <span className={`sol-contador ${totalNovidades ? 'sol-contador-vermelho' : ''}`}>{totalNovidades}</span>
+          </button>
+        )}
         <button
           type="button"
           className={aba === 'enviadas' ? 'sol-aba sol-aba-ativa' : 'sol-aba'}
-          onClick={() => setAba('enviadas')}
+          onClick={() => trocarAba('enviadas')}
         >
           Enviadas por mim <span className="sol-contador">{totalEnviadas}</span>
-          {abaTemNovidade('enviadas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
         </button>
         <button
           type="button"
           className={aba === 'concluidas' ? 'sol-aba sol-aba-ativa' : 'sol-aba'}
-          onClick={() => setAba('concluidas')}
+          onClick={() => trocarAba('concluidas')}
         >
           Concluídas <span className="sol-contador">{totalConcluidas}</span>
-          {abaTemNovidade('concluidas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
         </button>
         {souAdmin && (
           <button
             type="button"
             className={aba === 'todas' ? 'sol-aba sol-aba-ativa' : 'sol-aba'}
-            onClick={() => setAba('todas')}
+            onClick={() => trocarAba('todas')}
           >
             Todas do hotel <span className="sol-contador">{tarefas.length}</span>
-            {abaTemNovidade('todas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
           </button>
         )}
       </nav>
+
+      {/* O que o número vermelho do menu está contando */}
+      <p className="sol-explica">
+        {totalMenu > 0 ? (
+          <>
+            O número vermelho do menu (<strong>{totalMenu}</strong>) é a soma de: <strong>Minhas tarefas</strong> ({totalRecebidas}, pendentes com você)
+            {' '}+ <strong>Novidades</strong> ({totalNovidades}, solicitações suas que alguém encaminhou, comentou ou concluiu e você ainda não abriu)
+            {totalOutroHotel ? <> + <strong>{totalOutroHotel}</strong> no outro hotel</> : null}. Os outros números das abas são só o total de cada lista.
+          </>
+        ) : 'Nada pendente com você nem novidade para ver. Os números das abas são só o total de cada lista.'}
+      </p>
+      {aba === 'novidades' && totalNovidades > 0 && (
+        <div className="sol-acoes-novidades">
+          <button type="button" className="sol-botao-suave" onClick={marcarTodasVistas} disabled={marcandoTodas}>
+            {marcandoTodas ? 'Marcando…' : '✓ Marcar todas como vistas'}
+          </button>
+        </div>
+      )}
 
       {/* Filtros e busca */}
       <div className="sol-filtros">
@@ -1006,6 +1082,7 @@ export default function PaginaSolicitacoes() {
         {listaVisivel.length === 0 && (
           <div className="sol-vazio">
             {aba === 'recebidas' && 'Nenhuma tarefa pendente para você. Caixa de entrada em dia! ✔'}
+            {aba === 'novidades' && 'Nenhuma novidade: está tudo visto. ✔'}
             {aba === 'enviadas' && 'Você ainda não enviou nenhuma solicitação. Use o botão "+ Nova solicitação".'}
             {aba === 'concluidas' && 'Nenhuma solicitação concluída por enquanto.'}
             {aba === 'todas' && 'Nenhuma solicitação encontrada com esses filtros.'}
@@ -1317,9 +1394,12 @@ export default function PaginaSolicitacoes() {
 
 // ---- Estilos (mobile-first; ajustes para tablet/desktop nas media queries) --
 
+// O CSS vai como HTML pronto: assim o servidor e o navegador escrevem
+// exatamente o mesmo texto (aspas e ">" não viram outra coisa), sem o aviso
+// de "conteúdo diferente" do React ao abrir a página.
 function EstilosDoModulo() {
   return (
-    <style>{`
+    <style dangerouslySetInnerHTML={{ __html: `
       .sol-pagina {
         padding: 16px;
         max-width: 1040px;
@@ -1421,6 +1501,11 @@ function EstilosDoModulo() {
         background: rgba(0,0,0,0.10); border-radius: 999px; padding: 1px 8px;
       }
       .sol-aba-ativa .sol-contador { background: rgba(255,255,255,0.22); }
+
+      .sol-contador-vermelho { background: #D93025; color: #FFFFFF; font-weight: 700; }
+      .sol-aba-ativa .sol-contador-vermelho { background: #FFFFFF; color: #D93025; }
+      .sol-explica { font-size: 13px; line-height: 1.5; color: #5B6762; margin: -2px 0 12px; max-width: 900px; }
+      .sol-acoes-novidades { margin: -4px 0 12px; }
 
       /* Bolinha vermelha de novidade */
       .sol-ponto-novo {
@@ -1568,6 +1653,6 @@ function EstilosDoModulo() {
           to { transform: translateY(0); opacity: 1; }
         }
       }
-    `}</style>
+    ` }} />
   );
 }
