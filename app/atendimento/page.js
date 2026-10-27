@@ -22,7 +22,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import {
-  chamarApi, avisarCabecalho, ESTILOS_ATENDIMENTO, ICONE_CANAL, NOME_CANAL, STATUS_CONVERSA, chaveNome, tocarAviso, mostrarNotificacao,
+  chamarApi, avisarCabecalho, ESTILOS_ATENDIMENTO, ICONE_CANAL, NOME_CANAL, nomeDaConversa, STATUS_CONVERSA, chaveNome, tocarAviso, mostrarNotificacao,
   lerPreferencia, gravarPreferencia, baixarCsv, dataHora,
 } from '../components/atendimento/util';
 import { Conversa, PainelLateral, NovaConversa } from '../components/atendimento/Conversa';
@@ -379,7 +379,7 @@ export default function CaixaDeEntrada() {
     tocarAviso();
     if (document.visibilityState !== 'visible' || novas[0].id !== selecionadaRef.current) {
       const c = novas[0];
-      const titulo = novas.length > 1 ? `${novas.length} conversas com mensagem nova` : `${ICONE_CANAL[c.canal_tipo] || ''} ${c.contato_nome || c.contato_endereco || 'Cliente'}`;
+      const titulo = novas.length > 1 ? `${novas.length} conversas com mensagem nova` : `${ICONE_CANAL[c.canal_tipo] || ''} ${nomeDaConversa(c)}`;
       mostrarNotificacao(titulo, novas.length > 1 ? 'Abra a Caixa de Entrada para ver.' : (c.ultima_mensagem_resumo || 'Mensagem nova'), () => abrirConversa(c.id));
     }
   }, [usuario, avisosLigados]); // eslint-disable-line react-hooks/exhaustive-deps

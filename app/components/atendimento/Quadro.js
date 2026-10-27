@@ -12,14 +12,14 @@
 
 import { useMemo, useState } from 'react';
 import {
-  ICONE_CANAL, STATUS_CONVERSA, horaCurta, iniciais, primeiroNome, tempoDesde, minutosEsperando, chaveNome, dinheiro,
+  ICONE_CANAL, nomeDaConversa, visitanteNoSite, STATUS_CONVERSA, horaCurta, iniciais, primeiroNome, tempoDesde, minutosEsperando, chaveNome, dinheiro,
 } from './util';
 import { ChipEtiqueta, roboPausado } from './Conversa';
 
 export function CartaoConversa({
   c, ativo, compacto, nomeHotel, nomeResponsavel, souEu, etiquetasPorId, alertaMinutos, agora, onAbrir, extra, jaReservou, robo,
 }) {
-  const nome = c.contato_nome || c.contato_endereco || 'Cliente';
+  const nome = nomeDaConversa(c);
   const espera = minutosEsperando(c, agora);
   const atrasada = espera !== null && alertaMinutos && espera >= alertaMinutos;
   const etqs = (c.etiquetas || []).map((id) => etiquetasPorId[id]).filter(Boolean);
@@ -61,6 +61,7 @@ export function CartaoConversa({
           {chamouEquipe && <span className="at-chip at-chip-humano" title="O robô passou esta conversa para a equipe">🙋 Chamou a equipe</span>}
           {jaReservou && <span className="at-chip at-chip-estrela" title="Este cliente já reservou antes">⭐ Já reservou</span>}
           {temAnuncio && <span className="at-chip at-chip-ad" title={c.origem?.titulo || 'Veio de anúncio'}>📣 AD</span>}
+          {visitanteNoSite(c, agora) && <span className="at-chip at-chip-site" title="O visitante está com o site aberto agora">🟢 No site</span>}
           {c.valor_cotacao ? <span className="at-chip">{dinheiro(c.valor_cotacao)}</span> : null}
           {c.cloudbeds_reservation_id && <span className="at-chip">🏨 {c.cloudbeds_reservation_id}</span>}
           {mostrar.slice(0, 3).map((e) => <ChipEtiqueta key={e.id} etiqueta={e} pequeno />)}

@@ -85,7 +85,7 @@ export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
   useEffect(() => { setErro(''); setOk(''); setConteudo(null); carregar(); }, [carregar]);
 
   const nomeHotel = hoteis.find((h) => h.id === Number(hotelId))?.nome || 'hotel';
-  const temWhatsApp = (canais || []).some((c) => c.hotel_id === Number(hotelId) && c.tipo === 'WHATSAPP' && c.ativo);
+  const temWhatsApp = (canais || []).some((c) => c.hotel_id === Number(hotelId) && ['WHATSAPP', 'SITE'].includes(c.tipo) && c.ativo);
   const pref = (preferencias || []).find((p) => p.hotel_id === Number(hotelId));
 
   return (
@@ -198,9 +198,9 @@ function Configuracao({
           <Item ok={temChave}>Chave da Anthropic guardada</Item>
           <Item ok={publicado}>Conteúdo do hotel publicado {!publicado && <button type="button" className="at-link-pequeno" onClick={() => irPara('conteudo')}>escrever</button>}</Item>
           <Item ok={!!motor}>Link do motor de reservas (para a cotação)</Item>
-          <Item ok={temWhatsApp}>WhatsApp conectado neste hotel</Item>
+          <Item ok={temWhatsApp}>WhatsApp ou chat do site ligado neste hotel</Item>
         </div>
-        {!temWhatsApp && <p className="at-dica">Sem o WhatsApp conectado, o robô fica pronto, mas só vai responder quando o número for ligado ao sistema.</p>}
+        {!temWhatsApp && <p className="at-dica">Sem o WhatsApp ou o chat do site ligados, o robô fica pronto, mas só vai responder quando um deles for ligado ao sistema.</p>}
       </section>
 
       <section className="at-cartao">

@@ -41,6 +41,7 @@ export function ConfigCanais() {
   const [emailConectar, setEmailConectar] = useState('');
   const [meta, setMeta] = useState({ appId: '', appSecret: '' });
   const [formWa, setFormWa] = useState(null); // { canalId?, nome, phoneNumberId, wabaId, token }
+  const [formSite, setFormSite] = useState(null); // { canalId?, nome, titulo, saudacao, cor, dominios, pedirContato }
 
   const carregar = useCallback(async () => {
     try {
@@ -99,6 +100,11 @@ export function ConfigCanais() {
 
   const emails = dados.canais.filter((c) => c.tipo === 'EMAIL');
   const whats = dados.canais.filter((c) => c.tipo === 'WHATSAPP');
+  const site = dados.canais.find((c) => c.tipo === 'SITE') || null;
+  const abrirFormSite = (c) => setFormSite({
+    canalId: c?.id, nome: c?.nome || 'Chat do site', titulo: c?.config?.titulo || '', saudacao: c?.config?.saudacao || 'Olá! 👋 Como podemos ajudar?',
+    cor: c?.config?.cor || '#2a1160', dominios: (c?.config?.dominios || []).join('\n'), pedirContato: c?.config?.pedirContato !== false,
+  });
   const googlePronto = !!dados.config.googleClientId && dados.config.googleSecretSalvo;
   const metaPronta = dados.config.metaSecretSalvo && !!dados.config.metaVerifyToken;
 
@@ -277,6 +283,76 @@ export function ConfigCanais() {
           <div className="at-botoes">
             <button type="button" className="at-btn at-btn-verde" disabled={!metaPronta} onClick={() => setFormWa({ nome: '', phoneNumberId: '', wabaId: '', token: '' })}>➕ Adicionar número</button>
             {!metaPronta && <span className="at-dica" style={{ alignSelf: 'center' }}>Salve o app da Meta (passo 1) antes.</span>}
+          </div>
+        )}
+      </section>
+
+      {/* ------------------------------------------------------------ CHAT DO SITE */}
+      <section className="at-cartao">
+        <h2>🌐 Chat do site</h2>
+        <p className="at-dica">A janela de chat no site do hotel. As conversas chegam aqui na Caixa de Entrada. Se o robô estiver ligado para o “Chat do site” (aba Robô), ele responde na hora; se não, a equipe responde.</p>
+        {site && !formSite && (
+          <div className="at-canal">
+            <div className="at-canal-topo">
+              <div>
+                <strong>{site.nome}</strong>
+                <span className="texto-suave" style={{ fontSize: 13 }}> · {(site.config?.dominios || []).join(', ') || 'sem endereço do site'}</span>
+              </div>
+              <div className="at-botoes" style={{ marginTop: 0 }}>
+                <button type="button" className="at-btn" disabled={!!ocupado} onClick={() => acao('testar', { canalId: site.id }, (r) => r.detalhe)}>Conferir</button>
+                <button type="button" className="at-btn" disabled={!!ocupado} onClick={() => abrirFormSite(site)}>Editar</button>
+                <button type="button" className="at-btn" disabled={!!ocupado} onClick={() => acao('alterar', { canalId: site.id, ativo: !site.ativo }, site.ativo ? 'Chat do site desligado: a janela some do site.' : 'Chat do site ligado.')}>{site.ativo ? 'Desligar' : 'Ligar'}</button>
+                <button type="button" className="at-btn at-btn-perigo" disabled={!!ocupado} onClick={() => {
+                  if (window.confirm('Excluir o chat do site? A janela some do site. As conversas antigas continuam visíveis, mas não será mais possível responder por elas.')) acao('excluir', { canalId: site.id }, 'Chat do site excluído.');
+                }}>Excluir</button>
+              </div>
+            </div>
+            <Situacao canal={site} />
+            <label className="rotulo" style={{ marginTop: 10 }}>Código para colocar no site (antes de &lt;/body&gt;, em todas as páginas)</label>
+            <Copiar valor={dados.enderecos.codigoChat} />
+            <p className="at-dica">Quem cuida do site cola este código uma vez. Botões do próprio site podem abrir o chat com <code>window.ChatHotel.abrir()</code>.</p>
+            <div className="at-botoes">
+              <a className="at-btn at-btn-verde" href={dados.enderecos.testeChat} target="_blank" rel="noopener noreferrer">Testar o chat ↗</a>
+            </div>
+          </div>
+        )}
+        {formSite ? (
+          <div className="at-canal" style={{ background: '#FAFBF9' }}>
+            <strong>{formSite.canalId ? 'Editar chat do site' : 'Ativar o chat do site'}</strong>
+            <div className="at-grade">
+              <div>
+                <label className="rotulo" htmlFor="s-titulo">Título na janela do chat</label>
+                <input id="s-titulo" className="campo" value={formSite.titulo} maxLength={60} onChange={(e) => setFormSite({ ...formSite, titulo: e.target.value })} placeholder="Em branco: o nome do hotel" />
+              </div>
+              <div>
+                <label className="rotulo" htmlFor="s-cor">Cor</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input id="s-cor" type="color" value={/^#[0-9a-fA-F]{6}$/.test(formSite.cor) ? formSite.cor : '#2a1160'} onChange={(e) => setFormSite({ ...formSite, cor: e.target.value })} style={{ width: 52, height: 44, border: 0, background: 'none', padding: 0 }} aria-label="Escolher a cor" />
+                  <input className="campo" value={formSite.cor} maxLength={7} onChange={(e) => setFormSite({ ...formSite, cor: e.target.value })} aria-label="Cor em código" />
+                </div>
+              </div>
+            </div>
+            <label className="rotulo" htmlFor="s-saudacao">Primeira mensagem (saudação)</label>
+            <textarea id="s-saudacao" className="campo" rows={2} maxLength={300} value={formSite.saudacao} onChange={(e) => setFormSite({ ...formSite, saudacao: e.target.value })} />
+            <label className="rotulo" htmlFor="s-dominios">Endereços do site (um por linha)</label>
+            <textarea id="s-dominios" className="campo" rows={3} value={formSite.dominios} onChange={(e) => setFormSite({ ...formSite, dominios: e.target.value })}
+              placeholder={'www.seuhotel.com.br\nseuhotel.com.br'} />
+            <p className="at-dica">Só esses endereços conseguem mostrar o chat. Para as prévias da Netlify, use <code>*--nome-do-site.netlify.app</code>.</p>
+            <label className="at-dica" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={formSite.pedirContato} onChange={(e) => setFormSite({ ...formSite, pedirContato: e.target.checked })} />
+              Depois da primeira mensagem, pedir nome e WhatsApp ou e-mail (opcional para o visitante)
+            </label>
+            <div className="at-botoes">
+              <button type="button" className="at-btn at-btn-verde" disabled={ocupado === 'salvar_site'} onClick={async () => {
+                const r = await acao('salvar_site', formSite, 'Chat do site salvo.');
+                if (r) setFormSite(null);
+              }}>{ocupado === 'salvar_site' ? 'Salvando…' : 'Salvar'}</button>
+              <button type="button" className="at-btn" onClick={() => setFormSite(null)}>Cancelar</button>
+            </div>
+          </div>
+        ) : !site && (
+          <div className="at-botoes">
+            <button type="button" className="at-btn at-btn-verde" disabled={!!ocupado} onClick={() => abrirFormSite(null)}>➕ Ativar o chat do site</button>
           </div>
         )}
       </section>

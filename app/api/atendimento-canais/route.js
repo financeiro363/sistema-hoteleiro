@@ -10,6 +10,7 @@
 //     salvar_whatsapp    { canalId?, nome, phoneNumberId, wabaId, token? }
 //     registrar_numero   { canalId, pin }
 //     conectar_gmail     { email? }                 → devolve o link do Google
+//     salvar_site        { canalId?, titulo, saudacao, cor, dominios, pedirContato }  (chat do site)
 //     testar             { canalId }
 //     alterar            { canalId, nome?, ativo?, usarAssinatura? }
 //     excluir            { canalId }
@@ -25,6 +26,7 @@ import {
   informacoesNumero, inscreverAppNaConta, registrarNumero, tokenDoCanal, formatarNumero,
 } from '../../../lib/atendimento/whatsapp';
 import { credenciaisGoogle, urlAutorizacao, tokenDaCaixa, perfilDaCaixa } from '../../../lib/atendimento/gmail';
+import { PADRAO_CHAT, listaDominios } from '../../../lib/atendimento/chatSite';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,7 +53,12 @@ export async function GET(request) {
         googleSecretSalvo: tem('google_client_secret'),
         metaSecretSalvo: tem('meta_app_secret'),
       },
-      enderecos: { webhookMeta: `${origem}/api/meta-webhook`, retornoGoogle: `${origem}/api/gmail-retorno`, origem },
+      enderecos: {
+        webhookMeta: `${origem}/api/meta-webhook`, retornoGoogle: `${origem}/api/gmail-retorno`, origem,
+        // Chat do site: o código que vai no site e a página de teste
+        codigoChat: `<script src="${origem}/chat-site.js" data-hotel="${chamador.hotel_id}" defer></script>`,
+        testeChat: `${origem}/chat-site/teste?hotel=${chamador.hotel_id}`,
+      },
       canais: (canais || []).map((c) => ({
         ...c,
         tokenSalvo: c.tipo === 'WHATSAPP' ? tem('whatsapp_token', c.id) : tem('gmail_refresh', c.id),
@@ -181,12 +188,53 @@ export async function POST(request) {
         return Response.json({ sucesso: true });
       }
 
+      // ------------------------------------------------------------ CHAT DO SITE
+      case 'salvar_site': {
+        const dominios = listaDominios(corpo.dominios);
+        const cor = /^#[0-9a-fA-F]{6}$/.test(texto(corpo.cor, 7)) ? texto(corpo.cor, 7) : PADRAO_CHAT.cor;
+        const config = {
+          titulo: texto(corpo.titulo, 60) || null,
+          saudacao: texto(corpo.saudacao, 300) || PADRAO_CHAT.saudacao,
+          cor, dominios, pedirContato: corpo.pedirContato !== false,
+        };
+        const existente = corpo.canalId ? await carregarCanal(corpo.canalId) : null;
+        if (existente && existente.tipo !== 'SITE') return respostaErro('Canal não encontrado.');
+        const registro = {
+          nome: texto(corpo.nome, 80) || 'Chat do site', endereco_exibicao: dominios[0] || null,
+          config: { ...(existente?.config || {}), ...config }, atualizado_em: new Date().toISOString(),
+        };
+        let canal;
+        if (existente) {
+          const { data, error } = await supabaseAdmin.from('atendimento_canais').update(registro).eq('id', existente.id).select().single();
+          if (error) throw error;
+          canal = data;
+        } else {
+          const { data, error } = await supabaseAdmin.from('atendimento_canais').insert({
+            ...registro, hotel_id: hotelId, tipo: 'SITE', identificador: `site-${hotelId}`, status: 'OK', criado_por_id: chamador.id,
+          }).select().single();
+          if (error) {
+            if (/duplicate|unique/i.test(error.message)) return respostaErro('Este hotel já tem o chat do site. Use “Editar”.');
+            if (/tipo_check|check constraint/i.test(error.message)) return respostaErro('Falta rodar no Supabase o SQL da Fase 1B (sql/caixa_de_entrada_fase1b.sql).');
+            throw error;
+          }
+          canal = data;
+        }
+        return Response.json({
+          sucesso: true, canal,
+          aviso: dominios.length ? null : 'Salvo. Falta informar o endereço do site: sem ele, o chat só funciona na página de teste.',
+        });
+      }
+
       // ------------------------------------------------------------ GERAIS
       case 'testar': {
         const canal = await carregarCanal(corpo.canalId);
         let detalhe;
         try {
-          if (canal.tipo === 'WHATSAPP') {
+          if (canal.tipo === 'SITE') {
+            const n = (canal.config?.dominios || []).length;
+            if (!n) throw new Error('Falta informar o endereço do site em “Editar”. Sem ele, o chat só funciona na página de teste.');
+            detalhe = `Chat ${canal.ativo ? 'ligado' : 'desligado'} · liberado para ${canal.config.dominios.join(', ')}. Para ver como fica, use “Testar o chat”.`;
+          } else if (canal.tipo === 'WHATSAPP') {
             const token = await tokenDoCanal(supabaseAdmin, canal);
             const info = await informacoesNumero({ token, phoneNumberId: canal.identificador });
             detalhe = `Número ${formatarNumero(info.display_phone_number)} · ${info.verified_name || 'sem nome verificado'} · qualidade ${info.quality_rating || '—'}`;

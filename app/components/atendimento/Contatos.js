@@ -19,7 +19,7 @@ const POR_PAGINA = 100;
 const limparBusca = (t) => String(t || '').replace(/[,()%*\\]/g, ' ').trim();
 
 
-const PLATAFORMA = { WHATSAPP: '🟢 WhatsApp', EMAIL: '✉️ E-mail', INSTAGRAM: '📸 Instagram', FACEBOOK: '💬 Facebook', IMPORTADO: '📄 Planilha', MANUAL: '✍️ Manual' };
+const PLATAFORMA = { WHATSAPP: '🟢 WhatsApp', EMAIL: '✉️ E-mail', INSTAGRAM: '📸 Instagram', FACEBOOK: '💬 Facebook', SITE: '🌐 Chat do site', IMPORTADO: '📄 Planilha', MANUAL: '✍️ Manual' };
 
 function aplicarFiltros(q, { hotel, busca, mostrar, periodo }) {
   let r = q;

@@ -16,6 +16,7 @@ import {
   chamarApi, subirArquivo, avisarCabecalho, STATUS_CONVERSA, ICONE_CANAL, NOME_CANAL,
   soHora, dataHora, rotuloDia, chaveDia, dataCurta, noites, dinheiro, iniciais, tamanhoArquivo,
   aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando, telefoneBonito,
+  nomeDaConversa, visitanteNoSite, paginaCurta,
 } from './util';
 import { ModalCotacao, ListaCotacoes } from './Cotacao';
 import { EditorHtml, EscolherModelo, aplicarVariaveisModelo, htmlParaTextoTela } from './ModelosEmail';
@@ -306,6 +307,22 @@ function lerJuntar() {
   try { return localStorage.getItem(CHAVE_JUNTAR) !== 'nao'; } catch (e) { return true; }
 }
 
+// Chat do site: onde a resposta vai chegar (no site agora, por e-mail ou só se voltar)
+function AvisoChatSite({ conversa }) {
+  const email = String(conversa.contato_endereco || '').includes('@') ? conversa.contato_endereco : null;
+  if (visitanteNoSite(conversa)) return <div className="at-aviso-site">🟢 O visitante está no site agora: a resposta aparece na hora, no chat.</div>;
+  return (
+    <div className="at-aviso-site">
+      O visitante saiu do site{conversa.site_visto_em ? ` há ${tempoDesde(conversa.site_visto_em)}` : ''}.{' '}
+      {email
+        ? <>Se ele não ler em 10 minutos, a resposta vai por e-mail para <strong>{email}</strong>.</>
+        : conversa.contato_id
+          ? 'Ele deixou o WhatsApp no cadastro: se precisar, continue por lá.'
+          : 'Ele não deixou contato: a resposta só aparece se ele voltar ao site no mesmo aparelho.'}
+    </div>
+  );
+}
+
 function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, janelaAberta, onEnviado, onAbrirModelo, onAbrirCotacao }) {
   const [texto, setTexto] = useState('');
   const [htmlModelo, setHtmlModelo] = useState(null); // e-mail com modelo formatado
@@ -322,6 +339,7 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
   const campoRef = useRef(null);
   const arquivoRef = useRef(null);
   const ehEmail = canal?.tipo === 'EMAIL';
+  const ehSite = canal?.tipo === 'SITE';
   // Fila de mensagens esperando para sair juntas
   const [juntar, setJuntar] = useState(true);
   const [fila, setFila] = useState(null); // { conversaId, textos: [] }
@@ -538,6 +556,7 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
       )}
 
       {canalDesligado && <div className="at-aviso-janela">O canal “{canal.nome}” está desligado. Só é possível escrever notas internas.</div>}
+      {ehSite && !nota && !canalDesligado && <AvisoChatSite conversa={conversa} />}
       {bloqueadoPelaJanela && !canalDesligado && (
         <div className="at-aviso-janela">
           <span>⏰ Passaram 24 horas desde a última mensagem do cliente. Pela regra do WhatsApp, agora só dá para enviar um <strong>modelo aprovado</strong>.</span>
@@ -549,7 +568,7 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
         <button type="button" className={`at-ferramenta ${nota ? 'ativa' : ''}`} onClick={() => setNota(!nota)} title="A nota fica só para a equipe; o cliente não vê">
           📝 {nota ? 'Escrevendo nota interna' : 'Nota interna'}
         </button>
-        {!nota && (
+        {!nota && !ehSite && (
           <>
             <button type="button" className="at-ferramenta" onClick={() => arquivoRef.current?.click()} disabled={canalDesligado || bloqueadoPelaJanela}>📎 Anexar</button>
             <input ref={arquivoRef} type="file" multiple hidden onChange={escolherArquivos} />
@@ -729,7 +748,7 @@ export function Conversa({
     return true;
   }
 
-  const nomeContato = conversa.contato_nome || conversa.contato_endereco || 'Cliente';
+  const nomeContato = nomeDaConversa(conversa);
 
   return (
     <>
@@ -740,10 +759,16 @@ export function Conversa({
           <div className="at-conv-nome">{nomeContato}</div>
           <div className="at-conv-sub">
             {nomeHotel ? <strong>{nomeHotel} · </strong> : null}
-            {NOME_CANAL[conversa.canal_tipo]}{canal ? ` · ${canal.nome}` : ' · canal removido'}
+            {NOME_CANAL[conversa.canal_tipo]}{canal ? (canal.nome !== NOME_CANAL[conversa.canal_tipo] ? ` · ${canal.nome}` : '') : ' · canal removido'}
             {conversa.contato_endereco && conversa.contato_nome ? ` · ${conversa.contato_endereco}` : ''}
             {conversa.canal_tipo === 'EMAIL' && conversa.assunto ? ` · ${conversa.assunto}` : ''}
           </div>
+          {conversa.canal_tipo === 'SITE' && (
+            <div className="at-conv-sub">
+              {visitanteNoSite(conversa) ? '🟢 Está no site agora' : `Saiu do site${conversa.site_visto_em ? ` há ${tempoDesde(conversa.site_visto_em)}` : ''}`}
+              {conversa.visitante?.pagina ? ` · ${paginaCurta(conversa.visitante.pagina)}` : ''}
+            </div>
+          )}
           {conversa.canal_tipo === 'WHATSAPP' && (
             <div className="at-conv-sub">
               {janelaAberta ? `🟢 Pode responder livremente até ${soHora(fimJanela)}${rotuloDia(fimJanela) !== 'Hoje' ? ` de ${rotuloDia(fimJanela).toLowerCase()}` : ''}` : '⏰ Janela de 24 h fechada — só modelos'}
@@ -799,7 +824,7 @@ export function Conversa({
       <Escrever
         conversa={conversa} canal={canal} usuario={usuario} respostas={respostas} modelos={modelos} nomeHotel={nomeHotelReal}
         janelaAberta={janelaAberta} onEnviado={onRecarregar} onAbrirModelo={() => setMostrarModelo(true)}
-        onAbrirCotacao={canal && ['WHATSAPP', 'EMAIL'].includes(canal.tipo) ? () => setMostrarCotacao(true) : null}
+        onAbrirCotacao={canal && ['WHATSAPP', 'EMAIL', 'SITE'].includes(canal.tipo) ? () => setMostrarCotacao(true) : null}
       />
       {mostrarCotacao && canal && (
         <ModalCotacao
@@ -1020,6 +1045,27 @@ export function DetalhesConversa({ conversa, etapas, etiquetas, salvando, onAlte
 }
 
 // ---------------------------------------------------------------------------
+// Chat do site: de onde a pessoa escreveu (a cidade é aproximada, pelo IP)
+const NOME_PAIS = { BR: 'Brasil', PT: 'Portugal', AR: 'Argentina', US: 'Estados Unidos', UY: 'Uruguai', PY: 'Paraguai', CL: 'Chile' };
+function DadosVisitante({ v }) {
+  const local = [v.cidade, v.estado, v.pais ? (NOME_PAIS[v.pais] || v.pais) : null].filter(Boolean).join(', ');
+  const utm = v.utm ? [v.utm.source, v.utm.medium, v.utm.campaign].filter(Boolean).join(' · ') : '';
+  const veio = utm || (v.referencia ? paginaCurta(v.referencia) : '');
+  return (
+    <div className="at-lateral-bloco">
+      <p className="at-lateral-titulo">🌐 Visitante do site</p>
+      {v.pagina && (
+        <div className="at-dado"><span>Página</span><span><a className="at-link-pequeno" href={v.pagina} target="_blank" rel="noopener noreferrer">{paginaCurta(v.pagina)} ↗</a></span></div>
+      )}
+      {veio && <div className="at-dado"><span>Veio de</span><span>{veio}</span></div>}
+      {local && <div className="at-dado"><span>Local (aproximado)</span><span>{local}</span></div>}
+      {v.idioma && <div className="at-dado"><span>Idioma do navegador</span><span>{v.idioma}</span></div>}
+      {v.aparelho && <div className="at-dado"><span>Aparelho</span><span>{v.aparelho}</span></div>}
+      {v.fuso && v.fuso !== 'America/Fortaleza' && v.fuso !== 'America/Recife' && <div className="at-dado"><span>Fuso horário</span><span>{v.fuso}</span></div>}
+    </div>
+  );
+}
+
 // Contato: dados (editáveis), histórico com o hotel e origem
 function PainelContato({ conversa, onAbrirConversa }) {
   const [contato, setContato] = useState(null);
@@ -1118,6 +1164,8 @@ function PainelContato({ conversa, onAbrirConversa }) {
           {conversa.origem.url && <a className="at-link-pequeno" href={conversa.origem.url} target="_blank" rel="noopener noreferrer">Ver o anúncio ↗</a>}
         </div>
       )}
+
+      {conversa.canal_tipo === 'SITE' && conversa.visitante && <DadosVisitante v={conversa.visitante} />}
 
       {asksuite.length > 0 && (
         <div className="at-lateral-bloco">
