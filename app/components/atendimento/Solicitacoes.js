@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
-import { dataHora, ICONE_CANAL, baixarCsv } from './util';
+import { dataHora, ICONE_CANAL, baixarCsv, nomeDaConversa } from './util';
 import { TIPOS_SOLICITACAO, SITUACOES_SOLICITACAO } from '../../../lib/atendimento/roboConfig';
 
 const ROTULOS_DADOS = {
@@ -105,7 +105,7 @@ export function Solicitacoes({ usuario, hoteis, multiHotel, nomes, onAbrirConver
             </div>
             <div style={{ margin: '4px 0' }}>{s.resumo}</div>
             <div className="at-dica" style={{ margin: 0 }}>
-              {ICONE_CANAL[conv.canal_tipo] || ''} {conv.contato_nome || 'Cliente'}{conv.contato_endereco ? ` · ${conv.contato_endereco}` : ''}
+              {ICONE_CANAL[conv.canal_tipo] || ''} {nomeDaConversa(conv)}{conv.contato_endereco ? ` · ${conv.contato_endereco}` : ''}
               {s.email_enviado_em ? ' · ✉️ aviso enviado por e-mail' : s.email_erro ? ` · ⚠️ e-mail não enviado: ${s.email_erro}` : ''}
             </div>
             {aberta === s.id && dados.length > 0 && (

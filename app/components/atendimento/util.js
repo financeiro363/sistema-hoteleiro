@@ -166,8 +166,26 @@ export function gravarPreferencia(chave, valor) {
   try { localStorage.setItem(chave, JSON.stringify(valor)); } catch (e) { /* nada */ }
 }
 
-export const ICONE_CANAL = { WHATSAPP: '🟢', EMAIL: '✉️', INSTAGRAM: '📸', FACEBOOK: '💬' };
-export const NOME_CANAL = { WHATSAPP: 'WhatsApp', EMAIL: 'E-mail', INSTAGRAM: 'Instagram', FACEBOOK: 'Facebook' };
+export const ICONE_CANAL = { WHATSAPP: '🟢', EMAIL: '✉️', INSTAGRAM: '📸', FACEBOOK: '💬', SITE: '🌐' };
+export const NOME_CANAL = { WHATSAPP: 'WhatsApp', EMAIL: 'E-mail', INSTAGRAM: 'Instagram', FACEBOOK: 'Facebook', SITE: 'Chat do site' };
+
+// Nome para mostrar quando o cliente ainda não disse quem é
+export function nomeDaConversa(c) {
+  return c?.contato_nome || c?.contato_endereco || (c?.canal_tipo === 'SITE' ? 'Visitante do site' : 'Cliente');
+}
+
+// Chat do site: o visitante está com o site aberto? (a janela do chat avisa a cada minuto)
+export function visitanteNoSite(c, agora = Date.now()) {
+  return c?.canal_tipo === 'SITE' && !!c.site_visto_em && agora - new Date(c.site_visto_em).getTime() < 150000;
+}
+
+// Endereço de página mais curto (sem o domínio quando é o mesmo site)
+export function paginaCurta(url) {
+  try {
+    const u = new URL(url);
+    return `${u.hostname.replace(/^www\./, '')}${u.pathname === '/' ? '' : u.pathname}`;
+  } catch (e) { return String(url || ''); }
+}
 
 // ---- Datas -----------------------------------------------------------------
 function diaFortaleza(data) {
@@ -461,6 +479,8 @@ export const ESTILOS_ATENDIMENTO = `
   .at-chip-espera { background: #FFF4D6; color: #7A5600; }
   .at-chip-atrasada { background: #FDECEC; color: #B3261E; }
   .at-chip-ad { background: #E3EEFB; color: #1D4E89; }
+  .at-chip-site { background: #E8F5EA; color: #1E6B2E; }
+  .at-aviso-site { background: #F3F1FA; border: 1px solid #E0DCF0; color: #3B3852; border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-bottom: 8px; }
   .at-chip-estrela { background: #FFF1C2; color: #6B4E00; }
   .at-espera-alerta { color: #B3261E !important; font-weight: 700; }
   .at-bolinha { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; flex-shrink: 0; }

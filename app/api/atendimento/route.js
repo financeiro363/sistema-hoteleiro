@@ -50,7 +50,7 @@ import {
   buscarDisponibilidade, linkDoMotor, detectarMotor, verificarReservasHotel, reais, dataBR,
 } from '../../../lib/atendimento/cotacao';
 import {
-  enviarWhatsApp, enviarEmailDaConversa, enviarCotacao, registrarSemDisponibilidade, preferenciasCotacao,
+  enviarPelaConversa, enviarCotacao, registrarSemDisponibilidade, preferenciasCotacao,
 } from '../../../lib/atendimento/envio';
 import { origemDoSite } from '../../../lib/atendimento/servidor';
 import { importarLote, limparImportacaoAnterior } from '../../../lib/atendimento/asksuite';
@@ -58,6 +58,7 @@ import {
   pausar as pausarRobo, responderPendentes, atualizarInfosVelhas, atualizarInfoHotel, testarRobo, testarChave, CHAVE_SEGREDO,
 } from '../../../lib/atendimento/robo';
 import { MODELOS_IA, CANAIS_ROBO } from '../../../lib/atendimento/roboConfig';
+import { avisarVisitantesPorEmail } from '../../../lib/atendimento/chatSite';
 import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/atendimento/automacoes';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 
@@ -79,7 +80,10 @@ export async function POST(request) {
       const reservas = await verificarReservasTodos(supabaseAdmin, null, false);
       // Arquivar sozinho os atendimentos parados (só nos hotéis que escolheram os dias)
       const { data: arquivadas } = await supabaseAdmin.rpc('atendimento_arquivar_antigos');
-      return Response.json({ ...emails, reservas, arquivadas: arquivadas ?? null });
+      // Chat do site: respostas que o visitante não leu em 10 minutos vão por e-mail
+      let chatSite = null;
+      try { chatSite = await avisarVisitantesPorEmail(supabaseAdmin, { prazo: Date.now() + 5000 }); } catch (e) { chatSite = { erro: e.message }; }
+      return Response.json({ ...emails, reservas, arquivadas: arquivadas ?? null, chatSite });
     } catch (e) { return respostaErro(e.message, 500); }
   }
   // Automações (Fase 5): agenda e envia os disparos que chegaram a hora
@@ -241,9 +245,7 @@ async function acaoEnviar(supabaseAdmin, chamador, corpo) {
   if (!texto && !arquivos.length && !corpo.modelo && !corpo.html) return respostaErro('Escreva a mensagem ou escolha um anexo.');
 
   const autor = { id: chamador.id };
-  const mensagens = canal.tipo === 'WHATSAPP'
-    ? await enviarWhatsApp(supabaseAdmin, autor, { canal, conversa, corpo, texto, arquivos })
-    : await enviarEmailDaConversa(supabaseAdmin, autor, { canal, conversa, corpo, texto, arquivos });
+  const mensagens = await enviarPelaConversa(supabaseAdmin, autor, { canal, conversa, corpo, texto, arquivos });
 
   // Quem responde vira o responsável, se a conversa estava sem ninguém
   const conversaFinal = mensagens.conversa;

@@ -4,7 +4,7 @@
 // CAIXA DE ENTRADA — Cotação (Fase 3)
 // ============================================================================
 // - ModalCotacao: datas e hóspedes → preço e disponibilidade da Cloudbeds
-//   (tarifa padrão do motor) → prévia → envia pelo WhatsApp ou e-mail com o
+//   (tarifa padrão do motor) → prévia → envia pelo WhatsApp, chat do site ou e-mail com o
 //   link "Reservar agora" de cada quarto
 // - ListaCotacoes: cotações da conversa (enviada, clicou, reservou)
 // ============================================================================
@@ -184,7 +184,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
         <div className="at-botoes">
           <button type="button" className="at-btn at-btn-verde" onClick={enviar}
             disabled={enviando || !resultado || !itensEscolhidos.length || !resultado.motor || bloqueadoJanela}>
-            {enviando ? 'Enviando…' : `Enviar cotação ${ehEmail ? 'por e-mail' : 'no WhatsApp'}`}
+            {enviando ? 'Enviando…' : `Enviar cotação ${ehEmail ? 'por e-mail' : canal?.tipo === 'SITE' ? 'no chat do site' : 'no WhatsApp'}`}
           </button>
           <button type="button" className="at-btn" onClick={onFechar}>Cancelar</button>
         </div>
