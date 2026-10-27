@@ -85,6 +85,10 @@ export default function PaginaSolicitacoes() {
   const [usuario, setUsuario] = useState(null);      // quem está logado (tabela usuarios)
   const [colegas, setColegas] = useState([]);        // todos os usuários do mesmo hotel
   const [tarefas, setTarefas] = useState([]);        // tarefas visíveis (RLS já filtra)
+  // Novidades: nº das solicitações com atividade de outra pessoa que eu
+  // ainda não abri (bolinha vermelha), e as dos meus outros hotéis.
+  const [novidades, setNovidades] = useState(() => new Set());
+  const [outrosHoteis, setOutrosHoteis] = useState([]);
 
   // Navegação por abas
   const [aba, setAba] = useState('recebidas');
@@ -121,6 +125,7 @@ export default function PaginaSolicitacoes() {
   const contadorAviso = useRef(0);
   const usuarioRef = useRef(null);
   const tarefaAbertaRef = useRef(null);
+  const carregarHistoricoRef = useRef(null);
 
   useEffect(() => { usuarioRef.current = usuario; }, [usuario]);
   useEffect(() => { tarefaAbertaRef.current = tarefaAberta; }, [tarefaAberta]);
@@ -136,6 +141,19 @@ export default function PaginaSolicitacoes() {
 
   // ---- Carregamento de dados ------------------------------------------------
 
+  // Quais solicitações têm novidade para mim (se a função do banco ainda não
+  // existir, simplesmente não mostra as bolinhas).
+  const carregarNovidades = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.rpc('solicitacoes_novidades');
+      if (error || !data) return;
+      setNovidades(new Set((data.novidades || []).map(Number)));
+      setOutrosHoteis(Array.isArray(data.outros) ? data.outros : []);
+    } catch (e) {
+      // sem bolinhas, sem quebrar a página
+    }
+  }, []);
+
   const carregarTarefas = useCallback(async () => {
     const { data, error } = await buscarTodos(() => supabase
       .from('tarefas')
@@ -146,6 +164,25 @@ export default function PaginaSolicitacoes() {
       return;
     }
     setTarefas(data || []);
+    await carregarNovidades();
+  }, [carregarNovidades]);
+
+  // Marca a solicitação como vista por mim (a hora vem do banco) e avisa o
+  // menu do topo para atualizar a bolinha vermelha na hora.
+  const marcarComoVista = useCallback(async (taskId) => {
+    if (!taskId) return;
+    setNovidades((atual) => {
+      if (!atual.has(Number(taskId))) return atual;
+      const nova = new Set(atual);
+      nova.delete(Number(taskId));
+      return nova;
+    });
+    try {
+      await supabase.rpc('solicitacoes_marcar_vista', { p_task: Number(taskId) });
+    } catch (e) {
+      // se a função ainda não existir, só não guarda a leitura
+    }
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('solicitacoes-mudaram'));
   }, []);
 
   useEffect(() => {
@@ -255,12 +292,29 @@ export default function PaginaSolicitacoes() {
           }
         }
       )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'tarefas_historico' },
+        (payload) => {
+          const h = payload.new || {};
+          const eu = usuarioRef.current;
+          const aberta = tarefaAbertaRef.current;
+          // Alguém mexeu na solicitação que estou vendo: mostra o histórico
+          // novo e já conta como vista (não acende a bolinha à toa).
+          if (aberta && Number(aberta.id) === Number(h.task_id) && eu && h.usuario_id !== eu.id) {
+            carregarHistoricoRef.current?.(aberta.id);
+            marcarComoVista(aberta.id);
+          } else {
+            carregarNovidades();
+          }
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(canal);
     };
-  }, [usuario, carregarTarefas, mostrarAviso]);
+  }, [usuario, carregarTarefas, carregarNovidades, marcarComoVista, mostrarAviso]);
 
   // ---- Funções auxiliares de exibição ---------------------------------------
 
@@ -274,24 +328,27 @@ export default function PaginaSolicitacoes() {
 
   const souAdmin = usuario?.papel === 'ADMIN';
 
+  // A solicitação aparece nesta aba? (aba 'todas', só do admin: todas)
+  function estaNaAba(t, nomeAba) {
+    if (!usuario) return false;
+    if (nomeAba === 'recebidas') {
+      return t.responsavel_atual_id === usuario.id && t.status !== 'Concluído' && t.status !== 'Cancelado';
+    }
+    if (nomeAba === 'enviadas') return t.criado_por_id === usuario.id;
+    if (nomeAba === 'concluidas') return t.status === 'Concluído';
+    return true;
+  }
+
+  // Bolinha vermelha na aba quando ela tem alguma solicitação com novidade
+  function abaTemNovidade(nomeAba) {
+    if (!novidades.size) return false;
+    return tarefas.some((t) => novidades.has(Number(t.id)) && estaNaAba(t, nomeAba));
+  }
+
   // Lista de tarefas de acordo com a aba escolhida
   function tarefasDaAba() {
     if (!usuario) return [];
-    let lista = tarefas;
-
-    if (aba === 'recebidas') {
-      lista = lista.filter(
-        (t) =>
-          t.responsavel_atual_id === usuario.id &&
-          t.status !== 'Concluído' &&
-          t.status !== 'Cancelado'
-      );
-    } else if (aba === 'enviadas') {
-      lista = lista.filter((t) => t.criado_por_id === usuario.id);
-    } else if (aba === 'concluidas') {
-      lista = lista.filter((t) => t.status === 'Concluído');
-    }
-    // aba 'todas' (só admin): não filtra nada além dos filtros abaixo
+    let lista = tarefas.filter((t) => estaNaAba(t, aba));
 
     // Filtros de busca
     const textoBusca = busca.trim().toLowerCase();
@@ -340,6 +397,7 @@ export default function PaginaSolicitacoes() {
     if (!error) setHistorico(data || []);
     setCarregandoHistorico(false);
   }, []);
+  useEffect(() => { carregarHistoricoRef.current = carregarHistorico; }, [carregarHistorico]);
 
   function abrirTarefa(t) {
     setTarefaAberta(t);
@@ -348,6 +406,7 @@ export default function PaginaSolicitacoes() {
     setDestinatariosEncaminhar([]);
     setHistorico([]);
     carregarHistorico(t.id);
+    marcarComoVista(t.id);
   }
 
   function fecharTarefa() {
@@ -726,6 +785,20 @@ export default function PaginaSolicitacoes() {
         </button>
       </header>
 
+      {/* Solicitações em outro hotel da pessoa (ela está com o outro no topo) */}
+      {outrosHoteis.length > 0 && (
+        <div className="sol-outro-hotel" role="status">
+          {outrosHoteis.map((o) => (
+            <div key={o.hotel_id}>
+              <span className="sol-ponto-novo" aria-hidden="true" />{' '}
+              Você tem <strong>{o.quantidade}</strong>{' '}
+              {Number(o.quantidade) === 1 ? 'solicitação' : 'solicitações'} no <strong>{o.nome || `hotel ${o.hotel_id}`}</strong>.
+              {' '}Troque o hotel no topo da página para ver.
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Formulário de nova solicitação */}
       {mostrarNova && (
         <form className="sol-cartao sol-form-nova" onSubmit={criarSolicitacao}>
@@ -841,6 +914,7 @@ export default function PaginaSolicitacoes() {
           onClick={() => setAba('recebidas')}
         >
           Minhas tarefas <span className="sol-contador">{totalRecebidas}</span>
+          {abaTemNovidade('recebidas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
         </button>
         <button
           type="button"
@@ -848,6 +922,7 @@ export default function PaginaSolicitacoes() {
           onClick={() => setAba('enviadas')}
         >
           Enviadas por mim <span className="sol-contador">{totalEnviadas}</span>
+          {abaTemNovidade('enviadas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
         </button>
         <button
           type="button"
@@ -855,6 +930,7 @@ export default function PaginaSolicitacoes() {
           onClick={() => setAba('concluidas')}
         >
           Concluídas <span className="sol-contador">{totalConcluidas}</span>
+          {abaTemNovidade('concluidas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
         </button>
         {souAdmin && (
           <button
@@ -863,6 +939,7 @@ export default function PaginaSolicitacoes() {
             onClick={() => setAba('todas')}
           >
             Todas do hotel <span className="sol-contador">{tarefas.length}</span>
+            {abaTemNovidade('todas') && <span className="sol-ponto-novo" title="Tem novidade" aria-label="Tem novidade" />}
           </button>
         )}
       </nav>
@@ -939,10 +1016,13 @@ export default function PaginaSolicitacoes() {
           <button
             key={t.id}
             type="button"
-            className={`sol-item ${t.status === 'Pendente' || t.status === 'Encaminhado' ? 'sol-item-pendente' : ''}`}
+            className={`sol-item ${t.status === 'Pendente' || t.status === 'Encaminhado' ? 'sol-item-pendente' : ''} ${novidades.has(Number(t.id)) ? 'sol-item-novidade' : ''}`}
             onClick={() => abrirTarefa(t)}
           >
             <div className="sol-item-topo">
+              {novidades.has(Number(t.id)) && (
+                <span className="sol-ponto-novo" title="Nova atividade" aria-label="Nova atividade" />
+              )}
               <span className="sol-item-id">#{t.id}</span>
               <span
                 className="sol-tag"
@@ -1341,6 +1421,19 @@ function EstilosDoModulo() {
         background: rgba(0,0,0,0.10); border-radius: 999px; padding: 1px 8px;
       }
       .sol-aba-ativa .sol-contador { background: rgba(255,255,255,0.22); }
+
+      /* Bolinha vermelha de novidade */
+      .sol-ponto-novo {
+        display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+        background: #D93025; vertical-align: middle; margin-left: 6px; flex: none;
+      }
+      .sol-item-topo .sol-ponto-novo { margin-left: 0; }
+      .sol-item-novidade { border-color: #F2B8B5; background: #FFF8F7; }
+      .sol-outro-hotel {
+        background: #FFF4E5; border: 1px solid #F5C98B; color: #6B4A12;
+        border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;
+        font-size: 14px; line-height: 1.5; display: flex; flex-direction: column; gap: 4px;
+      }
 
       /* Filtros */
       .sol-filtros { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }

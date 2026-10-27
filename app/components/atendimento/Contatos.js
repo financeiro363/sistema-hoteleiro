@@ -54,6 +54,8 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
   const [erro, setErro] = useState('');
   const [busca, setBusca] = useState('');
   const [hotel, setHotel] = useState('');
+  // Só um hotel (o escolhido no topo): a lista fica presa a ele
+  const hotelUnico = hoteis.length === 1 ? String(hoteis[0].id) : '';
   const [mostrar, setMostrar] = useState('');
   const [ordem, setOrdem] = useState('atualizado');
   const [aberto, setAberto] = useState(null);
@@ -71,7 +73,7 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
     setCarregando(true);
     const de = mais ? lista.length : 0;
     const { data, error, count } = await ordenar(aplicarFiltros(
-      supabase.from('atendimento_contatos').select('*', { count: 'exact' }), { hotel, busca, mostrar, periodo },
+      supabase.from('atendimento_contatos').select('*', { count: 'exact' }), { hotel: hotel || hotelUnico, busca, mostrar, periodo },
     )).range(de, de + POR_PAGINA - 1);
     if (meu !== pedido.current) return;
     if (error) {
@@ -117,7 +119,7 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
       setFunil((antes) => ({ ...(mais ? antes : {}), ...porContato }));
     }
     setCarregando(false);
-  }, [hotel, busca, mostrar, periodo, ordenar, lista]);
+  }, [hotel, hotelUnico, busca, mostrar, periodo, ordenar, lista]);
 
   // Recarrega ao mudar filtros (com uma pequena espera na busca)
   useEffect(() => {
@@ -131,7 +133,7 @@ export function Contatos({ hoteis, multiHotel, nomes = {}, onAbrirConversa, onNo
     try {
       const todos = [];
       for (let de = 0; ; de += 1000) {
-        const { data, error } = await ordenar(aplicarFiltros(supabase.from('atendimento_contatos').select('*'), { hotel, busca, mostrar, periodo })).range(de, de + 999);
+        const { data, error } = await ordenar(aplicarFiltros(supabase.from('atendimento_contatos').select('*'), { hotel: hotel || hotelUnico, busca, mostrar, periodo })).range(de, de + 999);
         if (error) throw error;
         todos.push(...(data || []));
         if (!data || data.length < 1000) break;
@@ -623,7 +625,9 @@ function ImportarContatos({ hoteis, multiHotel, onFechar, onImportado }) {
         )}
         {erro && <div className="aviso-erro" style={{ marginTop: 10 }}>{erro}</div>}
         <div className="at-botoes">
-          {!resultado && asksuite && <button type="button" className="at-btn at-btn-verde" onClick={importarAsksuite} disabled={!!progresso}>Importar histórico do Asksuite</button>}
+          {!resultado && asksuite && (hoteis.some((h) => h.souAdmin)
+            ? <button type="button" className="at-btn at-btn-verde" onClick={importarAsksuite} disabled={!!progresso}>Importar histórico do Asksuite</button>
+            : <span className="at-dica" style={{ margin: 0 }}>Só o administrador importa o histórico do Asksuite.</span>)}
           {!resultado && !asksuite && <button type="button" className="at-btn at-btn-verde" onClick={importar} disabled={!linhas || !!progresso}>Importar</button>}
           <button type="button" className="at-btn" onClick={onFechar}>{resultado ? 'Fechar' : 'Cancelar'}</button>
         </div>

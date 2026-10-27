@@ -534,7 +534,7 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
         </div>
       )}
       {listaRespostas && !sugestoes.length && (
-        <div className="at-sugestoes"><div className="at-vazio">Nenhuma resposta pronta. Crie na aba “Respostas prontas”.</div></div>
+        <div className="at-sugestoes"><div className="at-vazio">Nenhuma resposta pronta. {usuario?.papel === 'ADMIN' ? 'Crie na aba “Respostas prontas”.' : 'Peça ao administrador para criar na aba “Respostas prontas”.'}</div></div>
       )}
 
       {canalDesligado && <div className="at-aviso-janela">O canal “{canal.nome}” está desligado. Só é possível escrever notas internas.</div>}

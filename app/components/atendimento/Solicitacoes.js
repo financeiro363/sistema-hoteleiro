@@ -35,12 +35,13 @@ export function Solicitacoes({ usuario, hoteis, multiHotel, nomes, onAbrirConver
     if (situacao === 'abertas') q = q.neq('situacao', 'CONCLUIDA');
     else if (situacao) q = q.eq('situacao', situacao);
     if (tipo) q = q.eq('tipo', tipo);
-    if (hotel) q = q.eq('hotel_id', Number(hotel));
+    const hotelEscolhido = hotel || (hoteis.length === 1 ? hoteis[0].id : '');
+    if (hotelEscolhido) q = q.eq('hotel_id', Number(hotelEscolhido));
     const { data, error } = await q;
     if (error) setErro(/atendimento_solicitacoes|does not exist|schema cache/i.test(error.message) ? 'Falta rodar no Supabase o SQL da Fase 4 (sql/caixa_de_entrada_fase4.sql).' : error.message);
     else { setErro(''); setLista(data || []); }
     setCarregando(false);
-  }, [situacao, tipo, hotel]);
+  }, [situacao, tipo, hotel, hoteis]);
 
   useEffect(() => { carregar(); const id = setInterval(carregar, 30000); return () => clearInterval(id); }, [carregar]);
 

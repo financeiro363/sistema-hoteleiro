@@ -221,6 +221,7 @@ export default function CaixaDeEntrada() {
   const montarConsulta = useCallback(() => {
     let q = supabase.from('atendimento_conversas').select('*');
     if (hotelFiltro) q = q.eq('hotel_id', Number(hotelFiltro));
+    else if (hoteisIds.length) q = q.in('hotel_id', hoteisIds); // só o hotel escolhido no topo
     if (filtro === 'abertas') q = q.not('status', 'in', FECHADAS);
     if (filtro === 'minhas') q = q.eq('responsavel_id', usuario.id).not('status', 'in', FECHADAS);
     if (filtro === 'sem') q = q.is('responsavel_id', null).not('status', 'in', FECHADAS);
@@ -253,7 +254,7 @@ export default function CaixaDeEntrada() {
     }
     const crescente = ordem === 'antigas';
     return q.order('ultima_mensagem_em', { ascending: crescente, nullsFirst: false }).order('id', { ascending: crescente });
-  }, [usuario, filtro, hotelFiltro, atendenteFiltro, etiquetaFiltro, etapaFiltro, canalFiltro, periodo, busca, ordem, etiquetas, etapas]);
+  }, [usuario, filtro, hotelFiltro, hoteisIds, atendenteFiltro, etiquetaFiltro, etapaFiltro, canalFiltro, periodo, busca, ordem, etiquetas, etapas]);
 
   const carregarLista = useCallback(async () => {
     if (!usuario) return;
@@ -270,7 +271,9 @@ export default function CaixaDeEntrada() {
         const { data: ct } = await supabase.from('atendimento_contatos').select('id').eq('ja_reservou', true).in('id', ids.slice(0, 600));
         setReservaram(new Set((ct || []).map((x) => x.id)));
       }
-      const { count, error: erroSol } = await supabase.from('atendimento_solicitacoes').select('id', { count: 'exact', head: true }).eq('situacao', 'NOVA');
+      let qSol = supabase.from('atendimento_solicitacoes').select('id', { count: 'exact', head: true }).eq('situacao', 'NOVA');
+      if (hoteisIds.length) qSol = qSol.in('hotel_id', hoteisIds);
+      const { count, error: erroSol } = await qSol;
       if (!erroSol) setSolicitacoesNovas(count || 0);
     }
     setCarregandoLista(false);
@@ -539,9 +542,9 @@ export default function CaixaDeEntrada() {
             ['contatos', '👥 Contatos'],
             ['solicitacoes', <>📋 Solicitações{solicitacoesNovas > 0 && <span className="at-aba-badge at-aba-badge-laranja">{solicitacoesNovas > 99 ? '99+' : solicitacoesNovas}</span>}</>],
             ['painel', '📊 Painel'],
-            ['respostas', '⚡ Respostas prontas'],
-            ['modelos', '✉️ Modelos de e-mail'],
-            ...(souAdminDeAlgum ? [['funil', '🧩 Funil e etiquetas'], ['robo', '🤖 Robô (IA)'], ['automacoes', '🔁 Automações'], ['whatsapp', '📣 WhatsApp']] : []),
+            // Configurações: só o administrador do hotel (o colaborador continua
+            // usando as respostas prontas e os modelos de e-mail na conversa)
+            ...(souAdminDeAlgum ? [['respostas', '⚡ Respostas prontas'], ['modelos', '✉️ Modelos de e-mail'], ['funil', '🧩 Funil e etiquetas'], ['robo', '🤖 Robô (IA)'], ['automacoes', '🔁 Automações'], ['whatsapp', '📣 WhatsApp']] : []),
             ...(souAdmin ? [['canais', '⚙️ Canais']] : []),
           ].map(([chave, rotulo]) => (
             <button key={chave} type="button" role="tab" aria-selected={aba === chave} className={`at-aba ${aba === chave ? 'ativa' : ''}`} onClick={() => setAba(chave)}>{rotulo}</button>
@@ -615,10 +618,10 @@ export default function CaixaDeEntrada() {
       {aba === 'painel' && (
         <PainelIndicadores hoteis={equipe.hoteis.length ? equipe.hoteis : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual' }]} nomes={nomes} />
       )}
-      {aba === 'respostas' && (
+      {aba === 'respostas' && souAdminDeAlgum && (
         <RespostasProntas usuario={usuario} respostas={respostas} hoteis={equipe.hoteis} multiHotel={multiHotel} onMudou={carregarApoio} />
       )}
-      {aba === 'modelos' && (
+      {aba === 'modelos' && souAdminDeAlgum && (
         <ModelosEmail
           hoteis={equipe.hoteis.length ? equipe.hoteis : [{ id: Number(usuario.hotel_id), nome: 'Hotel atual', souAdmin }]}
           multiHotel={multiHotel} modelos={modelos} usuario={usuario} onMudou={carregarApoio}
