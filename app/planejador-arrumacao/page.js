@@ -1,11 +1,11 @@
 'use client';
 
 // ============================================================================
-// PLANEJADOR DE ARRUMAÇÃO
+// GERENCIADOR DE TAREFAS (antigo "Planejador de Arrumação")
 // ============================================================================
 // Uma página só, que se adapta por papel (mesmo padrão de Governança e
 // Manutenção): Admin vê o calendário + gerenciamento completo; Colaborador
-// vê um quadro Kanban só com as PRÓPRIAS arrumações do dia — e só se tiver
+// vê um quadro Kanban só com as PRÓPRIAS tarefas do dia — e só se tiver
 // a permissão "pode_ver_tarefas_do_dia" marcada (senão, nem acessa).
 //
 // Tabela: "arrumacoes_planejadas" — nome escolhido de propósito pra não
@@ -72,9 +72,9 @@ export default function PlanejadorArrumacao() {
     return (
       <main className="conteudo">
         <span className="olho">Operações</span>
-        <h1>Minhas Arrumações</h1>
+        <h1>Gerenciador de Tarefas</h1>
         <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>
-          Você ainda não tem permissão pra ver suas arrumações do dia. Peça pro administrador
+          Você ainda não tem permissão pra ver suas tarefas do dia. Peça pro administrador
           liberar em Administração → Usuários.
         </div>
       </main>
@@ -195,13 +195,13 @@ function VisaoAdmin({ usuario }) {
         .update({ ...dados, atualizado_em: new Date().toISOString() }).eq('id', editandoId);
       setSalvandoModal(false);
       if (error) { setErroModal('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
-      mostrarAviso('Arrumação atualizada!');
+      mostrarAviso('Tarefa atualizada!');
     } else {
       const { error } = await supabase.from('arrumacoes_planejadas')
         .insert({ ...dados, status: 'PENDENTE', hotel_id: usuario.hotel_id, criado_por_id: usuario.id });
       setSalvandoModal(false);
       if (error) { setErroModal('Não foi possível cadastrar. Detalhe técnico: ' + error.message); return; }
-      mostrarAviso('Arrumação criada!');
+      mostrarAviso('Tarefa criada!');
     }
     setMostrarModal(false);
     carregarTudo();
@@ -211,7 +211,7 @@ function VisaoAdmin({ usuario }) {
     setExcluindoId(null);
     const { error } = await supabase.from('arrumacoes_planejadas').delete().eq('id', item.id);
     if (error) { setErro('Não foi possível excluir. Detalhe técnico: ' + error.message); return; }
-    mostrarAviso('Arrumação excluída.');
+    mostrarAviso('Tarefa excluída.');
     carregarTudo();
   }
 
@@ -228,7 +228,7 @@ function VisaoAdmin({ usuario }) {
       <div className="pa-cabecalho">
         <h1 style={{ margin: 0 }}>Gerenciador de Tarefas</h1>
         <button type="button" className="botao botao-principal" onClick={() => abrirNovo(diaSelecionado)}>
-          + Nova Arrumação
+          + Nova Tarefa
         </button>
       </div>
 
@@ -280,10 +280,10 @@ function VisaoAdmin({ usuario }) {
 
           {diaSelecionado && (
             <section style={{ marginTop: 16 }}>
-              <h2 style={{ fontSize: '1.1rem' }}>Arrumações em {formatarDataBR(diaSelecionado)}</h2>
+              <h2 style={{ fontSize: '1.1rem' }}>Tarefas em {formatarDataBR(diaSelecionado)}</h2>
               {listaDoDia.length === 0 ? (
                 <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>
-                  Nenhuma arrumação planejada pra esse dia.
+                  Nenhuma tarefa planejada pra esse dia.
                 </div>
               ) : (
                 <div className="pa-lista-dia">
@@ -327,7 +327,7 @@ function VisaoAdmin({ usuario }) {
         <div className="pa-overlay" role="dialog" aria-modal="true">
           <div className="pa-modal">
             <div className="pa-modal-topo">
-              <h2 style={{ fontSize: '1.15rem', margin: 0 }}>{editandoId ? 'Editar arrumação' : 'Nova Arrumação'}</h2>
+              <h2 style={{ fontSize: '1.15rem', margin: 0 }}>{editandoId ? 'Editar tarefa' : 'Nova Tarefa'}</h2>
               <button type="button" className="pa-fechar" onClick={() => setMostrarModal(false)} aria-label="Fechar">✕</button>
             </div>
             <form onSubmit={salvar}>
@@ -335,7 +335,7 @@ function VisaoAdmin({ usuario }) {
               <input className="campo" type="date" value={fData} onChange={(e) => setFData(e.target.value)} />
 
               <label className="rotulo">Título *</label>
-              <input className="campo" type="text" value={fTitulo} onChange={(e) => setFTitulo(e.target.value)} placeholder="Ex.: Arrumação geral do 3º andar" />
+              <input className="campo" type="text" value={fTitulo} onChange={(e) => setFTitulo(e.target.value)} placeholder="Ex.: Conferir o estoque do frigobar do 3º andar" />
 
               <label className="rotulo">Prioridade</label>
               <select className="campo" value={fPrioridade} onChange={(e) => setFPrioridade(e.target.value)}>
@@ -371,7 +371,7 @@ function VisaoAdmin({ usuario }) {
               {erroModal && <div className="aviso-erro">{erroModal}</div>}
               <div className="pa-modal-botoes">
                 <button type="submit" className="botao botao-principal" disabled={salvandoModal}>
-                  {salvandoModal ? 'Salvando…' : editandoId ? 'Salvar alterações' : 'Criar arrumação'}
+                  {salvandoModal ? 'Salvando…' : editandoId ? 'Salvar alterações' : 'Criar tarefa'}
                 </button>
                 <button type="button" className="botao botao-suave" onClick={() => setMostrarModal(false)}>Cancelar</button>
               </div>
@@ -452,7 +452,7 @@ function VisaoColaborador({ usuario }) {
     <main className="conteudo pa-conteudo">
       <EstilosPlanejador />
       <span className="olho">Operações</span>
-      <h1>Minhas Arrumações — Hoje</h1>
+      <h1>Gerenciador de Tarefas — Minhas tarefas de hoje</h1>
       <p className="texto-suave" style={{ fontSize: 13 }}>{formatarDataBR(hojeISO())}</p>
       {erro && <div className="aviso-erro">{erro}</div>}
 

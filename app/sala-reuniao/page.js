@@ -627,15 +627,14 @@ export default function SalaReuniao() {
     if (!(valorPag > 0)) { setErroPag('Informe um valor de pagamento maior que zero.'); return; }
     if (!pagForm.forma) { setErroPag('Escolha a forma de pagamento.'); return; }
     if (valorPag > resumo.saldo) { setErroPag(`O valor (${dinheiro(valorPag)}) é maior que o saldo a pagar (${dinheiro(resumo.saldo)}).`); return; }
-    if (pagForm.data > hojeFortaleza()) { setErroPag('A data do pagamento não pode ser no futuro.'); return; }
 
     setSalvando(true);
     const { data: pagNovo, error } = await supabase.rpc('lancar_pagamento_sala', {
       p_reserva_id: detalhe.id,
       p_valor: valorPag,
       p_forma: pagForm.forma,
-      // Colaborador sempre lança com a data de hoje; só o ADMIN escolhe outra
-      p_data: souAdmin ? pagForm.data : null,
+      // Sempre com a data de hoje (para todos, inclusive o ADMIN)
+      p_data: null,
       p_observacao: pagForm.observacao.trim() || null,
     });
     setSalvando(false);
@@ -1306,12 +1305,8 @@ export default function SalaReuniao() {
                       <div className="sr-duas">
                         <div>
                           <label className="rotulo">Data do pagamento</label>
-                          {souAdmin ? (
-                            <input className="campo" type="date" value={pagForm.data} max={hojeFortaleza()}
-                              onChange={(e) => setPagForm({ ...pagForm, data: e.target.value })} />
-                          ) : (
-                            <input className="campo" type="text" value={`Hoje (${formatarData(pagForm.data)})`} disabled />
-                          )}
+                          {/* Pagamento só com a data de hoje, para todos (inclusive o administrador) */}
+                          <input className="campo" type="text" value={`Hoje (${formatarData(hojeFortaleza())})`} disabled />
                         </div>
                         <div>
                           <label className="rotulo">Observação (opcional)</label>
@@ -1321,7 +1316,8 @@ export default function SalaReuniao() {
                         </div>
                       </div>
                       <p className="texto-suave" style={{ fontSize: 12.5, margin: '8px 0 0' }}>
-                        Este valor entra no Fechamento de Caixa do dia {formatarData(souAdmin ? pagForm.data : hojeFortaleza())}, como “Sala de Reunião”.
+                        Este valor entra no Fechamento de Caixa do dia {formatarData(hojeFortaleza())}, como “Sala de Reunião”.
+                        O pagamento é sempre lançado com a data de hoje.
                       </p>
                       {erroPag && <div className="aviso-erro" style={{ marginTop: 8 }}>{erroPag}</div>}
                       <div className="sr-modal-botoes" style={{ marginTop: 10 }}>

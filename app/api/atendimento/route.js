@@ -765,7 +765,8 @@ async function verificarReservasTodos(supabaseAdmin, hoteis, forcar) {
 
 // ---------------------------------------------------------------- HISTÓRICO DO ASKSUITE
 async function acaoImportarAsksuite(supabaseAdmin, chamador, corpo) {
-  const hotelId = hotelPermitido(chamador, corpo.hotelId);
+  // Importar o histórico apaga a importação anterior: só o administrador
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
   const linhas = Array.isArray(corpo.linhas) ? corpo.linhas.slice(0, 400) : [];
   if (!linhas.length) return respostaErro('A planilha não tem conversas.');
   const limpeza = corpo.limpar ? await limparImportacaoAnterior(supabaseAdmin, hotelId) : null;

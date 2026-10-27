@@ -221,14 +221,32 @@ export default function CabecalhoSite() {
       setContadorAtendimento(0);
       return;
     }
-    const { count } = await supabase
-      .from('tarefas')
-      .select('id', { count: 'exact', head: true })
-      .eq('responsavel_atual_id', usuarioId)
-      .eq('hotel_id', hotelId)
-      .neq('status', 'Concluído')
-      .neq('status', 'Cancelado');
-    setContadorSolicitacoes(count || 0);
+    // Solicitações: abertas comigo + as que tiveram novidade (criada,
+    // encaminhada, comentada, mudou de situação…) que eu ainda não abri.
+    // Conta também as dos outros hotéis da pessoa. Se a função do banco
+    // ainda não existir, volta para a contagem antiga (só as abertas comigo).
+    let contouSolicitacoes = false;
+    try {
+      const { data: novidades, error: erroNovidades } = await supabase.rpc('solicitacoes_novidades');
+      if (!erroNovidades && novidades) {
+        const ids = new Set([...(novidades.abertas || []), ...(novidades.novidades || [])]);
+        const outros = (novidades.outros || []).reduce((soma, o) => soma + (Number(o.quantidade) || 0), 0);
+        setContadorSolicitacoes(ids.size + outros);
+        contouSolicitacoes = true;
+      }
+    } catch (e) {
+      // segue para a contagem antiga
+    }
+    if (!contouSolicitacoes) {
+      const { count } = await supabase
+        .from('tarefas')
+        .select('id', { count: 'exact', head: true })
+        .eq('responsavel_atual_id', usuarioId)
+        .eq('hotel_id', hotelId)
+        .neq('status', 'Concluído')
+        .neq('status', 'Cancelado');
+      setContadorSolicitacoes(count || 0);
+    }
 
     try {
       const { data: sessaoAtual } = await supabase.auth.getSession();
@@ -257,7 +275,7 @@ export default function CabecalhoSite() {
       setContadorDevolucoes(0);
     }
 
-    // Arrumações planejadas atribuídas a mim, ainda não concluídas.
+    // Gerenciador de Tarefas: tarefas atribuídas a mim, ainda não concluídas.
     const { count: countArrumacoes } = await supabase
       .from('arrumacoes_planejadas')
       .select('id', { count: 'exact', head: true })
@@ -276,12 +294,13 @@ export default function CabecalhoSite() {
     setContadorManutencao(countManutencao || 0);
 
     // Caixa de Entrada: conversas com mensagem não lida, comigo ou sem
-    // responsável, nos hotéis em que a pessoa atende (o banco já limita a
-    // esses hotéis). Se a tabela ainda não existir, fica 0 sem quebrar nada.
+    // responsável, no hotel escolhido no topo (o banco também limita).
+    // Se a tabela ainda não existir, fica 0 sem quebrar nada.
     try {
       const { count: countAtendimento, error: erroAtendimento } = await supabase
         .from('atendimento_conversas')
         .select('id', { count: 'exact', head: true })
+        .eq('hotel_id', hotelId) // só o hotel escolhido no topo
         .gt('nao_lidas', 0)
         .not('status', 'in', '(RESOLVIDA,ARQUIVADA)')
         .or(`responsavel_id.is.null,responsavel_id.eq.${usuarioId}`);
@@ -312,9 +331,39 @@ export default function CabecalhoSite() {
     }
     window.addEventListener('fichas-atualizadas', aoAtualizarFichas);
     window.addEventListener('atendimento-atualizado', aoAtualizarFichas);
+    window.addEventListener('solicitacoes-mudaram', aoAtualizarFichas);
     return () => {
       window.removeEventListener('fichas-atualizadas', aoAtualizarFichas);
       window.removeEventListener('atendimento-atualizado', aoAtualizarFichas);
+      window.removeEventListener('solicitacoes-mudaram', aoAtualizarFichas);
+    };
+  }, [usuarioIdAtual, hotelIdAtual, papelUsuario]);
+
+  // Solicitações na hora: quando alguém cria, encaminha, comenta ou muda uma
+  // solicitação, a bolinha vermelha do menu aparece sem esperar o minuto.
+  // (O banco só manda o que a pessoa pode ver; esperamos 1,5 s para juntar
+  // várias mudanças seguidas numa só atualização.)
+  useEffect(() => {
+    if (!usuarioIdAtual || !hotelIdAtual) return;
+    if (papelUsuario !== 'ADMIN' && papelUsuario !== 'COLABORADOR') return;
+    let espera = null;
+    function agendar() {
+      clearTimeout(espera);
+      espera = setTimeout(() => atualizarContadores(usuarioIdAtual, hotelIdAtual, papelUsuario), 1500);
+    }
+    let canal = null;
+    try {
+      canal = supabase
+        .channel(`menu-solicitacoes-${usuarioIdAtual}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'tarefas' }, agendar)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tarefas_historico' }, agendar)
+        .subscribe();
+    } catch (e) {
+      canal = null;
+    }
+    return () => {
+      clearTimeout(espera);
+      if (canal) supabase.removeChannel(canal);
     };
   }, [usuarioIdAtual, hotelIdAtual, papelUsuario]);
 
