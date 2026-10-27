@@ -107,6 +107,9 @@ export default function CaixaDeEntrada() {
   const [mensagens, setMensagens] = useState([]);
   const [carregandoMensagens, setCarregandoMensagens] = useState(false);
   const [lateralAberta, setLateralAberta] = useState(false);
+  // Conversa ampliada: esconde a lista no computador (lembra a escolha)
+  const [ampliada, setAmpliada] = useState(false);
+  const painelRef = useRef(null);
   const [novaConversa, setNovaConversa] = useState(null);
   const [avisosLigados, setAvisosLigados] = useState(false);
   const [agora, setAgora] = useState(Date.now());
@@ -131,6 +134,7 @@ export default function CaixaDeEntrada() {
       if (p.get('aba') && ABAS.includes(p.get('aba'))) setAba(p.get('aba'));
       if (p.get('conversa')) setSelecionadaId(Number(p.get('conversa')));
       setVisao(lerPreferencia('at-visao', 'lista') === 'quadro' ? 'quadro' : 'lista');
+      setAmpliada(lerPreferencia('at-ampliada', false) === true);
       setAvisosLigados(lerPreferencia('at-avisos', false) === true && typeof Notification !== 'undefined');
       setVerificando(false);
     })();
@@ -433,11 +437,51 @@ export default function CaixaDeEntrada() {
     return () => clearInterval(id);
   }, [temEmail, recarregarTudo]);
 
+  // Altura do menu do site (fixo no topo): o quadro da conversa usa o resto da tela
+  useEffect(() => {
+    function medir() {
+      const h = document.querySelector('.cabecalho')?.offsetHeight;
+      if (h) document.documentElement.style.setProperty('--at-topo', `${h}px`);
+    }
+    medir();
+    window.addEventListener('resize', medir);
+    return () => window.removeEventListener('resize', medir);
+  }, []);
+
+  // Conversa aberta por link (?conversa=…): já encaixa o quadro na tela
+  const jaEncaixou = useRef(false);
+  useEffect(() => {
+    if (!selecionadaId || jaEncaixou.current || !painelRef.current) return;
+    jaEncaixou.current = true;
+    encaixarPainel();
+  });
+
   // ---- Ações -------------------------------------------------------------------
   function abrirConversa(id) {
     setAba('conversas');
     setSelecionadaId(id);
     window.history.replaceState(null, '', `/atendimento?conversa=${id}`);
+    encaixarPainel();
+  }
+
+  // Computador: o quadro da conversa ocupa a tela toda abaixo do menu do site.
+  // Ao abrir uma conversa, a página desce até o quadro (a lista continua nele).
+  function encaixarPainel() {
+    if (typeof window === 'undefined' || window.innerWidth < 900) return;
+    requestAnimationFrame(() => {
+      const painel = painelRef.current;
+      if (!painel) return;
+      const topo = document.querySelector('.cabecalho')?.offsetHeight || 0;
+      const r = painel.getBoundingClientRect();
+      if (Math.abs(r.top - topo - 8) > 6) window.scrollTo({ top: window.scrollY + r.top - topo - 8, behavior: 'smooth' });
+    });
+  }
+
+  function alternarAmpliada() {
+    const nova = !ampliada;
+    setAmpliada(nova);
+    gravarPreferencia('at-ampliada', nova);
+    encaixarPainel();
   }
 
   function fecharConversa() {
@@ -513,6 +557,8 @@ export default function CaixaDeEntrada() {
       alertaMinutos={alertas[selecionada.hotel_id]}
       lateralAberta={lateralAberta}
       onAlternarLateral={() => setLateralAberta(!lateralAberta)}
+      ampliada={ampliada}
+      onAmpliar={quadro ? null : alternarAmpliada}
       onRecarregar={() => { recarregarTudo(); }}
       onVoltar={fecharConversa}
       rotuloVoltar={quadro ? 'Fechar conversa' : null}
@@ -737,7 +783,7 @@ export default function CaixaDeEntrada() {
               )}
             </>
           ) : (
-            <div className={`at-painel ${selecionada && lateralAberta ? 'com-lateral' : ''}`}>
+            <div ref={painelRef} className={`at-painel ${selecionada && lateralAberta ? 'com-lateral' : ''} ${selecionada && ampliada ? 'ampliada' : ''}`}>
               {/* ---------------- Lista ---------------- */}
               <div className={`at-col at-col-lista ${selecionada ? 'at-celular-escondido' : ''}`}>
                 <div className="at-lista">

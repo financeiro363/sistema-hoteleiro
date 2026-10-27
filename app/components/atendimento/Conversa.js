@@ -16,7 +16,7 @@ import {
   chamarApi, subirArquivo, avisarCabecalho, STATUS_CONVERSA, ICONE_CANAL, NOME_CANAL,
   soHora, dataHora, rotuloDia, chaveDia, dataCurta, noites, dinheiro, iniciais, tamanhoArquivo,
   aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando, telefoneBonito,
-  nomeDaConversa, visitanteNoSite, paginaCurta,
+  nomeDaConversa, visitanteNoSite, paginaCurta, lerPreferencia, gravarPreferencia,
 } from './util';
 import { ModalCotacao, ListaCotacoes } from './Cotacao';
 import { EditorHtml, EscolherModelo, aplicarVariaveisModelo, htmlParaTextoTela } from './ModelosEmail';
@@ -697,7 +697,7 @@ function FaixaRobo({ conversa, robo, usuario, salvando, onAlterar }) {
   }
   return (
     <div className="at-faixa-robo pausado">
-      <span>✋ Robô pausado: {MOTIVOS_PAUSA_TELA[conversa.robo_pausa_motivo] || 'a equipe está atendendo'}. Ele volta quando a conversa for resolvida ou depois de {Number(robo.horas_retomar) || 12} h sem a equipe escrever.</span>
+      <span>✋ Robô pausado: {MOTIVOS_PAUSA_TELA[conversa.robo_pausa_motivo] || 'a equipe está atendendo'}. Volta ao resolver ou após {Number(robo.horas_retomar) || 12} h sem a equipe escrever.</span>
       <button type="button" className="at-btn" disabled={salvando} onClick={() => onAlterar({ robo_pausado_em: null, robo_pausa_motivo: null })}>↩ Devolver ao robô</button>
     </div>
   );
@@ -708,6 +708,7 @@ function FaixaRobo({ conversa, robo, usuario, salvando, onAlterar }) {
 export function Conversa({
   conversa, canal, mensagens, carregando, usuario, atendentes, nomes, respostas, etapas, etiquetas, nomeHotel,
   alertaMinutos, onRecarregar, onVoltar, onAlternarLateral, lateralAberta, rotuloVoltar, modelos, nomeHotelReal, robo,
+  ampliada, onAmpliar,
 }) {
   const [mostrarModelo, setMostrarModelo] = useState(false);
   const [mostrarCotacao, setMostrarCotacao] = useState(false);
@@ -799,6 +800,12 @@ export function Conversa({
           <button type="button" className="at-btn" onClick={onAlternarLateral} title="Dados do contato e reserva na Cloudbeds">
             👤 {lateralAberta ? 'Fechar contato' : 'Contato e reserva'}
           </button>
+          {onAmpliar && (
+            <button type="button" className="at-btn at-esconder-celular" onClick={onAmpliar} aria-pressed={!!ampliada}
+              title={ampliada ? 'Mostrar a lista de conversas de novo' : 'Esconder a lista para a conversa ocupar a tela toda'}>
+              {ampliada ? '⤡ Mostrar lista' : '⤢ Ampliar'}
+            </button>
+          )}
         </div>
       </div>
       <DetalhesConversa conversa={conversa} etapas={etapas} etiquetas={etiquetas} salvando={salvando} onAlterar={alterar} />
@@ -977,6 +984,9 @@ export function DetalhesConversa({ conversa, etapas, etiquetas, salvando, onAlte
   const [aberto, setAberto] = useState(false);
   const [erroValor, setErroValor] = useState('');
   useEffect(() => { setValor(textoValor(conversa.valor_cotacao)); setErroValor(''); }, [conversa.id, conversa.valor_cotacao]);
+  // Fechada, a faixa vira uma linha só (sobra mais espaço para ler). Lembra a escolha.
+  useEffect(() => { setAberto(lerPreferencia('at-detalhes-aberto', false) === true); }, []);
+  const alternar = () => { const novo = !aberto; setAberto(novo); gravarPreferencia('at-detalhes-aberto', novo); };
 
   const lista = etiquetas || [];
   const mapa = Object.fromEntries(lista.map((e) => [e.id, e]));
@@ -999,10 +1009,12 @@ export function DetalhesConversa({ conversa, etapas, etiquetas, salvando, onAlte
 
   return (
     <div className={`at-detalhes ${aberto ? 'aberto' : ''}`}>
-      <button type="button" className="at-detalhes-alternar" onClick={() => setAberto(!aberto)} aria-expanded={aberto}>
-        {etapaAtual ? <><i className="at-bolinha" style={{ background: etapaAtual.cor || '#8A938E' }} />{etapaAtual.nome}</> : 'Sem etapa'}
-        {atuais.length ? ` · ${atuais.length} etiqueta${atuais.length > 1 ? 's' : ''}` : ''}
-        {conversa.valor_cotacao ? ` · ${dinheiro(conversa.valor_cotacao)}` : ''} {aberto ? '▴' : '▾'}
+      <button type="button" className="at-detalhes-alternar" onClick={alternar} aria-expanded={aberto} title={aberto ? 'Recolher' : 'Mudar etapa, etiquetas ou valor da cotação'}>
+        <span>{etapaAtual ? <><i className="at-bolinha" style={{ background: etapaAtual.cor || '#8A938E' }} />{etapaAtual.nome}</> : 'Sem etapa'}</span>
+        {!aberto && atuais.slice(0, 4).map((e) => <ChipEtiqueta key={e.id} etiqueta={e} pequeno />)}
+        {!aberto && atuais.length > 4 ? <span className="at-chip">+{atuais.length - 4}</span> : null}
+        {conversa.valor_cotacao ? <span>· {dinheiro(conversa.valor_cotacao)}</span> : null}
+        <span className="at-detalhes-dica">{aberto ? '▴ recolher' : '▾ etapa, etiquetas e cotação'}</span>
       </button>
       <div className="at-detalhes-corpo">
         <label className="at-detalhe">

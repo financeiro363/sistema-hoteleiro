@@ -137,7 +137,7 @@ export async function POST(request) {
 
       // Robô (se estiver ligado para o chat do site): responde aqui mesmo
       try {
-        await responderConversa(supabaseAdmin, conversa.id, { origem: origemDoSite(request), prazo: inicio + TEMPO_TOTAL_MS });
+        await responderConversa(supabaseAdmin, conversa.id, { origem: origemDoSite(request), prazo: inicio + TEMPO_TOTAL_MS, semEspera: true });
       } catch (e) { /* a função agendada tenta de novo */ }
 
       const lista = await mensagensDaConversa(supabaseAdmin, conversa, { depois: Number(corpo.depois) || 0 });
