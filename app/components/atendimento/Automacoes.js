@@ -315,6 +315,7 @@ export function Automacoes({ hoteis, hotelAtual, onAbrirConversa }) {
       <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600' }}>
         ⚠️ Todas as automações começam <strong>desligadas</strong>. Antes de ligar uma, <strong>desligue a mesma no Asksuite</strong> (AskFlow → Agentes), para o cliente não receber duas mensagens.
         Fora da conversa só dá para mandar <strong>modelo aprovado pela Meta</strong>, e cada envio é cobrado. Quem responder “SAIR” não recebe mais.
+        Não tem o modelo? Crie em <strong>📣 WhatsApp → 📋 Modelos</strong> (tem modelos prontos com os textos do Asksuite).
       </div>
       {erro && <div className="aviso-erro">{erro}</div>}
       {!dados && !erro && <div className="at-vazio">Carregando…</div>}

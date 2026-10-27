@@ -38,8 +38,10 @@ import {
   caminhoAnexo, PASTA_ANEXOS, hotelPermitido, soDigitos,
 } from '../../../lib/atendimento/servidor';
 import {
-  tokenDoCanal, marcarComoLida, listarModelos, baixarMidia, variantesNumero,
+  tokenDoCanal, marcarComoLida, listarModelos, baixarMidia, variantesNumero, criarModelo, excluirModelo,
 } from '../../../lib/atendimento/whatsapp';
+import { validarModeloNovo, normalizarNomeModelo, montarComponentes } from '../../../lib/atendimento/modelosNovos';
+import { previaCampanha, criarCampanha, mudarCampanha, rodarCampanhas } from '../../../lib/atendimento/campanhas';
 import {
   tokenDaCaixa, sincronizarCaixa, marcarFioComoLido, baixarAnexoGmail,
 } from '../../../lib/atendimento/gmail';
@@ -85,6 +87,13 @@ export async function POST(request) {
     try {
       const supabaseAdmin = clienteAdmin();
       return Response.json(await rodarAutomacoes(supabaseAdmin, { origem: origemDoSite(request), prazo: Date.now() + 8500 }));
+    } catch (e) { return respostaErro(e.message, 500); }
+  }
+  // Campanhas (Fase 6): envia aos poucos o que está na fila
+  if (corpo?.acao === 'campanhas_rodar' && chamadaAgendadaValida(request)) {
+    try {
+      const supabaseAdmin = clienteAdmin();
+      return Response.json(await rodarCampanhas(supabaseAdmin, { prazo: Date.now() + 8500 }));
     } catch (e) { return respostaErro(e.message, 500); }
   }
   // Robô: mensagens que ficaram sem resposta (o webhook não teve tempo)
@@ -136,6 +145,30 @@ export async function POST(request) {
         return r.erro ? respostaErro(r.erro) : Response.json(r);
       }
       case 'disparo_cancelar': return await acaoDisparoCancelar(supabaseAdmin, chamador, corpo);
+      case 'whatsapp_modelos': return await acaoWhatsappModelos(supabaseAdmin, chamador, corpo);
+      case 'modelo_criar': return await acaoModeloCriar(supabaseAdmin, chamador, corpo);
+      case 'modelo_excluir': return await acaoModeloExcluir(supabaseAdmin, chamador, corpo);
+      case 'campanhas': return await acaoCampanhas(supabaseAdmin, chamador, corpo);
+      case 'campanha_previa': {
+        const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+        const r = await previaCampanha(supabaseAdmin, hotelId, corpo.campanha || {});
+        if (r.erro) return respostaErro(r.erro);
+        const { _interno, ...previa } = r;
+        return Response.json(previa);
+      }
+      case 'campanha_criar': {
+        const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+        const r = await criarCampanha(supabaseAdmin, chamador, hotelId, corpo.campanha || {});
+        return r.erro ? respostaErro(r.erro) : Response.json({ sucesso: true, campanha: r.campanha });
+      }
+      case 'campanha_mudar': {
+        const { data: c } = await supabaseAdmin.from('atendimento_campanhas').select('*').eq('id', Number(corpo.campanhaId)).maybeSingle();
+        if (!c) return respostaErro('Campanha não encontrada.');
+        hotelDoAdmin(chamador, c.hotel_id);
+        const r = await mudarCampanha(supabaseAdmin, c, String(corpo.mudanca || ''));
+        return r.erro ? respostaErro(r.erro) : Response.json({ sucesso: true });
+      }
+      case 'campanha_envios': return await acaoCampanhaEnvios(supabaseAdmin, chamador, corpo);
       case 'reservas_verificar':
         return Response.json({ resultados: await verificarReservasTodos(supabaseAdmin, chamador.hoteis, true) });
       default: return respostaErro('Ação desconhecida.');
@@ -311,6 +344,100 @@ async function acaoModelos(supabaseAdmin, chamador, corpo) {
   if (!canal.config?.wabaId) return respostaErro('Falta o "ID da conta do WhatsApp Business" na configuração do canal.');
   const token = await tokenDoCanal(supabaseAdmin, canal);
   return Response.json({ modelos: await listarModelos({ token, wabaId: canal.config.wabaId }) });
+}
+
+// Tela de modelos (ADMIN): todos, inclusive em análise e recusados
+async function canalDoAdmin(supabaseAdmin, chamador, canalId) {
+  const canal = await carregarCanal(supabaseAdmin, chamador, canalId);
+  hotelDoAdmin(chamador, canal.hotel_id);
+  if (canal.tipo !== 'WHATSAPP') throw Object.assign(new Error('Modelos só existem no WhatsApp.'), { codigo: 'DADO' });
+  if (!canal.config?.wabaId) throw Object.assign(new Error('Falta o "ID da conta do WhatsApp Business" na configuração do número (aba Canais).'), { codigo: 'DADO' });
+  return canal;
+}
+
+async function acaoWhatsappModelos(supabaseAdmin, chamador, corpo) {
+  const canal = await canalDoAdmin(supabaseAdmin, chamador, corpo.canalId);
+  const token = await tokenDoCanal(supabaseAdmin, canal);
+  const modelos = await listarModelos({ token, wabaId: canal.config.wabaId, todos: true });
+  // Onde cada modelo está sendo usado (automações ligadas e campanhas que ainda vão sair)
+  const { data: aut } = await supabaseAdmin.from('atendimento_automacoes').select('tipo, modelo_nome, ativo').eq('hotel_id', canal.hotel_id).eq('ativo', true);
+  const { data: camp } = await supabaseAdmin.from('atendimento_campanhas').select('nome, modelo_nome, situacao').eq('canal_id', canal.id).in('situacao', ['AGENDADA', 'ENVIANDO', 'PAUSADA']);
+  return Response.json({
+    modelos: modelos.map((m) => ({
+      ...m,
+      usoAutomacoes: (aut || []).filter((a) => a.modelo_nome === m.nome).map((a) => a.tipo),
+      usoCampanhas: (camp || []).filter((c) => c.modelo_nome === m.nome).map((c) => c.nome),
+    })),
+  });
+}
+
+async function acaoModeloCriar(supabaseAdmin, chamador, corpo) {
+  const canal = await canalDoAdmin(supabaseAdmin, chamador, corpo.canalId);
+  const m = corpo.modelo || {};
+  const erros = validarModeloNovo(m);
+  if (erros.length) return respostaErro(erros[0]);
+  const token = await tokenDoCanal(supabaseAdmin, canal);
+  let r;
+  try {
+    r = await criarModelo({
+      token, wabaId: canal.config.wabaId, nome: normalizarNomeModelo(m.nome), idioma: m.idioma, categoria: m.categoria, componentes: montarComponentes(m),
+    });
+  } catch (e) {
+    // "Dado inválido enviado ao WhatsApp: …" fica mais claro como recusa do modelo
+    return respostaErro(String(e.message || e).replace(/^Dado inválido enviado ao WhatsApp:\s*/, 'A Meta recusou o modelo: '));
+  }
+  return Response.json({ sucesso: true, ...r, nome: normalizarNomeModelo(m.nome) });
+}
+
+async function acaoModeloExcluir(supabaseAdmin, chamador, corpo) {
+  const canal = await canalDoAdmin(supabaseAdmin, chamador, corpo.canalId);
+  const nome = String(corpo.nome || '');
+  if (!/^[a-z0-9_]{1,512}$/.test(nome)) return respostaErro('Modelo inválido.');
+  const { data: aut } = await supabaseAdmin.from('atendimento_automacoes').select('tipo').eq('hotel_id', canal.hotel_id).eq('ativo', true).eq('modelo_nome', nome);
+  if (aut?.length) return respostaErro('Este modelo está sendo usado por uma automação ligada. Desligue a automação ou troque o modelo dela antes de excluir.');
+  const { data: camp } = await supabaseAdmin.from('atendimento_campanhas').select('nome').eq('canal_id', canal.id).eq('modelo_nome', nome).in('situacao', ['AGENDADA', 'ENVIANDO', 'PAUSADA']);
+  if (camp?.length) return respostaErro(`Este modelo está na campanha “${camp[0].nome}”, que ainda não terminou. Cancele a campanha antes de excluir.`);
+  const token = await tokenDoCanal(supabaseAdmin, canal);
+  await excluirModelo({ token, wabaId: canal.config.wabaId, nome, id: corpo.id || null });
+  return Response.json({ sucesso: true });
+}
+
+// ---------------------------------------------------------------- CAMPANHAS
+async function acaoCampanhas(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  const { data: campanhas, error } = await supabaseAdmin.from('atendimento_campanhas')
+    .select('id, nome, canal_id, modelo_nome, modelo_idioma, modelo_info, situacao, agendada_para, expira_em, iniciada_em, concluida_em, total, custo_estimado, preco_unitario, etiqueta, robo_responde, aviso, criado_por_id, criado_em, publico')
+    .eq('hotel_id', hotelId).order('criado_em', { ascending: false }).limit(60);
+  if (error) return respostaErro(/atendimento_campanhas|does not exist|schema cache/i.test(error.message) ? 'Falta rodar no Supabase o SQL da Fase 6 (sql/caixa_de_entrada_fase6.sql).' : error.message);
+  const ids = (campanhas || []).map((c) => c.id);
+  const { data: resumo } = ids.length ? await supabaseAdmin.rpc('atendimento_campanhas_resumo', { p_ids: ids }) : { data: {} };
+  const { data: canais } = await supabaseAdmin.from('atendimento_canais').select('id, nome, endereco_exibicao, ativo, config')
+    .eq('hotel_id', hotelId).eq('tipo', 'WHATSAPP').order('id');
+  const { data: pref } = await supabaseAdmin.from('atendimento_preferencias').select('*').eq('hotel_id', hotelId).maybeSingle();
+  return Response.json({
+    campanhas: (campanhas || []).map((c) => ({ ...c, resumo: resumo?.[c.id] || null })),
+    canais: (canais || []).map((c) => ({ id: c.id, nome: c.nome, numero: c.endereco_exibicao, ativo: c.ativo, temWaba: !!c.config?.wabaId })),
+    precos: { marketing: Number(pref?.whatsapp_preco_marketing ?? 0.35), utilidade: Number(pref?.whatsapp_preco_utilidade ?? 0.04) },
+  });
+}
+
+async function acaoCampanhaEnvios(supabaseAdmin, chamador, corpo) {
+  const { data: c } = await supabaseAdmin.from('atendimento_campanhas').select('id, hotel_id').eq('id', Number(corpo.campanhaId)).maybeSingle();
+  if (!c) return respostaErro('Campanha não encontrada.');
+  hotelDoAdmin(chamador, c.hotel_id);
+  let q = supabaseAdmin.from('atendimento_campanha_envios').select('id, telefone, nome, situacao, motivo, enviado_em, saiu_em, conversa_id, mensagem_id')
+    .eq('campanha_id', c.id).order('id').limit(1000);
+  if (corpo.situacao) q = q.eq('situacao', String(corpo.situacao));
+  const { data: envios } = await q;
+  const idsMsg = (envios || []).map((e) => e.mensagem_id).filter(Boolean);
+  const status = {};
+  for (let i = 0; i < idsMsg.length; i += 200) {
+    const { data } = await supabaseAdmin.from('atendimento_mensagens').select('id, status_envio, erro').in('id', idsMsg.slice(i, i + 200));
+    (data || []).forEach((m) => { status[m.id] = m; });
+  }
+  return Response.json({
+    envios: (envios || []).map((e) => ({ ...e, entrega: status[e.mensagem_id]?.status_envio || null, erroEntrega: status[e.mensagem_id]?.erro || null })),
+  });
 }
 
 // ---------------------------------------------------------------- SINCRONIZAR

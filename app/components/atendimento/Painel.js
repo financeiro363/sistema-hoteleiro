@@ -302,38 +302,82 @@ function SecaoVendas({ vendas, nomes }) {
 const reaisCentavos = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 // Preço por mensagem cobrada (por hotel) — o ADMIN ajusta conforme a fatura da Meta
-function PrecoMensagem({ hotelId, preco, onMudou }) {
+function PrecoMensagem({ hotelId, preco, onMudou, campo = 'whatsapp_preco_mensagem', rotulo = 'Preço por mensagem cobrada' }) {
   const [editando, setEditando] = useState(false);
   const [valor, setValor] = useState('');
   const [erro, setErro] = useState('');
   const [salvando, setSalvando] = useState(false);
+  const idCampo = campo === 'whatsapp_preco_mensagem' ? `preco-${hotelId}` : `preco-${campo}-${hotelId}`;
   async function salvar() {
     const n = Number(String(valor).replace(',', '.'));
     if (!(n >= 0 && n <= 5)) { setErro('Use um valor entre R$ 0,00 e R$ 5,00.'); return; }
     setSalvando(true); setErro('');
     const { error } = await supabase.from('atendimento_preferencias')
-      .upsert({ hotel_id: hotelId, whatsapp_preco_mensagem: n, atualizado_em: new Date().toISOString() }, { onConflict: 'hotel_id' });
+      .upsert({ hotel_id: hotelId, [campo]: n, atualizado_em: new Date().toISOString() }, { onConflict: 'hotel_id' });
     setSalvando(false);
-    if (error) { setErro(/whatsapp_preco/i.test(error.message) ? 'Falta rodar no Supabase o SQL da economia (sql/caixa_de_entrada_economia.sql).' : error.message); return; }
+    if (error) {
+      const sql = campo === 'whatsapp_preco_mensagem' ? 'da economia (sql/caixa_de_entrada_economia.sql)' : 'da Fase 6 (sql/caixa_de_entrada_fase6.sql)';
+      setErro(/whatsapp_preco/i.test(error.message) ? `Falta rodar no Supabase o SQL ${sql}.` : error.message);
+      return;
+    }
     setEditando(false);
     onMudou?.();
   }
   if (!editando) {
     return (
       <span className="at-dica" style={{ margin: 0 }}>
-        Preço por mensagem cobrada: <strong>{reaisCentavos(preco)}</strong>{' '}
+        {rotulo}: <strong>{reaisCentavos(preco)}</strong>{' '}
         <button type="button" className="at-link-pequeno" onClick={() => { setValor(String(preco).replace('.', ',')); setEditando(true); }}>Alterar</button>
       </span>
     );
   }
   return (
     <span className="at-botoes" style={{ marginTop: 0, alignItems: 'center' }}>
-      <label className="at-dica" style={{ margin: 0 }} htmlFor={`preco-${hotelId}`}>Preço por mensagem cobrada (R$)</label>
-      <input id={`preco-${hotelId}`} className="at-select" style={{ width: 90 }} inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)} />
+      <label className="at-dica" style={{ margin: 0 }} htmlFor={idCampo}>{rotulo} (R$)</label>
+      <input id={idCampo} className="at-select" style={{ width: 90 }} inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)} />
       <button type="button" className="at-btn at-btn-verde" onClick={salvar} disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
       <button type="button" className="at-btn" onClick={() => setEditando(false)}>Cancelar</button>
       {erro && <span className="at-ruim" style={{ fontSize: 13 }}>{erro}</span>}
     </span>
+  );
+}
+
+// Modelos (templates): campanhas, automações e reabrir conversa — a Meta cobra
+// por categoria (marketing custa mais; utilidade dentro das 24 h é grátis)
+function CustoModelos({ n, custoConversa, onMudou }) {
+  const t = n.meses.reduce((a, m) => ({
+    modelos: a.modelos + m.modelos, marketing: a.marketing + Number(m.modelos_marketing || 0), utilidade: a.utilidade + Number(m.modelos_utilidade || 0),
+    gratis: a.gratis + Number(m.modelos_gratis || 0), custo: a.custo + Number(m.custo_modelos || 0), estimado: a.estimado || !!m.modelos_estimado,
+  }), { modelos: 0, marketing: 0, utilidade: 0, gratis: 0, custo: 0, estimado: false });
+  if (!t.modelos) return null;
+  return (
+    <>
+      <h3 style={{ margin: '14px 0 6px', fontSize: 16 }}>Modelos (automações, campanhas e reabrir conversa)</h3>
+      <div className="at-botoes" style={{ marginTop: 0, gap: 16 }}>
+        <PrecoMensagem hotelId={n.hotel_id} preco={Number(n.preco_marketing ?? 0.35)} onMudou={onMudou} campo="whatsapp_preco_marketing" rotulo="Preço do modelo de marketing" />
+        <PrecoMensagem hotelId={n.hotel_id} preco={Number(n.preco_utilidade ?? 0.04)} onMudou={onMudou} campo="whatsapp_preco_utilidade" rotulo="Preço do modelo de utilidade" />
+      </div>
+      <div className="pi-cartoes">
+        <Cartao rotulo="Modelos enviados" valor={fmt(t.modelos)} detalhe={`${fmt(t.marketing)} de marketing · ${fmt(t.utilidade)} de utilidade · ${fmt(t.gratis)} grátis`} />
+        <Cartao rotulo="Custo dos modelos" valor={`${t.estimado ? '≈ ' : ''}${reaisCentavos(t.custo)}`} detalhe="Marketing e utilidade cobrados pela Meta" />
+        <Cartao rotulo="Custo total estimado" valor={`≈ ${reaisCentavos(custoConversa + t.custo)}`} detalhe="Conversa + modelos" />
+      </div>
+      <div className="at-tabela-rolagem">
+        <table className="at-tabela at-tabela-previa">
+          <thead><tr><th>Mês</th><th className="num">Modelos</th><th className="num">Marketing</th><th className="num">Utilidade</th><th className="num">Grátis</th><th className="num">Custo dos modelos</th></tr></thead>
+          <tbody>
+            {n.meses.filter((m) => m.modelos > 0).map((m) => (
+              <tr key={m.mes}>
+                <td>{rotuloMes(m.mes)}</td><td className="num">{inteiro.format(m.modelos)}</td><td className="num">{inteiro.format(m.modelos_marketing || 0)}</td>
+                <td className="num">{inteiro.format(m.modelos_utilidade || 0)}</td><td className="num">{inteiro.format(m.modelos_gratis || 0)}</td>
+                <td className="num">{m.modelos_estimado ? '≈ ' : ''}{reaisCentavos(m.custo_modelos)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {t.estimado && <p className="at-dica">“≈” nos modelos: a Meta ainda não informou a categoria de alguns; eles foram contados como marketing.</p>}
+    </>
   );
 }
 
@@ -392,7 +436,8 @@ function SecaoWhatsApp({ whatsapp, multi, hoteis, onMudou }) {
                 </tbody>
               </table>
             </div>
-            {tot.modelos > 0 && <p className="at-dica">Também saíram {inteiro.format(tot.modelos)} modelo(s) aprovado(s) (para reabrir conversa). Esses a Meta cobra à parte, por outro preço.</p>}
+            {tot.modelos > 0 && n.meses[0]?.modelos_marketing === undefined && <p className="at-dica">Também saíram {inteiro.format(tot.modelos)} modelo(s) aprovado(s) (para reabrir conversa). Esses a Meta cobra à parte, por outro preço.</p>}
+            {n.meses[0]?.modelos_marketing !== undefined && <CustoModelos n={n} custoConversa={tot.custo} onMudou={onMudou} />}
           </section>
         );
       })}
