@@ -5,14 +5,17 @@
 // ============================================================================
 // - ModalCotacao: datas e hóspedes → preço e disponibilidade da Cloudbeds
 //   (tarifa padrão do motor) → prévia → envia pelo WhatsApp, chat do site ou e-mail com o
-//   link "Reservar agora" de cada quarto
+//   link "Reservar agora" de cada quarto. Dá para cotar outro hotel do grupo
+//   (os que o ADMIN liberou em Robô → Configuração)
 // - ListaCotacoes: cotações da conversa (enviada, clicou, reservou)
 // ============================================================================
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
 import { chamarApi, dataHora } from './util';
-import { textoCotacao, ABERTURA_PADRAO, FINAL_PADRAO, reais, dataBR } from '../../../lib/atendimento/cotacaoTexto';
+import {
+  textoCotacao, ABERTURA_PADRAO, ABERTURA_OUTRO_HOTEL, ABERTURA_OUTRO_HOTEL_ROBO, FINAL_PADRAO, reais, dataBR,
+} from '../../../lib/atendimento/cotacaoTexto';
 
 const DIA_MS = 86400000;
 const hoje = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
@@ -33,13 +36,33 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
   const [buscando, setBuscando] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState('');
+  const [hoteis, setHoteis] = useState(null);       // { hotel, outros: [{ id, nome, descricao }] }
+  const [hotelCotadoId, setHotelCotadoId] = useState(null); // null = hotel da conversa
+
+  useEffect(() => {
+    let ativo = true;
+    chamarApi('/api/atendimento', { acao: 'cotacao_hoteis', conversaId: conversa.id })
+      .then((r) => { if (ativo) setHoteis(r); })
+      .catch(() => { if (ativo) setHoteis({ hotel: null, outros: [] }); });
+    return () => { ativo = false; };
+  }, [conversa.id]);
+  const outros = hoteis?.outros || [];
+  const outroEscolhido = outros.find((o) => o.id === hotelCotadoId) || null;
+
+  // Trocar de hotel: os textos padrão mudam (o do outro hotel explica de onde ele vem)
+  function trocarHotel(id) {
+    setHotelCotadoId(id);
+    setResultado(null);
+    setAbertura('');
+    setFinal('');
+  }
 
   const noites = checkin && checkout ? noitesEntre(checkin, checkout) : 0;
   const ehEmail = canal?.tipo === 'EMAIL';
   const bloqueadoJanela = canal?.tipo === 'WHATSAPP' && !janelaAberta;
 
-  async function buscar(e) {
-    e?.preventDefault();
+  async function buscar(e, idHotel = hotelCotadoId) {
+    e?.preventDefault?.();
     setErro('');
     if (!checkin || !checkout) { setErro('Escolha as datas de entrada e de saída.'); return; }
     if (noites < 1) { setErro('A saída tem que ser depois da entrada.'); return; }
@@ -48,13 +71,22 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
       const r = await chamarApi('/api/atendimento', {
         acao: 'cotacao_buscar', conversaId: conversa.id, checkin, checkout,
         adultos: Number(adultos), criancas: Number(criancas), quartos: Number(quartos),
+        ...(idHotel ? { hotelCotadoId: idHotel } : {}),
       });
       setResultado(r);
       setEscolhidos(r.itens.slice(0, 8).map((i) => i.tipoId));
-      setAbertura((atual) => atual || r.abertura || ABERTURA_PADRAO);
+      setAbertura((atual) => atual || r.abertura || (r.hotelCotado ? ABERTURA_OUTRO_HOTEL : ABERTURA_PADRAO));
       setFinal((atual) => atual || r.final || FINAL_PADRAO);
     } catch (er) { setErro(er.message); setResultado(null); }
     setBuscando(false);
+  }
+
+  // Sem quarto aqui: um clique para buscar no outro hotel do grupo (a abertura
+  // já explica que aqui não há quarto)
+  function buscarNoOutro(id) {
+    trocarHotel(id);
+    setAbertura(ABERTURA_OUTRO_HOTEL_ROBO);
+    buscar(null, id);
   }
 
   function alternar(id) {
@@ -70,6 +102,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
     ? textoCotacao({
       cot: resultado, itens: itensEscolhidos, links: itensEscolhidos.map((_, n) => `https://…/r/••••-${n + 1}`),
       abertura, final, nomeCliente: conversa.contato_nome, nomeHotel: resultado.nomeHotel,
+      extra: { origem: resultado.nomeOrigem, descricao: resultado.hotelCotado?.descricao || '' },
     })
     : '';
 
@@ -81,6 +114,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
         acao: 'cotacao_enviar', conversaId: conversa.id, checkin, checkout,
         adultos: Number(adultos), criancas: Number(criancas), quartos: Number(quartos),
         tipos: escolhidos, abertura, final,
+        ...(resultado?.hotelCotado ? { hotelCotadoId: resultado.hotelCotado.id } : {}),
       });
       onEnviada();
     } catch (er) { setErro(er.message); setEnviando(false); }
@@ -96,6 +130,25 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
         <p className="at-dica" style={{ marginTop: 0 }}>
           Preço e disponibilidade da Cloudbeds (tarifa padrão do motor). O cliente recebe um link “Reservar agora” para cada quarto, que abre o motor com as datas já escolhidas.
         </p>
+
+        {outros.length > 0 && (
+          <div className="at-botoes" style={{ marginTop: 0, marginBottom: 10, alignItems: 'center' }}>
+            <span style={{ fontWeight: 600 }}>Cotar no</span>
+            <button type="button" className={`at-filtro ${!hotelCotadoId ? 'ativo' : ''}`} onClick={() => trocarHotel(null)}>
+              {hoteis?.hotel?.nome || 'Este hotel'} (desta conversa)
+            </button>
+            {outros.map((o) => (
+              <button key={o.id} type="button" className={`at-filtro ${hotelCotadoId === o.id ? 'ativo' : ''}`} onClick={() => trocarHotel(o.id)}>
+                🏨 {o.nome} (mesmo grupo)
+              </button>
+            ))}
+          </div>
+        )}
+        {outroEscolhido && (
+          <p className="at-dica" style={{ marginTop: 0 }}>
+            Preço e link do motor do {outroEscolhido.nome}. A conversa continua aqui; se o cliente reservar lá, ela vai para “Reservou”.
+          </p>
+        )}
 
         <form className="ct-busca" onSubmit={buscar}>
           <label><span>Entrada</span>
@@ -123,8 +176,17 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
           <>
             {resultado.itens.length === 0 ? (
               <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600', marginTop: 10 }}>
-                Nenhum quarto disponível para {dataBR(resultado.checkin)} a {dataBR(resultado.checkout)} com {Number(adultos) + Number(criancas)} hóspede(s). Tente outras datas.
-                {' '}O pedido ficou registrado como demanda perdida (etiqueta “Indisponibilidade na cotação”).
+                Nenhum quarto disponível {resultado.hotelCotado ? `no ${resultado.hotelCotado.nome} ` : ''}para {dataBR(resultado.checkin)} a {dataBR(resultado.checkout)} com {Number(adultos) + Number(criancas)} hóspede(s). Tente outras datas.
+                {!resultado.hotelCotado && ' O pedido ficou registrado como demanda perdida (etiqueta “Indisponibilidade na cotação”).'}
+                {!resultado.hotelCotado && outros.length > 0 && (
+                  <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                    {outros.map((o) => (
+                      <button key={o.id} type="button" className="at-btn at-btn-verde" onClick={() => buscarNoOutro(o.id)} disabled={buscando}>
+                        🏨 Buscar no {o.nome}
+                      </button>
+                    ))}
+                  </span>
+                )}
               </div>
             ) : (
               <div className="ct-quartos">
@@ -150,7 +212,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
 
             {!resultado.motor && (
               <div className="aviso-erro" style={{ marginTop: 10 }}>
-                Falta o link do motor de reservas deste hotel. O administrador coloca em “Funil e etiquetas” → “Motor de reservas e cotação”.
+                Falta o link do motor de reservas {resultado.hotelCotado ? `do ${resultado.hotelCotado.nome}` : 'deste hotel'}. O administrador {resultado.hotelCotado ? 'de lá ' : ''}coloca em “Funil e etiquetas” → “Motor de reservas e cotação”.
               </div>
             )}
 
@@ -166,7 +228,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
                     <textarea id="ct-abertura" className="campo at-campo-pequeno" rows={2} value={abertura} onChange={(e) => setAbertura(e.target.value)} />
                     <label className="rotulo" htmlFor="ct-final">Final</label>
                     <textarea id="ct-final" className="campo at-campo-pequeno" rows={3} value={final} onChange={(e) => setFinal(e.target.value)} />
-                    <p className="at-dica">Variáveis: {'{nome}'} {'{checkin}'} {'{checkout}'} {'{noites}'} {'{hospedes}'} {'{hotel}'}. Os preços e os links entram sozinhos e não podem ser alterados.</p>
+                    <p className="at-dica">Variáveis: {'{nome}'} {'{checkin}'} {'{checkout}'} {'{noites}'} {'{hospedes}'} {'{hotel}'}{resultado.hotelCotado ? <> {'{origem}'} (este hotel) {'{descricao}'} (a frase sobre o outro hotel)</> : null}. Os preços e os links entram sozinhos e não podem ser alterados.</p>
                   </div>
                 )}
                 <div className="at-previa-modelo ct-previa">{previa}</div>
@@ -204,12 +266,23 @@ const STATUS_COTACAO = {
 
 export function ListaCotacoes({ conversa }) {
   const [lista, setLista] = useState(null);
+  const [nomes, setNomes] = useState({});
 
   useEffect(() => {
     let ativo = true;
     supabase.from('atendimento_cotacoes').select('*').eq('conversa_id', conversa.id)
       .order('criado_em', { ascending: false }).limit(10)
-      .then(({ data, error }) => { if (ativo) setLista(error ? [] : (data || [])); });
+      .then(async ({ data, error }) => {
+        if (!ativo) return;
+        const cotacoes = error ? [] : (data || []);
+        setLista(cotacoes);
+        // Nome do outro hotel do grupo (quando a cotação foi de lá)
+        const ids = [...new Set(cotacoes.map((c) => c.hotel_cotado_id).filter(Boolean))];
+        if (ids.length) {
+          const { data: hs } = await supabase.from('hoteis').select('id, nome_fantasia').in('id', ids);
+          if (ativo) setNomes(Object.fromEntries((hs || []).map((h) => [Number(h.id), h.nome_fantasia])));
+        }
+      });
     return () => { ativo = false; };
   }, [conversa.id, conversa.atualizado_em, conversa.etapa_id]);
 
@@ -225,6 +298,7 @@ export function ListaCotacoes({ conversa }) {
               <strong>{dataBR(c.checkin)} a {dataBR(c.checkout)}</strong>
               <span className={`at-chip ${classe}`}>{rotulo}</span>
             </div>
+            {c.hotel_cotado_id && <small>🏨 {nomes[Number(c.hotel_cotado_id)] || 'Outro hotel do grupo'}</small>}
             <small>{c.adultos} adulto(s){c.criancas ? `, ${c.criancas} criança(s)` : ''}{c.quartos > 1 ? `, ${c.quartos} quartos` : ''} · {c.status === 'SEM_DISPONIBILIDADE' ? 'procurada' : 'enviada'} {dataHora(c.criado_em)}</small>
             {(c.itens || []).map((i, n) => (
               <div key={n} className="at-dado"><span>{i.nome}{c.item_clicado === n && c.cliques ? ' 🖱️' : ''}</span><span>{reais(i.total)}</span></div>
