@@ -14,12 +14,14 @@
 //   equipe            → hotéis e pessoas que atendem (filtros e "responsável")
 //   painel            → indicadores do mês (aba Painel)
 //   importar_contatos → importa a lista de contatos (ex.: exportada do Asksuite)
+//   cotacao_hoteis    → hotéis que dá para cotar na conversa (o dela e os do grupo)
 //   cotacao_buscar    → preço e disponibilidade na Cloudbeds (tarifa padrão)
 //   cotacao_enviar    → envia a cotação com o link "Reservar agora" de cada quarto
 //   motor_detectar    → descobre o link do motor de reservas na Cloudbeds (ADMIN)
 //   reservas_verificar→ procura reservas novas na Cloudbeds e marca "Reservou"
 //   importar_asksuite → importa a planilha de conversas do Asksuite (histórico)
 //   robo_config       → liga/desliga e configura o robô com IA (ADMIN)
+//   robo_hoteis_grupo → hotéis do grupo que o robô pode oferecer sem quarto (ADMIN)
 //   robo_chave        → guarda (criptografada) e testa a chave da Anthropic (ADMIN)
 //   robo_info_hotel   → lê de novo os dados do hotel na Cloudbeds para o robô (ADMIN)
 //   robo_testar       → conversa de teste com o robô, sem enviar nada (ADMIN)
@@ -61,6 +63,7 @@ import { MODELOS_IA, CANAIS_ROBO } from '../../../lib/atendimento/roboConfig';
 import { avisarVisitantesPorEmail } from '../../../lib/atendimento/chatSite';
 import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/atendimento/automacoes';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
+import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDescricao, MAX_OUTROS_HOTEIS } from '../../../lib/atendimento/outrosHoteis';
 
 export const dynamic = 'force-dynamic';
 
@@ -129,11 +132,13 @@ export async function POST(request) {
       case 'equipe': return await acaoEquipe(supabaseAdmin, chamador);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
       case 'importar_contatos': return await acaoImportarContatos(supabaseAdmin, chamador, corpo);
+      case 'cotacao_hoteis': return await acaoCotacaoHoteis(supabaseAdmin, chamador, corpo);
       case 'cotacao_buscar': return await acaoCotacaoBuscar(supabaseAdmin, chamador, corpo);
       case 'cotacao_enviar': return await acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request);
       case 'motor_detectar': return await acaoMotorDetectar(supabaseAdmin, chamador, corpo);
       case 'importar_asksuite': return await acaoImportarAsksuite(supabaseAdmin, chamador, corpo);
       case 'robo_config': return await acaoRoboConfig(supabaseAdmin, chamador, corpo);
+      case 'robo_hoteis_grupo': return await acaoRoboHoteisGrupo(supabaseAdmin, chamador, corpo);
       case 'robo_chave': return await acaoRoboChave(supabaseAdmin, chamador, corpo);
       case 'robo_info_hotel': return await acaoRoboInfoHotel(supabaseAdmin, chamador, corpo);
       case 'robo_testar': return await acaoRoboTestar(supabaseAdmin, chamador, corpo, request);
@@ -710,27 +715,55 @@ async function acaoImportarContatos(supabaseAdmin, chamador, corpo) {
 }
 
 // ---------------------------------------------------------------- COTAÇÃO
+// Outro hotel do grupo: só os que o ADMIN do hotel da conversa liberou em
+// Robô → Configuração (a mesma lista que o robô usa).
+async function hotelParaCotar(supabaseAdmin, conversa, hotelCotadoId) {
+  if (!hotelCotadoId || Number(hotelCotadoId) === Number(conversa.hotel_id)) return { outro: null };
+  const outro = await outroHotelLiberado(supabaseAdmin, conversa.hotel_id, hotelCotadoId);
+  if (!outro) return { erro: 'Este hotel não está liberado para cotação nesta conversa. O administrador libera em Robô → Configuração → “Sem quarto aqui”.' };
+  return { outro };
+}
+
+async function acaoCotacaoHoteis(supabaseAdmin, chamador, corpo) {
+  const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
+  const [{ data: hotel }, outros] = await Promise.all([
+    supabaseAdmin.from('hoteis').select('id, nome_fantasia').eq('id', conversa.hotel_id).maybeSingle(),
+    carregarOutrosHoteis(supabaseAdmin, conversa.hotel_id).catch(() => []),
+  ]);
+  return Response.json({ hotel: { id: Number(conversa.hotel_id), nome: hotel?.nome_fantasia || 'Este hotel' }, outros });
+}
+
 async function acaoCotacaoBuscar(supabaseAdmin, chamador, corpo) {
   const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
+  const { outro, erro } = await hotelParaCotar(supabaseAdmin, conversa, corpo.hotelCotadoId);
+  if (erro) return respostaErro(erro);
+  const hotelDaBusca = outro ? outro.id : conversa.hotel_id;
   let cb;
-  try { cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id); } catch (e) { return respostaErro(e.message); }
+  try { cb = await conexaoCloudbeds(supabaseAdmin, hotelDaBusca); }
+  catch (e) { return respostaErro(outro ? `${outro.nome}: ${e.message}` : e.message); }
   const resultado = await buscarDisponibilidade(cb, corpo);
-  if (!resultado.itens.length) await registrarSemDisponibilidade(supabaseAdmin, { id: chamador.id }, conversa, resultado);
-  const motor = await linkDoMotor(supabaseAdmin, cb, conversa.hotel_id);
-  const pref = await preferenciasCotacao(supabaseAdmin, conversa.hotel_id);
+  // Demanda perdida só conta para o hotel da conversa
+  if (!resultado.itens.length && !outro) await registrarSemDisponibilidade(supabaseAdmin, { id: chamador.id }, conversa, resultado);
+  const motor = await linkDoMotor(supabaseAdmin, cb, hotelDaBusca);
+  const pref = await preferenciasCotacao(supabaseAdmin, hotelDaBusca);
   const { data: hotel } = await supabaseAdmin.from('hoteis').select('nome_fantasia').eq('id', conversa.hotel_id).maybeSingle();
   return Response.json({
-    ...resultado, motor: !!motor, abertura: pref.cotacao_texto_abertura || null, final: pref.cotacao_texto_final || null,
-    nomeHotel: hotel?.nome_fantasia || null,
+    ...resultado, motor: !!motor, abertura: outro ? null : (pref.cotacao_texto_abertura || null), final: pref.cotacao_texto_final || null,
+    nomeHotel: outro ? outro.nome : (hotel?.nome_fantasia || null),
+    hotelCotado: outro ? { id: outro.id, nome: outro.nome, descricao: outro.descricao || '' } : null,
+    nomeOrigem: hotel?.nome_fantasia || null,
   });
 }
 
 async function acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request) {
   const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
   const canal = await carregarCanal(supabaseAdmin, chamador, conversa.canal_id);
+  const { outro, erro } = await hotelParaCotar(supabaseAdmin, conversa, corpo.hotelCotadoId);
+  if (erro) return respostaErro(erro);
   let cb;
-  try { cb = await conexaoCloudbeds(supabaseAdmin, conversa.hotel_id); } catch (e) { return respostaErro(e.message); }
-  const r = await enviarCotacao(supabaseAdmin, { id: chamador.id }, { conversa, canal, cb, pedido: corpo, origem: origemDoSite(request) });
+  try { cb = await conexaoCloudbeds(supabaseAdmin, outro ? outro.id : conversa.hotel_id); }
+  catch (e) { return respostaErro(outro ? `${outro.nome}: ${e.message}` : e.message); }
+  const r = await enviarCotacao(supabaseAdmin, { id: chamador.id }, { conversa, canal, cb, pedido: corpo, origem: origemDoSite(request), hotelCotado: outro });
   if (r.erro) return respostaErro(r.erro, 400, r.mensagens ? { mensagens: r.mensagens } : {});
   await pausarRobo(supabaseAdmin, conversa.id);
   return Response.json({ sucesso: true, cotacao: r.cotacao, mensagens: r.mensagens });
@@ -818,6 +851,60 @@ function hotelDoAdmin(chamador, hotelId) {
   return h;
 }
 
+// Hotéis em que a pessoa é ADMIN (vínculo ativo), menos o hotel atual
+async function hoteisEmQueSouAdmin(supabaseAdmin, chamador) {
+  const { data: vinculos } = await supabaseAdmin.from('vinculos_usuario_hotel')
+    .select('hotel_id').eq('auth_id', chamador.auth_id).eq('papel', 'ADMIN').eq('ativo', true);
+  const ids = new Set((vinculos || []).map((v) => Number(v.hotel_id)));
+  if (chamador.papel === 'ADMIN' && chamador.hotel_id) ids.add(Number(chamador.hotel_id));
+  return ids;
+}
+
+// Lista "outros hotéis" vinda da tela: só entra hotel novo em que a pessoa
+// também é ADMIN (os que já estavam salvos continuam, mesmo que outro ADMIN
+// tenha escolhido). Devolve { lista } ou { erro }.
+async function validarOutrosHoteis(supabaseAdmin, chamador, hotelId, pedidos) {
+  const { data: atual } = await supabaseAdmin.from('atendimento_robo').select('*').eq('hotel_id', hotelId).maybeSingle();
+  const jaSalvos = new Set(listaOutrosHoteis(atual, hotelId).map((o) => o.hotel_id));
+  const meus = await hoteisEmQueSouAdmin(supabaseAdmin, chamador);
+  const lista = [];
+  for (const o of Array.isArray(pedidos) ? pedidos : []) {
+    const id = Math.trunc(Number(o?.hotel_id));
+    if (!id || id === Number(hotelId) || lista.some((x) => x.hotel_id === id)) continue;
+    if (!jaSalvos.has(id) && !meus.has(id)) return { erro: 'Você só pode oferecer um hotel em que também é administrador.' };
+    lista.push({ hotel_id: id, descricao: limparDescricao(o?.descricao) });
+  }
+  if (lista.length > MAX_OUTROS_HOTEIS) return { erro: `No máximo ${MAX_OUTROS_HOTEIS} hotéis do grupo.` };
+  if (lista.length) {
+    const { data: hoteis } = await supabaseAdmin.from('hoteis').select('id').in('id', lista.map((o) => o.hotel_id));
+    if ((hoteis || []).length !== lista.length) return { erro: 'Hotel do grupo não encontrado.' };
+  }
+  return { lista };
+}
+
+async function acaoRoboHoteisGrupo(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  const { data: atual } = await supabaseAdmin.from('atendimento_robo').select('*').eq('hotel_id', hotelId).maybeSingle();
+  const salvos = listaOutrosHoteis(atual, hotelId);
+  const ids = new Set([...(await hoteisEmQueSouAdmin(supabaseAdmin, chamador)), ...salvos.map((o) => o.hotel_id)]);
+  ids.delete(Number(hotelId));
+  if (!ids.size) return Response.json({ hoteis: [], sqlPronto: !atual || 'outros_hoteis' in atual });
+  const lista = [...ids];
+  const [{ data: hoteis }, { data: credenciais }, { data: prefs }] = await Promise.all([
+    supabaseAdmin.from('hoteis').select('id, nome_fantasia').in('id', lista),
+    supabaseAdmin.from('cloudbeds_credenciais').select('hotel_id').in('hotel_id', lista),
+    supabaseAdmin.from('atendimento_preferencias').select('hotel_id, motor_url').in('hotel_id', lista),
+  ]);
+  const comCloudbeds = new Set((credenciais || []).map((c) => Number(c.hotel_id)));
+  const comMotor = new Set((prefs || []).filter((p) => p.motor_url).map((p) => Number(p.hotel_id)));
+  return Response.json({
+    sqlPronto: !atual || 'outros_hoteis' in atual,
+    hoteis: (hoteis || []).map((h) => ({
+      id: Number(h.id), nome: h.nome_fantasia || `Hotel #${h.id}`, cloudbeds: comCloudbeds.has(Number(h.id)), motor: comMotor.has(Number(h.id)),
+    })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+  });
+}
+
 async function acaoRoboConfig(supabaseAdmin, chamador, corpo) {
   const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
   const c = corpo.config || {};
@@ -836,13 +923,26 @@ async function acaoRoboConfig(supabaseAdmin, chamador, corpo) {
     if (!Array.isArray(conteudo?.publicado) || !conteudo.publicado.length) return respostaErro('Para ligar o robô, primeiro publique o conteúdo do hotel (aba Conteúdo).');
     if (!canais.length) return respostaErro('Marque pelo menos um canal em que o robô vai responder.');
   }
+  let outros = null;
+  if (Array.isArray(c.outros_hoteis)) {
+    const v = await validarOutrosHoteis(supabaseAdmin, chamador, hotelId, c.outros_hoteis);
+    if (v.erro) return respostaErro(v.erro);
+    outros = v.lista;
+  }
   const registro = {
     hotel_id: hotelId, ligado: !!c.ligado, canais, modelo, horas_retomar: horas, limite_mensal_usd: limite,
     nome_assistente: String(c.nome_assistente || '').trim().slice(0, 40) || null, email_solicitacoes: email || null,
     atualizado_por_id: chamador.id, atualizado_em: new Date().toISOString(),
     ...(typeof c.modo_economico === 'boolean' ? { modo_economico: c.modo_economico } : {}),
+    ...(outros ? { outros_hoteis: outros } : {}),
   };
   let { data, error } = await supabaseAdmin.from('atendimento_robo').upsert(registro, { onConflict: 'hotel_id' }).select().single();
+  // Sem o SQL do outro hotel: salva o resto (se não pediu nenhum hotel do grupo)
+  if (error && 'outros_hoteis' in registro && /outros_hoteis/i.test(error.message || '')) {
+    if (registro.outros_hoteis.length) return respostaErro('Para oferecer outro hotel do grupo, primeiro rode no Supabase o SQL sql/robo_outro_hotel.sql.');
+    delete registro.outros_hoteis;
+    ({ data, error } = await supabaseAdmin.from('atendimento_robo').upsert(registro, { onConflict: 'hotel_id' }).select().single());
+  }
   if (error && 'modo_economico' in registro && /modo_economico/i.test(error.message || '')) {
     if (registro.modo_economico === false) return respostaErro('Para desligar o modo econômico, primeiro rode no Supabase o SQL da economia (sql/caixa_de_entrada_economia.sql).');
     delete registro.modo_economico; // sem o SQL novo: salva o resto (o robô já fica econômico)

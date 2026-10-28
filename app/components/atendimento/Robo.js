@@ -4,8 +4,9 @@
 // CAIXA DE ENTRADA — aba "Robô (IA)" (só ADMIN) — Fase 4
 // ============================================================================
 // - Configuração: ligar/desligar, canais, qual IA, limite de gasto, chave da
-//   Anthropic (guardada criptografada, nunca volta para a tela), uso do mês
-//   e os dados do hotel lidos da Cloudbeds
+//   Anthropic (guardada criptografada, nunca volta para a tela), uso do mês,
+//   os dados do hotel lidos da Cloudbeds e o outro hotel do grupo que o robô
+//   oferece quando não há quarto aqui
 // - Conteúdo: o que o robô sabe do hotel, em assuntos, com rascunho e
 //   publicação (as versões publicadas ficam guardadas)
 // - Testar: conversa de mentira com o robô, sem enviar nada a cliente
@@ -19,7 +20,7 @@ import {
 } from '../../../lib/atendimento/roboConfig';
 
 const SEM_SQL = 'Falta rodar no Supabase o SQL da Fase 4 (sql/caixa_de_entrada_fase4.sql).';
-const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '', modo_economico: true };
+const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '', modo_economico: true, outros_hoteis: [] };
 
 function erroAmigavel(e) {
   const m = String(e?.message || e || '');
@@ -74,6 +75,7 @@ export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
       ligado: c.data.ligado, canais: c.data.canais || [], modelo: c.data.modelo || MODELO_PADRAO, nome_assistente: c.data.nome_assistente || '',
       horas_retomar: c.data.horas_retomar ?? 12, limite_mensal_usd: c.data.limite_mensal_usd ?? 30, email_solicitacoes: c.data.email_solicitacoes || '',
       modo_economico: c.data.modo_economico !== false,
+      outros_hoteis: Array.isArray(c.data.outros_hoteis) ? c.data.outros_hoteis : [],
     } : PADRAO);
     // Se não conseguiu ler o conteúdo, avisa e não deixa editar (para não gravar vazio por cima)
     if (ct.error) setErro(`Não foi possível ler o conteúdo do robô: ${erroAmigavel(ct.error)}`);
@@ -127,6 +129,86 @@ export function RoboIA({ hoteis, hotelAtual, canais, preferencias, onMudou }) {
         </>
       )}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sem quarto aqui: outro hotel do grupo que o robô oferece (e a equipe pode cotar)
+function OutroHotel({ hotelId, nomeHotel, form, setForm, ocupado, onSalvar, versao }) {
+  const [lista, setLista] = useState(null);
+  const [sqlPronto, setSqlPronto] = useState(true);
+  const [erro, setErro] = useState('');
+
+  useEffect(() => {
+    let ativo = true;
+    chamarApi('/api/atendimento', { acao: 'robo_hoteis_grupo', hotelId })
+      .then((r) => { if (ativo) { setLista(r.hoteis || []); setSqlPronto(r.sqlPronto !== false); } })
+      .catch((e) => { if (ativo) { setLista([]); setErro(e.message); } });
+    return () => { ativo = false; };
+  }, [hotelId, versao]);
+
+  const escolhidos = form.outros_hoteis || [];
+  const achar = (id) => escolhidos.find((o) => Number(o.hotel_id) === Number(id));
+  const marcar = (id, sim) => setForm({
+    ...form,
+    outros_hoteis: sim ? [...escolhidos.filter((o) => Number(o.hotel_id) !== Number(id)), { hotel_id: id, descricao: '' }]
+      : escolhidos.filter((o) => Number(o.hotel_id) !== Number(id)),
+  });
+  const descrever = (id, descricao) => setForm({
+    ...form, outros_hoteis: escolhidos.map((o) => (Number(o.hotel_id) === Number(id) ? { ...o, descricao } : o)),
+  });
+  const exemplo = lista?.find((h) => achar(h.id))?.nome || lista?.[0]?.nome || 'Guarany Hotel';
+  const descricaoExemplo = lista?.map((h) => achar(h.id)?.descricao).find(Boolean);
+
+  return (
+    <section className="at-cartao">
+      <h2>🏨 Sem quarto aqui: oferecer outro hotel do grupo</h2>
+      <p className="at-dica" style={{ marginTop: 0 }}>
+        Quando não houver quarto em {nomeHotel} nas datas pedidas, o robô consulta o hotel marcado e já manda a cotação dele na mesma mensagem.
+        A conversa continua aqui; se o cliente reservar lá, ela vai para “Reservou”. A equipe também pode cotar esse hotel na tela de cotação.
+      </p>
+      {lista === null ? <p className="at-dica">Carregando…</p> : (
+        <>
+          {!lista.length && <p className="at-dica">Nenhum outro hotel em que você também seja administrador.</p>}
+          <div style={{ display: 'grid', gap: 8, maxWidth: 720 }}>
+            {lista.map((h) => {
+              const o = achar(h.id);
+              return (
+                <div key={h.id} className="at-reserva" style={{ margin: 0 }}>
+                  <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={!!o} onChange={(e) => marcar(h.id, e.target.checked)} style={{ marginTop: 4 }} />
+                    <span>
+                      <strong>{h.nome}</strong>
+                      {!h.cloudbeds && <span className="at-ruim" style={{ display: 'block' }}>✗ Este hotel não tem a Cloudbeds ligada no sistema: o robô não consegue consultar.</span>}
+                      {h.cloudbeds && !h.motor && <span className="at-dica" style={{ display: 'block', margin: 0 }}>O link do motor de reservas dele é descoberto sozinho na primeira cotação.</span>}
+                    </span>
+                  </label>
+                  {o && (
+                    <div style={{ marginTop: 8, paddingLeft: 26 }}>
+                      <label className="rotulo" htmlFor={`rb-outro-${h.id}`}>Frase curta sobre ele (opcional)</label>
+                      <input id={`rb-outro-${h.id}`} className="campo" maxLength={120} value={o.descricao || ''}
+                        onChange={(e) => descrever(h.id, e.target.value)} placeholder="Ex.: também no Centro, a 1 km daqui" />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {lista.length > 0 && (
+            <div className="at-previa-modelo" style={{ marginTop: 10, maxWidth: 720 }}>
+              Olá, Maria! Para 10/12/2026 a 12/12/2026 (2 noites), 2 adultos, não temos mais quarto no {nomeHotel}, mas o *{exemplo}*, do mesmo grupo{descricaoExemplo ? ` (${descricaoExemplo})` : ''}, tem estas opções:
+            </div>
+          )}
+          {!sqlPronto && <div className="aviso-erro" style={{ marginTop: 10 }}>Para usar, primeiro rode no Supabase o SQL sql/robo_outro_hotel.sql.</div>}
+          {erro && <div className="aviso-erro" style={{ marginTop: 10 }}>{erro}</div>}
+          {lista.length > 0 && (
+            <div className="at-botoes">
+              <button type="button" className="at-btn at-btn-verde" onClick={onSalvar} disabled={ocupado}>Salvar</button>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -289,6 +371,8 @@ function Configuracao({
           <button type="button" className="at-btn at-btn-verde" onClick={() => salvar()} disabled={ocupado}>Salvar</button>
         </div>
       </section>
+
+      <OutroHotel hotelId={hotelId} nomeHotel={nomeHotel} form={form} setForm={setForm} ocupado={ocupado} onSalvar={() => salvar()} versao={config?.atualizado_em} />
 
       <section className="at-cartao">
         <h2>💵 Uso neste mês</h2>

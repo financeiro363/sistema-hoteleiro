@@ -58,6 +58,7 @@ function nomeCanal(f) {
   return NOMES_CANAL[t.toUpperCase().replace(/[^A-Z]/g, '')] || t || 'Não informado';
 }
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+const nomesHoteis = (lista) => (lista || []).map((h) => h.nome || 'outro hotel').join(' e ') || 'outro hotel';
 const reaisCurto = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 
 // Largura real do elemento (para o gráfico se ajustar à tela)
@@ -552,7 +553,18 @@ export function PainelIndicadores({ hoteis, nomes }) {
                 <Cartao rotulo="Reservaram" valor={fmt(cot.reservadas)} detalhe={`${pct(cot.reservadas, cot.enviadas)} das cotações · ${reaisCurto(cot.valor_reservado)}`} />
                 <Cartao rotulo="Reservas ligadas a conversas" valor={fmt(cot.reservas_detectadas)} detalhe="Encontradas na Cloudbeds pelo telefone ou e-mail" />
                 <Cartao rotulo="Pedidos sem disponibilidade" valor={fmt(cot.sem_disponibilidade)} detalhe="Cotações em que não havia quarto (demanda perdida)" />
+                {Number(cot.outro_hotel?.enviadas) > 0 && (
+                  <Cartao rotulo="🏨 Mandou para o outro hotel" valor={fmt(cot.outro_hotel.enviadas)}
+                    detalhe={`Sem quarto aqui, cotou ${nomesHoteis(cot.outro_hotel.por_hotel)} · ${fmt(cot.outro_hotel.reservadas)} reservaram lá · ${reaisCurto(cot.outro_hotel.valor_reservado)}`} />
+                )}
+                {Number(cot.recebeu_outro_hotel?.enviadas) > 0 && (
+                  <Cartao rotulo="🏨 Veio de outro hotel do grupo" valor={fmt(cot.recebeu_outro_hotel.enviadas)}
+                    detalhe={`Cotações deste hotel feitas pelo ${nomesHoteis(cot.recebeu_outro_hotel.por_hotel)} · ${fmt(cot.recebeu_outro_hotel.reservadas)} reservaram · ${reaisCurto(cot.recebeu_outro_hotel.valor_reservado)}`} />
+                )}
               </div>
+              {(Number(cot.outro_hotel?.enviadas) > 0 || Number(cot.recebeu_outro_hotel?.enviadas) > 0) && (
+                <p className="at-dica">As cotações de outro hotel do grupo ficam à parte: não entram nos números acima nem em “Vendas pelas cotações”.</p>
+              )}
               {(cot.datas_sem_disponibilidade || []).length > 0 && (
                 <section className="at-cartao">
                   <h2>Datas mais procuradas sem quarto disponível</h2>
@@ -579,6 +591,10 @@ export function PainelIndicadores({ hoteis, nomes }) {
                 <Cartao rotulo="Resolveu sem a equipe" valor={fmt(robo.resolveu_sozinho)} detalhe={`${pct(robo.resolveu_sozinho, robo.conversas)} das conversas · ${fmt(robo.passou_equipe)} passada(s) para a equipe`} />
                 <Cartao rotulo="Cotações enviadas pelo robô" valor={fmt(robo.cotacoes)} detalhe={`${fmt(robo.cliques)} com clique em Reservar · ${fmt(robo.sem_disponibilidade)} sem quarto`} />
                 <Cartao rotulo="Reservas das cotações do robô" valor={fmt(robo.reservas)} detalhe={reaisCurto(robo.valor_reservado)} />
+                {Number(robo.outro_hotel?.cotacoes) > 0 && (
+                  <Cartao rotulo="🏨 Robô cotou o outro hotel" valor={fmt(robo.outro_hotel.cotacoes)}
+                    detalhe={`Quando não havia quarto aqui · ${fmt(robo.outro_hotel.cliques)} clique(s) · ${fmt(robo.outro_hotel.reservas)} reservaram lá · ${reaisCurto(robo.outro_hotel.valor_reservado)}`} />
+                )}
                 <Cartao rotulo="Solicitações registradas" valor={fmt(robo.solicitacoes)} detalhe="Grupos, pedidos especiais, reservas existentes…" />
                 {robo.lacunas != null && (
                   <Cartao rotulo="Perguntas que o robô não soube" valor={fmt(robo.lacunas)} detalhe="Complete o conteúdo em Robô (IA) → Conteúdo" />

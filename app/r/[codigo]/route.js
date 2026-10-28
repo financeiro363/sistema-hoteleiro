@@ -4,7 +4,8 @@
 // ============================================================================
 // O cliente clica no link da cotação → o sistema conta o clique, move o
 // cartão para "Reservar agora" e manda o cliente para o motor de reservas da
-// Cloudbeds com as datas, os hóspedes e o quarto já escolhidos.
+// Cloudbeds com as datas, os hóspedes e o quarto já escolhidos (o motor do
+// hotel cotado, que pode ser outro hotel do grupo).
 // Robôs (prévia de link do WhatsApp, antivírus de e-mail, buscadores) também
 // abrem links: esses vão para o motor, mas não contam como clique.
 // Não precisa de login (quem abre é o cliente).
@@ -40,9 +41,11 @@ async function tratar(request, { params }) {
   let dados = null;
   if (robo) {
     const { data: cot } = await supabaseAdmin.from('atendimento_cotacoes')
-      .select('hotel_id, checkin, checkout, adultos, criancas, itens').eq('codigo', codigo).maybeSingle();
+      .select('*').eq('codigo', codigo).maybeSingle();
     if (cot) {
-      const { data: pref } = await supabaseAdmin.from('atendimento_preferencias').select('motor_url').eq('hotel_id', cot.hotel_id).maybeSingle();
+      // Cotação de outro hotel do grupo: o motor é o do hotel cotado
+      const hotelDoMotor = cot.hotel_cotado_id || cot.hotel_id;
+      const { data: pref } = await supabaseAdmin.from('atendimento_preferencias').select('motor_url').eq('hotel_id', hotelDoMotor).maybeSingle();
       const it = (cot.itens || [])[item] || (cot.itens || [])[0] || {};
       dados = { ...cot, motor_url: pref?.motor_url, abreviacao: it.abreviacao };
     }
