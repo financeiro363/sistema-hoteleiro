@@ -27,7 +27,9 @@
 //   robo_info_hotel   → lê de novo os dados do hotel na Cloudbeds para o robô (ADMIN)
 //   robo_testar       → conversa de teste com o robô, sem enviar nada (ADMIN)
 //   robo_revisar      → a IA procura contradições no conteúdo do robô (ADMIN)
-//   robo_pendentes    → robô responde mensagens que ficaram sem resposta (agendada)
+//   robo_pendentes    → robô responde mensagens que ficaram sem resposta (agendada);
+//                       também calcula o valor estimado dos pedidos de grupo novos
+//   grupo_estimar     → recalcula pela Cloudbeds o valor estimado de um pedido de grupo
 //   automacoes_rodar  → automações da Fase 5: agenda e envia os disparos (agendada)
 //   automacoes        → lista as automações, os disparos e os números (ADMIN)
 //   automacao_salvar  → liga/desliga e configura uma automação (ADMIN)
@@ -62,6 +64,7 @@ import {
   pausar as pausarRobo, responderPendentes, atualizarInfosVelhas, atualizarInfoHotel, testarRobo, testarChave, revisarConteudo, CHAVE_SEGREDO,
 } from '../../../lib/atendimento/robo';
 import { MODELOS_IA, CANAIS_ROBO } from '../../../lib/atendimento/roboConfig';
+import { estimarGrupo, estimarGruposPendentes } from '../../../lib/atendimento/grupos';
 import { avisarVisitantesPorEmail } from '../../../lib/atendimento/chatSite';
 import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/atendimento/automacoes';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
@@ -112,7 +115,9 @@ export async function POST(request) {
       const inicio = Date.now();
       const r = await responderPendentes(supabaseAdmin, { origem: origemDoSite(request), prazo: inicio + 8500 });
       const info = Date.now() - inicio < 4000 ? await atualizarInfosVelhas(supabaseAdmin) : null;
-      return Response.json({ ...r, infoAtualizada: info });
+      // Pedidos de grupo novos: valor estimado pela Cloudbeds
+      const grupos = Date.now() - inicio < 5500 ? await estimarGruposPendentes(supabaseAdmin, { prazo: inicio + 8500 }).catch((e) => ({ erro: e.message })) : null;
+      return Response.json({ ...r, infoAtualizada: info, grupos });
     } catch (e) { return respostaErro(e.message, 500); }
   }
 
@@ -146,6 +151,7 @@ export async function POST(request) {
       case 'robo_info_hotel': return await acaoRoboInfoHotel(supabaseAdmin, chamador, corpo);
       case 'robo_testar': return await acaoRoboTestar(supabaseAdmin, chamador, corpo, request);
       case 'robo_revisar': return await acaoRoboRevisar(supabaseAdmin, chamador, corpo);
+      case 'grupo_estimar': return await acaoGrupoEstimar(supabaseAdmin, chamador, corpo);
       case 'automacoes': return await acaoAutomacoes(supabaseAdmin, chamador, corpo);
       case 'automacao_salvar': {
         const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
@@ -640,6 +646,8 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   const { data: vendas } = await supabaseAdmin.rpc('atendimento_painel_vendas', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   // Prazo de resposta (sem o SQL do prazo: a seção não aparece)
   const { data: sla } = await supabaseAdmin.rpc('atendimento_painel_sla', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
+  // Pedidos de grupo (sem o SQL dos grupos: a seção não aparece)
+  const { data: grupos } = await supabaseAdmin.rpc('atendimento_painel_grupos', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   // Mensagens e custo do WhatsApp: só dos hotéis em que a pessoa é ADMIN
   const hoteisAdmin = pedidos.filter((h) => chamador.hoteisAdmin.includes(h));
   let whatsapp = null;
@@ -650,7 +658,7 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
     const { data: aut } = await supabaseAdmin.rpc('atendimento_painel_automacoes', { p_hoteis: hoteisAdmin, p_inicio: inicio, p_fim: fim });
     automacoes = aut || null; // sem o SQL da Fase 5: não aparece
   }
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null }, inicio, fim });
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null, grupos: grupos || null }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS
@@ -1042,4 +1050,20 @@ async function acaoRoboRevisar(supabaseAdmin, chamador, corpo) {
   try {
     return Response.json({ sucesso: true, ...(await revisarConteudo(supabaseAdmin, hotelId, { assuntos: corpo.assuntos })) });
   } catch (e) { return respostaErro(e.message); }
+}
+
+// Botão "Recalcular pela Cloudbeds" de um pedido de grupo (quem atende o hotel)
+async function acaoGrupoEstimar(supabaseAdmin, chamador, corpo) {
+  const id = Math.trunc(Number(corpo.id));
+  if (!id) return respostaErro('Pedido de grupo não encontrado.');
+  const { data: sol, error } = await supabaseAdmin.from('atendimento_solicitacoes').select('*').eq('id', id).maybeSingle();
+  if (error) {
+    if (/grupo_|valor_estimado/i.test(error.message || '')) return respostaErro('Para calcular o valor do grupo, primeiro rode no Supabase o SQL sql/painel_grupos.sql.');
+    throw error;
+  }
+  if (!sol || sol.tipo !== 'GRUPO') return respostaErro('Pedido de grupo não encontrado.');
+  hotelPermitido(chamador, sol.hotel_id);
+  if (!('valor_estimado' in sol)) return respostaErro('Para calcular o valor do grupo, primeiro rode no Supabase o SQL sql/painel_grupos.sql.');
+  const r = await estimarGrupo(supabaseAdmin, sol, { forcar: true });
+  return Response.json({ sucesso: true, solicitacao: r.solicitacao });
 }
