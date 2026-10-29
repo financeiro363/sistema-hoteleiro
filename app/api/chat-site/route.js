@@ -14,6 +14,7 @@
 
 import { clienteAdmin, origemDoSite } from '../../../lib/atendimento/servidor';
 import { responderConversa } from '../../../lib/atendimento/robo';
+import { aplicarFrases } from '../../../lib/atendimento/frases';
 import {
   TIPO_SITE, LIMITE_TEXTO, LIMITE_MENSAGENS_10MIN, LIMITE_CONVERSAS_HORA,
   canalDoSite, origemPermitida, configPublica, novoPasse, resumoPasse, passeValido, resumoIp, dadosDoVisitante,
@@ -128,12 +129,16 @@ export async function POST(request) {
         }
       }
 
+      const dataMsg = new Date().toISOString();
       const { error: erroMsg } = await supabaseAdmin.from('atendimento_mensagens').upsert({
         hotel_id: canal.hotel_id, conversa_id: conversa.id, direcao: 'ENTRADA', tipo: 'texto', texto,
         id_externo: idCliente ? `site:${conversa.id}:${idCliente}` : null, status_envio: 'NAO_LIDA',
-        data_original: new Date().toISOString(),
+        data_original: dataMsg,
       }, { onConflict: 'hotel_id,id_externo', ignoreDuplicates: true });
       if (erroMsg) throw erroMsg;
+
+      // Etiquetas por frase (1ª mensagem do visitante)
+      try { await aplicarFrases(supabaseAdmin, { conversaId: conversa.id, canal, texto, data: dataMsg }); } catch (e) { /* a etiqueta é um extra */ }
 
       // Robô (se estiver ligado para o chat do site): responde aqui mesmo
       try {
