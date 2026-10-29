@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react';
 import {
   ICONE_CANAL, nomeDaConversa, visitanteNoSite, STATUS_CONVERSA, horaCurta, iniciais, primeiroNome, tempoDesde, minutosEsperando, inicioEspera, chaveNome, dinheiro,
 } from './util';
-import { ChipEtiqueta, roboPausado } from './Conversa';
+import { ChipEtiqueta, roboPausado, roboChamouEquipe } from './Conversa';
 
 export function CartaoConversa({
   c, ativo, compacto, nomeHotel, nomeResponsavel, souEu, etiquetasPorId, alertaMinutos, agora, onAbrir, extra, jaReservou, robo,
@@ -27,7 +27,7 @@ export function CartaoConversa({
   const mostrar = etqs.filter((e) => chaveNome(e.nome) !== 'ad');
   const comRobo = robo?.ligado && (robo.canais || []).includes(c.canal_tipo);
   const pausado = comRobo && roboPausado(c, robo, agora);
-  const chamouEquipe = pausado && ['PEDIU_HUMANO', 'ROBO_NAO_SABE', 'ERRO', 'LIMITE'].includes(c.robo_pausa_motivo);
+  const chamouEquipe = (pausado && ['PEDIU_HUMANO', 'ROBO_NAO_SABE', 'ERRO', 'LIMITE'].includes(c.robo_pausa_motivo)) || (comRobo && roboChamouEquipe(c));
 
   return (
     <div

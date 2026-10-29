@@ -14,6 +14,7 @@
 
 import { clienteAdmin, origemDoSite } from '../../../lib/atendimento/servidor';
 import { responderConversa } from '../../../lib/atendimento/robo';
+import { pausaBloqueiaRobo } from '../../../lib/atendimento/roboConfig';
 import { aplicarFrases } from '../../../lib/atendimento/frases';
 import {
   TIPO_SITE, LIMITE_TEXTO, LIMITE_MENSAGENS_10MIN, LIMITE_CONVERSAS_HORA,
@@ -81,11 +82,13 @@ export async function POST(request) {
       const nomes = await nomesDaEquipe(supabaseAdmin, lista);
       const agora = Date.now();
       const { data: atual } = await supabaseAdmin.from('atendimento_conversas')
-        .select('robo_ocupado_ate, contato_id').eq('id', conversa.id).maybeSingle();
+        .select('robo_ocupado_ate, contato_id, robo_pausado_em, robo_pausa_motivo, ultima_saida_em').eq('id', conversa.id).maybeSingle();
       return ok({
         mensagens: lista.map((m) => mensagemParaVisitante(m, nomes)),
         digitando: !!(atual?.robo_ocupado_ate && new Date(atual.robo_ocupado_ate).getTime() > agora),
         temContato: !!atual?.contato_id,
+        // A equipe assumiu esta conversa: o balão deixa de dizer "responde na hora"
+        equipe: pausaBloqueiaRobo(atual),
         ...extra,
       });
     };

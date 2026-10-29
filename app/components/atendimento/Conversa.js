@@ -21,6 +21,7 @@ import {
 import { ModalCotacao, ListaCotacoes } from './Cotacao';
 import { EditorHtml, EscolherModelo, aplicarVariaveisModelo, htmlParaTextoTela } from './ModelosEmail';
 import { montarTextoModelo, rotuloVariavel, baseDoLink } from '../../../lib/atendimento/modelosTexto';
+import { PAUSA_QUE_CONTINUA, pausaBloqueiaRobo } from '../../../lib/atendimento/roboConfig';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 
@@ -691,26 +692,37 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
 const MOTIVOS_PAUSA_TELA = {
   ASSUMIU: 'alguém da equipe assumiu',
   PEDIU_HUMANO: 'o cliente pediu para falar com uma pessoa',
-  ROBO_NAO_SABE: 'o robô não sabia responder e chamou a equipe',
+  ROBO_NAO_SABE: 'o robô passou a conversa para a equipe',
   LIMITE: 'o robô chegou ao limite de gasto do mês',
   ERRO: 'o robô teve um problema para responder',
 };
 
+// Pausado de verdade? ("Chamou a equipe por não saber" não pausa: o robô continua)
 export function roboPausado(conversa, robo, agora = Date.now()) {
-  if (!conversa?.robo_pausado_em) return false;
-  const ultimaEquipe = Math.max(new Date(conversa.robo_pausado_em).getTime(), conversa.ultima_saida_em ? new Date(conversa.ultima_saida_em).getTime() : 0);
-  return agora - ultimaEquipe < (Number(robo?.horas_retomar) || 12) * 3600000;
+  return pausaBloqueiaRobo(conversa, robo?.horas_retomar, agora);
 }
+
+// O robô chamou a equipe para uma pergunta que não sabia (e continua respondendo o resto)
+export const roboChamouEquipe = (conversa) => !!conversa?.robo_pausado_em && conversa.robo_pausa_motivo === PAUSA_QUE_CONTINUA;
 
 function FaixaRobo({ conversa, robo, usuario, salvando, onAlterar }) {
   if (!robo?.ligado || !(robo.canais || []).includes(conversa.canal_tipo)) return null;
   const pausado = roboPausado(conversa, robo);
+  const assumir = () => onAlterar({ robo_pausado_em: new Date().toISOString(), robo_pausa_motivo: 'ASSUMIU', ...(conversa.responsavel_id ? {} : { responsavel_id: usuario.id }) });
+  if (roboChamouEquipe(conversa)) {
+    return (
+      <div className="at-faixa-robo pausado">
+        <span>🙋 O robô não sabia uma resposta e chamou a equipe (veja a nota). Ele continua respondendo as outras perguntas até alguém da equipe escrever aqui.</span>
+        <button type="button" className="at-btn" disabled={salvando} onClick={assumir}>✋ Assumir atendimento</button>
+        <button type="button" className="at-btn" disabled={salvando} onClick={() => onAlterar({ robo_pausado_em: null, robo_pausa_motivo: null })} title="A pergunta já foi resolvida (por exemplo, por telefone)">✓ Tirar o aviso</button>
+      </div>
+    );
+  }
   if (!pausado) {
     return (
       <div className="at-faixa-robo">
         <span>🤖 O robô está atendendo esta conversa{conversa.robo_ultima_resposta_em ? ` (última resposta às ${soHora(conversa.robo_ultima_resposta_em)})` : ''}. Ao responder, você assume.</span>
-        <button type="button" className="at-btn" disabled={salvando}
-          onClick={() => onAlterar({ robo_pausado_em: new Date().toISOString(), robo_pausa_motivo: 'ASSUMIU', ...(conversa.responsavel_id ? {} : { responsavel_id: usuario.id }) })}>
+        <button type="button" className="at-btn" disabled={salvando} onClick={assumir}>
           ✋ Assumir atendimento
         </button>
       </div>
