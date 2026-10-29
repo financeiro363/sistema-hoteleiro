@@ -5,8 +5,8 @@
 // ============================================================================
 // - Etapas do quadro (Kanban): nome, cor, ordem, ligada/desligada
 // - Etiquetas: manuais (a equipe usa) e automáticas (o sistema coloca)
-// - Horário comercial (para o Painel contar "fora do horário") e o alerta
-//   de cliente esperando
+// - Horário comercial (para o Painel contar "fora do horário") e o prazo de
+//   resposta (aviso vermelho, filtro "Fora do prazo" e placar do Painel)
 // - Motor de reservas e cotação (link do motor, textos da cotação e a
 //   verificação automática de reservas novas → "Reservou")
 // - Copiar tudo para o outro hotel
@@ -342,8 +342,8 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
       </section>
 
       <section className="at-cartao">
-        <h2>🕘 Horário comercial e alerta</h2>
-        <p className="at-dica" style={{ marginTop: 0 }}>O horário comercial serve para o Painel contar os atendimentos que chegaram fora do horário (que, no futuro, a IA vai cobrir). Dia sem horário = fechado.</p>
+        <h2>🕘 Horário comercial e prazo de resposta</h2>
+        <p className="at-dica" style={{ marginTop: 0 }}>O horário comercial serve para o Painel contar os atendimentos que chegaram fora do horário (que o robô cobre) e para o placar do prazo de resposta. Dia sem horário = fechado.</p>
         <div className="at-horarios">
           {DIAS.map(([d, nome]) => {
             const faixa = horario[d];
@@ -364,10 +364,15 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
             );
           })}
         </div>
-        <label className="rotulo" htmlFor="fa-alerta">Avisar em vermelho quando o cliente estiver esperando resposta há mais de (minutos)</label>
+        <label className="rotulo" htmlFor="fa-alerta">⏰ Prazo de resposta (minutos)</label>
         <input id="fa-alerta" className="campo" style={{ maxWidth: 140 }} type="number" min={1} max={1440} value={alerta} onChange={(e) => setAlerta(e.target.value)} />
+        <p className="at-dica">
+          Passou desse tempo sem resposta, a conversa fica vermelha e entra no filtro “⏰ Fora do prazo”. O Painel mostra quantas mensagens
+          foram respondidas dentro do prazo (só as que chegam no horário comercial acima; à noite o robô atende). Conta a partir da
+          1ª mensagem do cliente sem resposta.
+        </p>
         <div className="at-botoes">
-          <button type="button" className="at-btn at-btn-verde" onClick={salvarPreferencias} disabled={ocupado}>Salvar horário e alerta</button>
+          <button type="button" className="at-btn at-btn-verde" onClick={salvarPreferencias} disabled={ocupado}>Salvar horário e prazo</button>
         </div>
       </section>
 

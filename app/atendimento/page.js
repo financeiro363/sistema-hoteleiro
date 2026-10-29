@@ -42,6 +42,7 @@ const FILTROS = [
   ['minhas', 'Minhas'],
   ['sem', 'Sem responsável'],
   ['nao_respondidas', 'Não respondidas'],
+  ['fora_prazo', '⏰ Fora do prazo'],
   ['nao_lidas', 'Não lidas'],
   ['resolvidas', 'Resolvidas'],
   ['arquivadas', 'Arquivadas'],
@@ -221,6 +222,11 @@ export default function CaixaDeEntrada() {
     return a;
   }, [preferencias, hoteisIds]);
 
+  // Sem o SQL do prazo (coluna aguardando_desde), "Não respondidas" e "Fora do
+  // prazo" usam a última mensagem do cliente
+  const [temAguardando, setTemAguardando] = useState(true);
+  const prazoMin = Number(alertas[Number(hotelFiltro) || hoteisIds[0]]) || 15;
+
   // Monta a consulta com os filtros da tela (usada na lista, no quadro e no exportar)
   const montarConsulta = useCallback(() => {
     let q = supabase.from('atendimento_conversas').select('*');
@@ -229,7 +235,14 @@ export default function CaixaDeEntrada() {
     if (filtro === 'abertas') q = q.not('status', 'in', FECHADAS);
     if (filtro === 'minhas') q = q.eq('responsavel_id', usuario.id).not('status', 'in', FECHADAS);
     if (filtro === 'sem') q = q.is('responsavel_id', null).not('status', 'in', FECHADAS);
-    if (filtro === 'nao_respondidas') q = q.eq('ultima_direcao', 'ENTRADA').not('status', 'in', FECHADAS);
+    if (filtro === 'nao_respondidas') {
+      q = (temAguardando ? q.not('aguardando_desde', 'is', null) : q.eq('ultima_direcao', 'ENTRADA')).not('status', 'in', FECHADAS);
+    }
+    if (filtro === 'fora_prazo') {
+      // Esperando resposta há mais que o prazo (Funil e etiquetas → aviso vermelho)
+      const corte = new Date(Date.now() - prazoMin * 60000).toISOString();
+      q = (temAguardando ? q.lt('aguardando_desde', corte) : q.eq('ultima_direcao', 'ENTRADA').lt('ultima_entrada_em', corte)).not('status', 'in', FECHADAS);
+    }
     if (filtro === 'nao_lidas') q = q.gt('nao_lidas', 0);
     if (filtro === 'resolvidas') q = q.eq('status', 'RESOLVIDA');
     if (filtro === 'arquivadas') q = q.eq('status', 'ARQUIVADA');
@@ -258,11 +271,16 @@ export default function CaixaDeEntrada() {
     }
     const crescente = ordem === 'antigas';
     return q.order('ultima_mensagem_em', { ascending: crescente, nullsFirst: false }).order('id', { ascending: crescente });
-  }, [usuario, filtro, hotelFiltro, hoteisIds, atendenteFiltro, etiquetaFiltro, etapaFiltro, canalFiltro, periodo, busca, ordem, etiquetas, etapas]);
+  }, [usuario, filtro, hotelFiltro, hoteisIds, atendenteFiltro, etiquetaFiltro, etapaFiltro, canalFiltro, periodo, busca, ordem, etiquetas, etapas, temAguardando, prazoMin]);
 
   const carregarLista = useCallback(async () => {
     if (!usuario) return;
     const { data, error } = await montarConsulta().limit(visao === 'quadro' ? LIMITE_QUADRO : LIMITE_LISTA);
+    // Ainda sem o SQL do prazo: refaz a consulta sem a coluna nova
+    if (temAguardando && ((error && /aguardando_desde/i.test(error.message || '')) || (data?.length && !('aguardando_desde' in data[0])))) {
+      setTemAguardando(false);
+      if (error) return;
+    }
     if (error) {
       setErroLista(/atendimento_|does not exist|schema cache/i.test(error.message)
         ? (/etiquetas|etapa_id|ARQUIVADA/.test(error.message) ? mensagemSemFase2 : mensagemSemSql)
@@ -281,7 +299,7 @@ export default function CaixaDeEntrada() {
       if (!erroSol) setSolicitacoesNovas(count || 0);
     }
     setCarregandoLista(false);
-  }, [usuario, montarConsulta, visao]);
+  }, [usuario, montarConsulta, visao, temAguardando]);
 
   // Exportar os atendimentos do filtro atual (todos, não só os da tela)
   const [exportando, setExportando] = useState(false);

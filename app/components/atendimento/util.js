@@ -74,10 +74,19 @@ export function tempoDesde(iso, agora = Date.now()) {
   return `${d} d`;
 }
 
-// Minutos esperando resposta (cliente falou por último e ninguém respondeu)
+// Desde quando o cliente espera resposta: a 1ª mensagem dele sem resposta
+// (coluna aguardando_desde; sem o SQL do prazo, a última mensagem dele)
+export function inicioEspera(c) {
+  if (!c || ['RESOLVIDA', 'ARQUIVADA'].includes(c.status)) return null;
+  if ('aguardando_desde' in c) return c.aguardando_desde || null;
+  return c.ultima_direcao === 'ENTRADA' ? c.ultima_entrada_em || null : null;
+}
+
+// Minutos esperando resposta
 export function minutosEsperando(c, agora = Date.now()) {
-  if (!c || c.ultima_direcao !== 'ENTRADA' || ['RESOLVIDA', 'ARQUIVADA'].includes(c.status) || !c.ultima_entrada_em) return null;
-  return Math.max(0, Math.floor((agora - new Date(c.ultima_entrada_em).getTime()) / 60000));
+  const desde = inicioEspera(c);
+  if (!desde) return null;
+  return Math.max(0, Math.floor((agora - new Date(desde).getTime()) / 60000));
 }
 
 // ---- Planilhas (CSV) ---------------------------------------------------------

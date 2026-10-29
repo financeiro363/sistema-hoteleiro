@@ -12,7 +12,7 @@
 
 import { useMemo, useState } from 'react';
 import {
-  ICONE_CANAL, nomeDaConversa, visitanteNoSite, STATUS_CONVERSA, horaCurta, iniciais, primeiroNome, tempoDesde, minutosEsperando, chaveNome, dinheiro,
+  ICONE_CANAL, nomeDaConversa, visitanteNoSite, STATUS_CONVERSA, horaCurta, iniciais, primeiroNome, tempoDesde, minutosEsperando, inicioEspera, chaveNome, dinheiro,
 } from './util';
 import { ChipEtiqueta, roboPausado } from './Conversa';
 
@@ -51,7 +51,7 @@ export function CartaoConversa({
         </div>
         <div className="at-item-rodape">
           {espera !== null && (
-            <span className={`at-chip ${atrasada ? 'at-chip-atrasada' : 'at-chip-espera'}`} title="Tempo esperando resposta">⏳ {tempoDesde(c.ultima_entrada_em, agora)}</span>
+            <span className={`at-chip ${atrasada ? 'at-chip-atrasada' : 'at-chip-espera'}`} title="Tempo esperando resposta">⏳ {tempoDesde(inicioEspera(c), agora)}</span>
           )}
           {c.status !== 'ABERTA' && <span className={`at-chip ${c.status === 'PENDENTE' ? 'at-chip-pendente' : 'at-chip-resolvida'}`}>{STATUS_CONVERSA[c.status]}</span>}
           {c.responsavel_id
