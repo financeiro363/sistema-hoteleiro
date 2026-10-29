@@ -178,6 +178,7 @@
   var aberta = false;
   var esperandoRobo = false;
   var digitando = false;
+  var comEquipe = false; // a equipe assumiu a conversa (o robô não responde)
   var temContato = !!memoria.temContato;
   var relogio = null;
   var ultimaAtividade = Number(memoria.atividade) || 0;
@@ -220,9 +221,23 @@
   }
 
   function textoSituacao() {
-    if (cfg.robo) return { fora: false, texto: (cfg.assistente ? cfg.assistente + ', assistente virtual' : 'Assistente virtual') + ' · responde na hora' };
+    if (cfg.robo && !comEquipe) return { fora: false, texto: (cfg.assistente ? cfg.assistente + ', assistente virtual' : 'Assistente virtual') + ' · responde na hora' };
+    if (comEquipe && cfg.equipe && cfg.equipe.aberta) return { fora: false, texto: 'Agora quem responde é a equipe · em poucos minutos' };
     if (cfg.equipe && cfg.equipe.aberta) return { fora: false, texto: 'A equipe responde em poucos minutos' };
     return { fora: true, texto: cfg.equipe && cfg.equipe.volta ? 'Fora do horário · a equipe volta ' + cfg.equipe.volta : 'Fora do horário · responderemos assim que possível' };
+  }
+
+  // A equipe assumiu (ou devolveu ao robô): troca a linha de situação do topo
+  function mudarEquipe(valor) {
+    valor = !!valor;
+    if (valor === comEquipe) return;
+    comEquipe = valor;
+    if (!janela) return;
+    var sit = textoSituacao();
+    var ponto = janela.querySelector('.ponto');
+    if (ponto) ponto.className = 'ponto' + (sit.fora ? ' fora' : '');
+    var el = janela.querySelector('.sit');
+    if (el) el.textContent = sit.texto;
   }
 
   function montarJanela() {
@@ -406,6 +421,7 @@
       receber(r.mensagens, false);
       var mudou = primeira || mensagens.length !== antes || digitando !== !!r.digitando || (r.temContato && !temContato);
       digitando = !!r.digitando;
+      mudarEquipe(r.equipe);
       if (r.temContato) { temContato = true; guardar({ temContato: true }); }
       if (mudou) desenhar();
       atualizarSelo();
@@ -455,7 +471,7 @@
     if (enviando || !fila.length) return;
     enviando = true;
     var m = fila.shift();
-    esperandoRobo = !!cfg.robo;
+    esperandoRobo = !!cfg.robo && !comEquipe;
     desenhar();
     pedir({ acao: 'enviar', passe: memoria.passe || null, id: m.idCliente, texto: m.texto, depois: historicoCarregado ? ultimoId : 0, visitante: visitante() }, 25000)
       .then(function (r) {
@@ -464,6 +480,7 @@
         if (i >= 0) mensagens.splice(i, 1);
         receber(r.mensagens, true);
         digitando = !!r.digitando;
+        mudarEquipe(r.equipe);
         if (r.temContato) { temContato = true; guardar({ temContato: true }); }
       }, function (e) {
         m.falhou = true; m.local = false;
