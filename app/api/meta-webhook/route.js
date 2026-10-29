@@ -20,6 +20,7 @@
 import { clienteAdmin, lerSegredo, origemDoSite } from '../../../lib/atendimento/servidor';
 import { assinaturaValida, processarValorWebhook } from '../../../lib/atendimento/whatsapp';
 import { responderPendentes } from '../../../lib/atendimento/robo';
+import { aplicarFrases } from '../../../lib/atendimento/frases';
 import { tratarRespostas } from '../../../lib/atendimento/automacoes';
 
 export const dynamic = 'force-dynamic';
@@ -91,6 +92,13 @@ export async function POST(request) {
       try {
         const r = await processarValorWebhook(supabaseAdmin, canal, valor);
         paraORobo.push(...r.conversas);
+        // Etiquetas por frase (1ª mensagem do cliente): uma vez por conversa
+        const vistas = new Set();
+        for (const e of r.entradas || []) {
+          if (vistas.has(e.conversaId)) continue;
+          vistas.add(e.conversaId);
+          try { await aplicarFrases(supabaseAdmin, { conversaId: e.conversaId, canal, texto: e.texto, data: e.data }); } catch (erro) { /* a etiqueta é um extra */ }
+        }
         await supabaseAdmin.from('atendimento_canais').update({
           status: r.erros.length ? 'ERRO' : 'OK',
           erro: r.erros.length ? r.erros.slice(0, 3).join(' | ').slice(0, 500) : null,

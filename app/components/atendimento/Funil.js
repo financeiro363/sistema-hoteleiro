@@ -5,6 +5,7 @@
 // ============================================================================
 // - Etapas do quadro (Kanban): nome, cor, ordem, ligada/desligada
 // - Etiquetas: manuais (a equipe usa) e automáticas (o sistema coloca)
+// - Etiquetas automáticas por frase (1ª mensagem do cliente → etiqueta)
 // - Horário comercial (para o Painel contar "fora do horário") e o prazo de
 //   resposta (aviso vermelho, filtro "Fora do prazo" e placar do Painel)
 // - Motor de reservas e cotação (link do motor, textos da cotação e a
@@ -17,6 +18,7 @@ import { supabase } from '../../../lib/supabaseClient';
 import { CORES_SUGERIDAS, chaveNome, chamarApi, dataHora } from './util';
 import { ABERTURA_PADRAO, FINAL_PADRAO } from '../../../lib/atendimento/cotacaoTexto';
 import { ChipEtiqueta } from './Conversa';
+import { FrasesEtiqueta } from './FrasesEtiqueta';
 
 const DIAS = [['1', 'Segunda'], ['2', 'Terça'], ['3', 'Quarta'], ['4', 'Quinta'], ['5', 'Sexta'], ['6', 'Sábado'], ['0', 'Domingo']];
 const HORARIO_PADRAO = { 1: ['08:00', '18:00'], 2: ['08:00', '18:00'], 3: ['08:00', '18:00'], 4: ['08:00', '18:00'], 5: ['08:00', '18:00'], 6: ['08:00', '12:00'] };
@@ -312,6 +314,8 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
           ))}
         </div>
       </section>
+
+      <FrasesEtiqueta hotelId={hotelId} etiquetas={minhasEtiquetas} setErro={setErro} setOk={setOk} onMudou={onMudou} />
 
       <section className="at-cartao">
         <h2>🏨 Motor de reservas e cotação</h2>
