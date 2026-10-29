@@ -180,6 +180,53 @@ function Cartao({ rotulo, valor, detalhe }) {
 }
 
 // ---------------------------------------------------------------------------
+// Prazo de resposta (SLA): quantas mensagens foram respondidas dentro do prazo.
+// Só as que chegam no horário comercial e nos canais de conversa (sem e-mail).
+function SecaoPrazo({ sla, nomes }) {
+  const prazo = Number(sla.prazo_min) === Number(sla.prazo_max) ? `${sla.prazo_min} min` : `${sla.prazo_min} a ${sla.prazo_max} min`;
+  const dentro = Number(sla.dentro) || 0;
+  const fora = (Number(sla.fora_respondidas) || 0) + (Number(sla.aguardando_fora) || 0);
+  const linhas = [
+    ...(sla.por_atendente || []).map((a) => ({ chave: a.id, nome: nomes[a.id] || `Usuário #${a.id}`, ...a })),
+    ...(Number(sla.robo?.respostas) > 0 ? [{ chave: 'robo', nome: '🤖 Robô', ...sla.robo }] : []),
+  ];
+  return (
+    <>
+      <h2 className="pi-secao">⏰ Prazo de resposta ({prazo})</h2>
+      <div className="pi-cartoes">
+        <Cartao rotulo="Respondidas no prazo" valor={pct(dentro, dentro + fora)} detalhe={`${fmt(dentro)} de ${fmt(dentro + fora)} mensagens${Number(sla.aguardando) - Number(sla.aguardando_fora) > 0 ? ` · ${fmt(Number(sla.aguardando) - Number(sla.aguardando_fora))} esperando, ainda no prazo` : ''}`} />
+        <Cartao rotulo="Fora do prazo" valor={fmt(fora)} detalhe={`${fmt(sla.fora_respondidas)} respondidas depois do prazo · ${fmt(sla.aguardando_fora)} ainda esperando`} />
+        <Cartao rotulo="Tempo médio de resposta" valor={minutosTexto(sla.tempo_medio_min)}
+          detalhe={`Metade respondida em até ${minutosTexto(sla.tempo_mediano_min)} · 1ª resposta: ${minutosTexto(sla.primeira?.tempo_medio_min)} · seguintes: ${minutosTexto(sla.seguintes?.tempo_medio_min)}`} />
+        <Cartao rotulo="Resolvidas sem resposta" valor={fmt(sla.encerradas_sem_resposta)} detalhe="O cliente escreveu (ex.: “obrigado”) e a conversa foi resolvida sem responder" />
+      </div>
+      {linhas.length > 0 && (
+        <section className="at-cartao">
+          <h2>Quem respondeu</h2>
+          <div className="at-tabela-rolagem">
+            <table className="at-tabela at-tabela-previa">
+              <thead><tr><th /><th className="num">Respostas</th><th className="num">No prazo</th><th className="num">%</th><th className="num">Tempo médio</th></tr></thead>
+              <tbody>
+                {linhas.map((l) => (
+                  <tr key={l.chave}>
+                    <td>{l.nome}</td><td className="num">{inteiro.format(l.respostas || 0)}</td><td className="num">{inteiro.format(l.dentro || 0)}</td>
+                    <td className="num">{pct(l.dentro, l.respostas)}</td><td className="num">{minutosTexto(l.tempo_medio_min)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      <p className="at-dica">
+        Conta as mensagens que chegaram no horário comercial, no WhatsApp e no chat do site (o e-mail fica de fora); {fmt(sla.fora_horario)} chegaram fora do horário.
+        A resposta do robô conta, menos quando ele passa a conversa para a equipe. O prazo muda em “Funil e etiquetas”.
+      </p>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Automações (Fase 5) e pesquisa de satisfação — só ADMIN
 const NOME_AUTOMACAO = {
   FUP_RESERVAR: 'Clicou e não reservou', FUP_COTACAO: 'Cotação sem clique', SEM_DISPONIBILIDADE: 'Abriu vaga (lista de espera)',
@@ -543,6 +590,8 @@ export function PainelIndicadores({ hoteis, nomes }) {
             <Cartao rotulo="Reservas" valor={fmt(t.reservas)} detalhe={`Conversão: ${pct(t.reservas, t.atendimentos)} dos atendimentos`} />
             <Cartao rotulo="Vieram de anúncio (AD)" valor={fmt(t.anuncios)} detalhe={`${pct(t.anuncios, t.atendimentos)} dos atendimentos`} />
           </div>
+
+          {dados.sla && Number(dados.sla.consideradas) > 0 && <SecaoPrazo sla={dados.sla} nomes={nomes} />}
 
           {cot && (
             <>

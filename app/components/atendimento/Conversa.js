@@ -15,7 +15,7 @@ import { supabase } from '../../../lib/supabaseClient';
 import {
   chamarApi, subirArquivo, avisarCabecalho, STATUS_CONVERSA, ICONE_CANAL, NOME_CANAL,
   soHora, dataHora, rotuloDia, chaveDia, dataCurta, noites, dinheiro, iniciais, tamanhoArquivo,
-  aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando, telefoneBonito,
+  aplicarVariaveis, separarCitacao, partesComLinks, tempoDesde, minutosEsperando, inicioEspera, telefoneBonito,
   nomeDaConversa, visitanteNoSite, paginaCurta, lerPreferencia, gravarPreferencia,
 } from './util';
 import { ModalCotacao, ListaCotacoes } from './Cotacao';
@@ -323,6 +323,10 @@ function AvisoChatSite({ conversa }) {
   );
 }
 
+// "Meu nome" nas mensagens do WhatsApp ("*Ana:*" na primeira linha): cada
+// pessoa liga para si; a escolha fica no cadastro (usuarios.atendimento_assinar)
+let assinarLembrado = null;
+
 function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, janelaAberta, onEnviado, onAbrirModelo, onAbrirCotacao }) {
   const [texto, setTexto] = useState('');
   const [htmlModelo, setHtmlModelo] = useState(null); // e-mail com modelo formatado
@@ -398,6 +402,17 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
     const junto = f.textos.join('\n');
     setTexto((t) => (t.trim() ? `${junto}\n${t}` : junto));
     setTimeout(() => campoRef.current?.focus(), 0);
+  }
+
+  // Sem o SQL do prazo e assinatura, o cadastro não tem a coluna: o botão não aparece
+  const podeAssinar = canal?.tipo === 'WHATSAPP' && !!usuario && 'atendimento_assinar' in usuario;
+  const [assinar, setAssinar] = useState(() => (assinarLembrado ?? !!usuario?.atendimento_assinar));
+  async function trocarAssinar() {
+    const novo = !assinar;
+    setAssinar(novo);
+    assinarLembrado = novo;
+    try { await chamarApi('/api/atendimento', { acao: 'minha_assinatura', assinar: novo }); }
+    catch (e) { setAssinar(!novo); assinarLembrado = !novo; setErro(e.message); }
   }
 
   function trocarJuntar() {
@@ -591,6 +606,12 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
             ⏳ Juntar mensagens: {juntar ? 'ligado' : 'desligado'}
           </button>
         )}
+        {podeAssinar && !nota && (
+          <button type="button" className={`at-ferramenta ${assinar ? 'ativa' : ''}`} onClick={trocarAssinar}
+            title={`Ligado: a mensagem do WhatsApp sai com o seu nome em negrito na primeira linha (ex.: *${String(usuario?.nome || 'Ana').trim().split(/\s+/)[0]}:*). Vale só para você.`}>
+            ✍️ Meu nome: {assinar ? 'ligado' : 'desligado'}
+          </button>
+        )}
         {ehEmail && !nota && (
           <button type="button" className="at-ferramenta" onClick={() => setMostrarCc(!mostrarCc)}>Cc</button>
         )}
@@ -777,7 +798,7 @@ export function Conversa({
           )}
           {esperando !== null && (
             <div className={`at-conv-sub ${alertaMinutos && esperando >= alertaMinutos ? 'at-espera-alerta' : ''}`}>
-              ⏳ Cliente esperando resposta há {tempoDesde(conversa.ultima_entrada_em)}
+              ⏳ Cliente esperando resposta há {tempoDesde(inicioEspera(conversa))}
             </div>
           )}
         </div>

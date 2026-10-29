@@ -12,6 +12,7 @@
 //   cloudbeds_buscar  → reservas do cliente na Cloudbeds
 //   cloudbeds_vincular→ liga/desliga uma reserva à conversa
 //   equipe            → hotéis e pessoas que atendem (filtros e "responsável")
+//   minha_assinatura  → liga/desliga o nome da pessoa nas mensagens do WhatsApp
 //   painel            → indicadores do mês (aba Painel)
 //   importar_contatos → importa a lista de contatos (ex.: exportada do Asksuite)
 //   cotacao_hoteis    → hotéis que dá para cotar na conversa (o dela e os do grupo)
@@ -130,6 +131,7 @@ export async function POST(request) {
       case 'cloudbeds_buscar': return await acaoCloudbedsBuscar(supabaseAdmin, chamador, corpo);
       case 'cloudbeds_vincular': return await acaoCloudbedsVincular(supabaseAdmin, chamador, corpo);
       case 'equipe': return await acaoEquipe(supabaseAdmin, chamador);
+      case 'minha_assinatura': return await acaoMinhaAssinatura(supabaseAdmin, chamador, corpo);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
       case 'importar_contatos': return await acaoImportarContatos(supabaseAdmin, chamador, corpo);
       case 'cotacao_hoteis': return await acaoCotacaoHoteis(supabaseAdmin, chamador, corpo);
@@ -250,7 +252,9 @@ async function acaoEnviar(supabaseAdmin, chamador, corpo) {
   if (!texto && !arquivos.length && !corpo.modelo && !corpo.html) return respostaErro('Escreva a mensagem ou escolha um anexo.');
 
   const autor = { id: chamador.id };
-  const mensagens = await enviarPelaConversa(supabaseAdmin, autor, { canal, conversa, corpo, texto, arquivos });
+  // WhatsApp: "*Ana:*" na primeira linha, se a pessoa ligou "Meu nome nas mensagens"
+  const textoFinal = canal.tipo === 'WHATSAPP' && !corpo.modelo ? comAssinatura(chamador, texto) : texto;
+  const mensagens = await enviarPelaConversa(supabaseAdmin, autor, { canal, conversa, corpo, texto: textoFinal, arquivos });
 
   // Quem responde vira o responsável, se a conversa estava sem ninguém
   const conversaFinal = mensagens.conversa;
@@ -261,6 +265,41 @@ async function acaoEnviar(supabaseAdmin, chamador, corpo) {
   if (conversaFinal && mensagens.lista.some((m) => m.status_envio !== 'FALHOU')) await pausarRobo(supabaseAdmin, conversaFinal.id);
   if (mensagens.erro) return respostaErro(mensagens.erro, 400, { mensagens: mensagens.lista, conversaId: conversaFinal?.id });
   return Response.json({ sucesso: true, mensagens: mensagens.lista, conversaId: conversaFinal?.id });
+}
+
+// ---------------------------------------------------------------- ASSINATURA
+// Nome da pessoa no começo da mensagem do WhatsApp ("*Ana:*"), quando ela liga
+// a opção para si. Pula a inicial ("G. Gustavo" → "Gustavo"); nome todo em
+// maiúsculas ou minúsculas vira "Mariluce" (e "J.TOMAZ", "J.Tomaz").
+function primeiroNomeAssinatura(nome) {
+  const partes = String(nome || '').replace(/[*_~`]/g, '').trim().split(/\s+/).filter((p) => /\p{L}/u.test(p));
+  let n = partes.find((p) => !/^\p{L}\.?$/u.test(p) && !/^\p{L}\.$/u.test(p)) || partes[0] || '';
+  if (!n) return '';
+  if (n === n.toUpperCase() || n === n.toLowerCase()) n = n.toLowerCase().replace(/(^|[^\p{L}])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+  return n.slice(0, 30);
+}
+
+function linhaAssinatura(chamador) {
+  if (!chamador?.atendimento_assinar) return '';
+  const nome = primeiroNomeAssinatura(chamador.nome);
+  return nome ? `*${nome}:*` : '';
+}
+
+function comAssinatura(chamador, texto) {
+  const linha = linhaAssinatura(chamador);
+  if (!linha || !String(texto || '').trim() || String(texto).startsWith(linha)) return texto;
+  return `${linha}\n${texto}`;
+}
+
+async function acaoMinhaAssinatura(supabaseAdmin, chamador, corpo) {
+  const assinar = corpo.assinar === true;
+  const { error } = await supabaseAdmin.from('usuarios').update({ atendimento_assinar: assinar }).eq('id', chamador.id);
+  if (error) {
+    if (/atendimento_assinar/i.test(error.message || '')) return respostaErro('Para usar, primeiro o administrador roda no Supabase o SQL sql/prazo_e_assinatura.sql.');
+    throw error;
+  }
+  const nome = primeiroNomeAssinatura(chamador.nome);
+  return Response.json({ sucesso: true, assinar, exemplo: nome ? `*${nome}:*` : null });
 }
 
 // ---------------------------------------------------------------- LER
@@ -597,6 +636,8 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   }
   // Vendas: por atendente, robô, canal, horário e antecedência
   const { data: vendas } = await supabaseAdmin.rpc('atendimento_painel_vendas', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
+  // Prazo de resposta (sem o SQL do prazo: a seção não aparece)
+  const { data: sla } = await supabaseAdmin.rpc('atendimento_painel_sla', { p_hoteis: pedidos, p_inicio: inicio, p_fim: fim });
   // Mensagens e custo do WhatsApp: só dos hotéis em que a pessoa é ADMIN
   const hoteisAdmin = pedidos.filter((h) => chamador.hoteisAdmin.includes(h));
   let whatsapp = null;
@@ -607,7 +648,7 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
     const { data: aut } = await supabaseAdmin.rpc('atendimento_painel_automacoes', { p_hoteis: hoteisAdmin, p_inicio: inicio, p_fim: fim });
     automacoes = aut || null; // sem o SQL da Fase 5: não aparece
   }
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes }, inicio, fim });
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null }, inicio, fim });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS
@@ -763,7 +804,10 @@ async function acaoCotacaoEnviar(supabaseAdmin, chamador, corpo, request) {
   let cb;
   try { cb = await conexaoCloudbeds(supabaseAdmin, outro ? outro.id : conversa.hotel_id); }
   catch (e) { return respostaErro(outro ? `${outro.nome}: ${e.message}` : e.message); }
-  const r = await enviarCotacao(supabaseAdmin, { id: chamador.id }, { conversa, canal, cb, pedido: corpo, origem: origemDoSite(request), hotelCotado: outro });
+  const r = await enviarCotacao(supabaseAdmin, { id: chamador.id }, {
+    conversa, canal, cb, pedido: corpo, origem: origemDoSite(request), hotelCotado: outro,
+    assinatura: canal.tipo === 'WHATSAPP' ? linhaAssinatura(chamador) : '',
+  });
   if (r.erro) return respostaErro(r.erro, 400, r.mensagens ? { mensagens: r.mensagens } : {});
   await pausarRobo(supabaseAdmin, conversa.id);
   return Response.json({ sucesso: true, cotacao: r.cotacao, mensagens: r.mensagens });
