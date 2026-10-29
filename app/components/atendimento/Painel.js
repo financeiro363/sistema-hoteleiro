@@ -13,6 +13,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
 import { chamarApi, NOME_CANAL, ICONE_CANAL } from './util';
+import { MOTIVOS_PERDA } from '../../../lib/atendimento/gruposConfig';
 
 const FUSO = 'America/Fortaleza';
 // Paleta categórica validada (ordem fixa: azul, laranja, verde-água)
@@ -221,6 +222,48 @@ function SecaoPrazo({ sla, nomes }) {
       <p className="at-dica">
         Conta as mensagens que chegaram no horário comercial, no WhatsApp e no chat do site (o e-mail fica de fora); {fmt(sla.fora_horario)} chegaram fora do horário.
         A resposta do robô conta, menos quando ele passa a conversa para a equipe. O prazo muda em “Funil e etiquetas”.
+      </p>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pedidos de grupo: valor estimado (Cloudbeds × quartos × noites) e resultado
+const decimal = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+
+function SecaoGrupos({ g }) {
+  const decididos = Number(g.fecharam || 0) + Number(g.nao_fecharam || 0);
+  const semValor = Number(g.pedidos || 0) - Number(g.com_valor || 0);
+  const motivos = Object.entries(g.motivos || {}).sort((a, b) => b[1] - a[1]);
+  return (
+    <>
+      <h2 className="pi-secao">👥 Pedidos de grupo</h2>
+      <div className="pi-cartoes">
+        <Cartao rotulo="Pedidos de grupo" valor={fmt(g.pedidos)} detalhe={`${fmt(g.pelo_robo)} registrado(s) pelo robô`} />
+        <Cartao rotulo="Potencial" valor={reaisCurto(g.potencial)} detalhe={`Valor estimado de ${fmt(g.com_valor)} pedido(s)${semValor > 0 ? ` · ${fmt(semValor)} sem valor` : ''}`} />
+        <Cartao rotulo="Ticket médio" valor={g.ticket_medio == null ? '—' : reaisCurto(g.ticket_medio)}
+          detalhe={`Média de ${decimal(g.media_quartos)} quartos e ${decimal(g.media_noites)} diárias${g.media_pessoas != null ? ` · ${decimal(g.media_pessoas)} pessoas` : ''}`} />
+        <Cartao rotulo="Fecharam" valor={fmt(g.fecharam)}
+          detalhe={`${reaisCurto(g.valor_fechado)} · ${decididos ? `${pct(g.fecharam, decididos)} dos que já têm resposta` : 'nenhum com resposta ainda'}`} />
+        <Cartao rotulo="Não fecharam" valor={fmt(g.nao_fecharam)} detalhe={`Potencial perdido: ${reaisCurto(g.potencial_perdido)}`} />
+        <Cartao rotulo="Em aberto" valor={fmt(g.em_aberto)} detalhe={`Potencial em aberto: ${reaisCurto(g.potencial_aberto)}`} />
+      </div>
+      {motivos.length > 0 && (
+        <section className="at-cartao">
+          <h2>Por que não fecharam</h2>
+          <table className="at-tabela at-tabela-previa">
+            <thead><tr><th>Motivo</th><th className="num">Pedidos</th><th className="num">%</th></tr></thead>
+            <tbody>
+              {motivos.map(([k, n]) => (
+                <tr key={k}><td>{MOTIVOS_PERDA[k] || k}</td><td className="num">{inteiro.format(n)}</td><td className="num">{pct(n, g.nao_fecharam)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+      <p className="at-dica">
+        Conta os pedidos de grupo feitos no período. O valor estimado é a tarifa do quarto mais barato na Cloudbeds nas datas × quartos × noites; em Solicitações a equipe corrige o valor e marca se o grupo fechou.
+        {Number(g.quartos_estimados) > 0 ? ` Em ${fmt(g.quartos_estimados)} pedido(s) o cliente não disse quantos quartos: o sistema contou 2 pessoas por quarto.` : ''}
       </p>
     </>
   );
@@ -631,6 +674,8 @@ export function PainelIndicadores({ hoteis, nomes }) {
           )}
 
           {vendas && Number(vendas.total?.cotacoes) > 0 && <SecaoVendas vendas={vendas} nomes={nomes} />}
+
+          {dados.grupos && Number(dados.grupos.pedidos) > 0 && <SecaoGrupos g={dados.grupos} />}
 
           {robo && (
             <>
