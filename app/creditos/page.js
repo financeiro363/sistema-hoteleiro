@@ -9,6 +9,11 @@
 //   só o ADMIN marca como processada.
 // - Link do comprovante (Google Drive) ao encerrar/processar — ou depois.
 // - Log de Auditoria (visível só para o ADMIN).
+// - Campos do programa antigo (sql/creditos_programa_antigo.sql, 29/10/2026):
+//   check-in, check-out, data e forma do pagamento, documento bancário; ao
+//   encerrar, em qual fatura/reserva e para qual pax foi lançado e o valor
+//   lançado/devolvido. Quem encerrou fica guardado também pelo nome (vale
+//   para quem já saiu da empresa). Créditos importados mostram "programa antigo".
 // Segurança garantida no banco via RLS (as regras acima valem mesmo se
 // alguém tentar burlar a tela).
 // ============================================================================
@@ -46,6 +51,7 @@ const FORMA_ENCERRAMENTO_LABEL = {
   DEPOSITO: 'Depósito Bancário',
   CARTAO: 'Estorno em Cartão',
   NOVA_RESERVA: 'Abatido em Nova Reserva',
+  DINHEIRO: 'Devolvido em Dinheiro',
 };
 const FORMAS_PAGAMENTO_HOTEL = ['Pix', 'Cartão', 'Depósito', 'Dinheiro', 'Transferência'];
 
@@ -120,6 +126,12 @@ export default function CreditosDevolucoes() {
   const [cEmpresa, setCEmpresa] = useState('');
   const [cFatura, setCFatura] = useState('');
   const [cObs, setCObs] = useState('');
+  const [cCheckin, setCCheckin] = useState('');
+  const [cCheckout, setCCheckout] = useState('');
+  const [cPagamento, setCPagamento] = useState('');
+  const [cFormaPag, setCFormaPag] = useState('');
+  const [cDocumento, setCDocumento] = useState('');
+  const [camposNovos, setCamposNovos] = useState(false); // rodou o SQL dos campos do programa antigo?
   const [buscaCred, setBuscaCred] = useState('');
   const [filtroCred, setFiltroCred] = useState('TODOS');
 
@@ -136,6 +148,9 @@ export default function CreditosDevolucoes() {
   const [encForma, setEncForma] = useState('PIX');
   const [encObs, setEncObs] = useState('');
   const [encLink, setEncLink] = useState('');
+  const [encLancado, setEncLancado] = useState('');
+  const [encPaxLancado, setEncPaxLancado] = useState('');
+  const [encValor, setEncValor] = useState('');
   const [modalProcessar, setModalProcessar] = useState(null); // devolução
   const [procLink, setProcLink] = useState('');
   const [modalLink, setModalLink] = useState(null);           // {tabela, item}
@@ -157,6 +172,12 @@ export default function CreditosDevolucoes() {
     (id) => (id ? nomesUsuarios[id] || `Usuário #${id}` : '—'),
     [nomesUsuarios]
   );
+  // Quem encerrou: o usuário, ou o nome guardado (quem já saiu da empresa / programa antigo)
+  const quemEncerrou = (c) => (c.encerrado_por_id && nomesUsuarios[c.encerrado_por_id]) || c.encerrado_por_nome || nomeDe(c.encerrado_por_id);
+  const cadastradoTexto = (c) => (c.importado_de
+    ? '📦 Veio do programa antigo'
+    : `Cadastrado por ${nomeDe(c.criado_por_id)} em ${formatarDataHora(c.criado_em)}`);
+  const pagamentoTexto = (c) => [c.forma_pagamento, c.data_pagamento ? `pago em ${formatarData(c.data_pagamento)}` : null].filter(Boolean).join(' · ');
 
   // ---- Login e carregamento ----
   useEffect(() => {
@@ -205,6 +226,8 @@ export default function CreditosDevolucoes() {
       .order('criado_em', { ascending: false }));
     if (e1) setErro('Não foi possível carregar os créditos. Detalhe técnico: ' + e1.message);
     else setCreditos(cs || []);
+    const { error: semCampos } = await supabase.from('creditos_hospedes').select('importado_de').limit(1);
+    setCamposNovos(!semCampos);
 
     const { data: ds, error: e2 } = await buscarTodos(() => supabase
       .from('devolucoes')
@@ -250,6 +273,7 @@ export default function CreditosDevolucoes() {
     setErro('');
     if (!cNomePax.trim()) { setErro('Preencha o nome do pax (hóspede).'); return; }
     if (!(Number(cValor) > 0)) { setErro('Informe um valor maior que zero.'); return; }
+    if (cCheckin && cCheckout && cCheckout < cCheckin) { setErro('O check-out não pode ser antes do check-in.'); return; }
 
     setSalvando(true);
     const { error } = await supabase.from('creditos_hospedes').insert({
@@ -260,6 +284,13 @@ export default function CreditosDevolucoes() {
       observacoes: cObs.trim() || null,
       criado_por_id: usuario.id,
       hotel_id: usuario.hotel_id,
+      ...(camposNovos ? {
+        data_checkin: cCheckin || null,
+        data_checkout: cCheckout || null,
+        data_pagamento: cPagamento || null,
+        forma_pagamento: cFormaPag.trim() || null,
+        documento_bancario: cDocumento.trim() || null,
+      } : {}),
     });
     setSalvando(false);
     if (error) {
@@ -268,6 +299,7 @@ export default function CreditosDevolucoes() {
     }
     await registrarLog('Cadastrou Crédito', `Pax: ${cNomePax.trim()}. Valor: ${dinheiro(cValor)}.`);
     setCNomePax(''); setCValor(''); setCEmpresa(''); setCFatura(''); setCObs('');
+    setCCheckin(''); setCCheckout(''); setCPagamento(''); setCFormaPag(''); setCDocumento('');
     setMostrarFormCredito(false);
     mostrarAviso('Crédito cadastrado!');
     carregarTudo(usuario);
@@ -281,6 +313,10 @@ export default function CreditosDevolucoes() {
       setErroModal('O link precisa começar com http:// ou https:// (ou ficar vazio).');
       return;
     }
+    if (encValor !== '' && !(Number(encValor) >= 0)) {
+      setErroModal('O valor lançado/devolvido não pode ser negativo.');
+      return;
+    }
     setSalvando(true);
     const agora = new Date().toISOString();
     const { error } = await supabase
@@ -292,6 +328,12 @@ export default function CreditosDevolucoes() {
         encerrado_por_id: usuario.id,
         encerrado_em: agora,
         link_comprovante: encLink.trim() || null,
+        ...(camposNovos ? {
+          encerrado_por_nome: nomesUsuarios[usuario.id] || usuario.nome || null,
+          lancado_fatura_reserva: encLancado.trim() || null,
+          nome_pax_lancado: encPaxLancado.trim() || null,
+          valor_devolvido: encValor === '' ? null : Number(encValor),
+        } : {}),
       })
       .eq('id', modalEncerrar.id);
     setSalvando(false);
@@ -304,7 +346,7 @@ export default function CreditosDevolucoes() {
       `Pax: ${modalEncerrar.nome_pax}. Forma: ${FORMA_ENCERRAMENTO_LABEL[encForma]}. Valor: ${dinheiro(modalEncerrar.valor)}.`
     );
     setModalEncerrar(null);
-    setEncForma('PIX'); setEncObs(''); setEncLink('');
+    setEncForma('PIX'); setEncObs(''); setEncLink(''); setEncLancado(''); setEncPaxLancado(''); setEncValor('');
     mostrarAviso('Utilização registrada!');
     carregarTudo(usuario);
   }
@@ -549,7 +591,10 @@ export default function CreditosDevolucoes() {
       termoCred
         ? (c.nome_pax || '').toLowerCase().includes(termoCred) ||
           (c.nome_empresa || '').toLowerCase().includes(termoCred) ||
-          (c.fatura_reserva || '').toLowerCase().includes(termoCred)
+          (c.fatura_reserva || '').toLowerCase().includes(termoCred) ||
+          (c.lancado_fatura_reserva || '').toLowerCase().includes(termoCred) ||
+          (c.nome_pax_lancado || '').toLowerCase().includes(termoCred) ||
+          (c.documento_bancario || '').toLowerCase().includes(termoCred)
         : true
     );
 
@@ -658,6 +703,13 @@ export default function CreditosDevolucoes() {
             )}
           </div>
 
+          {creditos.some((c) => c.status === 'DISPONIVEL') && (
+            <p className="texto-suave" style={{ fontSize: 13, margin: '0 0 8px' }}>
+              {creditos.filter((c) => c.status === 'DISPONIVEL').length} crédito(s) disponível(is) · total{' '}
+              <strong>{dinheiro(creditos.filter((c) => c.status === 'DISPONIVEL').reduce((t, c) => t + Number(c.valor || 0), 0))}</strong>
+            </p>
+          )}
+
           {!souAdmin && (
             <p className="texto-suave" style={{ fontSize: 13 }}>
               Você pode consultar os créditos. Cadastro e encerramento são feitos pelo administrador.
@@ -689,6 +741,36 @@ export default function CreditosDevolucoes() {
               <input id="c-empresa" className="campo" type="text" value={cEmpresa}
                 onChange={(e) => setCEmpresa(e.target.value)} placeholder='Deixe vazio para "Particular"' />
 
+              {camposNovos && (
+                <>
+                  <div className="cd-duas">
+                    <div>
+                      <label className="rotulo" htmlFor="c-checkin">Data de check-in</label>
+                      <input id="c-checkin" className="campo" type="date" value={cCheckin} onChange={(e) => setCCheckin(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="rotulo" htmlFor="c-checkout">Data de check-out</label>
+                      <input id="c-checkout" className="campo" type="date" value={cCheckout} onChange={(e) => setCCheckout(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="cd-duas">
+                    <div>
+                      <label className="rotulo" htmlFor="c-pagamento">Data do pagamento</label>
+                      <input id="c-pagamento" className="campo" type="date" value={cPagamento} onChange={(e) => setCPagamento(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="rotulo" htmlFor="c-formapag">Forma de pagamento</label>
+                      <input id="c-formapag" className="campo" type="text" list="c-formas" value={cFormaPag}
+                        onChange={(e) => setCFormaPag(e.target.value)} placeholder="Ex.: Pix - Banco do Brasil" />
+                      <datalist id="c-formas">{FORMAS_PAGAMENTO_HOTEL.map((f) => <option key={f} value={f} />)}</datalist>
+                    </div>
+                  </div>
+                  <label className="rotulo" htmlFor="c-documento">Número do documento bancário</label>
+                  <input id="c-documento" className="campo" type="text" value={cDocumento}
+                    onChange={(e) => setCDocumento(e.target.value)} placeholder="Ex.: código do Pix, nº do depósito ou autorização do cartão" />
+                </>
+              )}
+
               <label className="rotulo" htmlFor="c-obs">Observações</label>
               <textarea id="c-obs" className="campo" rows={3} value={cObs}
                 onChange={(e) => setCObs(e.target.value)} placeholder="Ex.: Pagamento antecipado da reserva de setembro…" />
@@ -719,18 +801,22 @@ export default function CreditosDevolucoes() {
                   <div className="cd-detalhes">
                     <span>🏢 {c.nome_empresa || 'Particular'}</span>
                     {c.fatura_reserva && <span>🧾 Fatura/reserva: {c.fatura_reserva}</span>}
-                    <span>Cadastrado por {nomeDe(c.criado_por_id)} em {formatarDataHora(c.criado_em)}</span>
+                    {(c.data_checkin || c.data_checkout) && <span>🛏 {formatarData(c.data_checkin)} a {formatarData(c.data_checkout)}</span>}
+                    {pagamentoTexto(c) && <span>💳 {pagamentoTexto(c)}</span>}
+                    <span>{cadastradoTexto(c)}</span>
                   </div>
                   {c.status === 'UTILIZADO' && (
                     <div className="cd-encerrado">
-                      Encerrado via <strong>{FORMA_ENCERRAMENTO_LABEL[c.forma_encerramento] || '—'}</strong> por {nomeDe(c.encerrado_por_id)} em {formatarDataHora(c.encerrado_em)}
+                      Encerrado via <strong>{FORMA_ENCERRAMENTO_LABEL[c.forma_encerramento] || '—'}</strong> por {quemEncerrou(c)} em {formatarDataHora(c.encerrado_em)}
+                      {c.lancado_fatura_reserva && <> · lançado na fatura/reserva {c.lancado_fatura_reserva}{c.nome_pax_lancado ? ` (${c.nome_pax_lancado})` : ''}</>}
+                      {c.valor_devolvido != null && Number(c.valor_devolvido) !== Number(c.valor) && <> · valor lançado/devolvido {dinheiro(c.valor_devolvido)}</>}
                     </div>
                   )}
 
                   <div className="cd-acoes">
                     {souAdmin && c.status === 'DISPONIVEL' && (
                       <button type="button" className="botao botao-principal"
-                        onClick={() => { setModalEncerrar(c); setEncForma('PIX'); setEncObs(''); setEncLink(''); setErroModal(''); }}>
+                        onClick={() => { setModalEncerrar(c); setEncForma('PIX'); setEncObs(''); setEncLink(''); setEncLancado(''); setEncPaxLancado(''); setEncValor(String(c.valor ?? '')); setErroModal(''); }}>
                         Registrar utilização
                       </button>
                     )}
@@ -1111,6 +1197,26 @@ export default function CreditosDevolucoes() {
               ))}
             </select>
 
+            {camposNovos && (
+              <>
+                <div className="cd-duas">
+                  <div>
+                    <label className="rotulo" htmlFor="enc-lancado">Lançado na fatura / reserva</label>
+                    <input id="enc-lancado" className="campo" type="text" value={encLancado}
+                      onChange={(e) => setEncLancado(e.target.value)} placeholder="Nº da fatura ou reserva" />
+                  </div>
+                  <div>
+                    <label className="rotulo" htmlFor="enc-valor">Valor lançado / devolvido (R$)</label>
+                    <input id="enc-valor" className="campo" type="number" min="0" step="0.01" value={encValor}
+                      onChange={(e) => setEncValor(e.target.value)} />
+                  </div>
+                </div>
+                <label className="rotulo" htmlFor="enc-pax">Nome do pax em que foi lançado</label>
+                <input id="enc-pax" className="campo" type="text" value={encPaxLancado}
+                  onChange={(e) => setEncPaxLancado(e.target.value)} placeholder="Se for outro hóspede (ex.: parente)" />
+              </>
+            )}
+
             <label className="rotulo">Observações</label>
             <textarea className="campo" rows={3} value={encObs}
               onChange={(e) => setEncObs(e.target.value)} placeholder="Ex.: Abatido na reserva nº…" />
@@ -1205,15 +1311,25 @@ export default function CreditosDevolucoes() {
                 <Linha rotulo="Valor" valor={dinheiro(modalHistorico.item.valor)} />
                 <Linha rotulo="Empresa / particular" valor={modalHistorico.item.nome_empresa || 'Particular'} />
                 <Linha rotulo="Fatura / reserva" valor={modalHistorico.item.fatura_reserva} />
+                {(modalHistorico.item.data_checkin || modalHistorico.item.data_checkout) && (
+                  <Linha rotulo="Hospedagem" valor={`${formatarData(modalHistorico.item.data_checkin)} a ${formatarData(modalHistorico.item.data_checkout)}`} />
+                )}
+                {modalHistorico.item.data_pagamento && <Linha rotulo="Data do pagamento" valor={formatarData(modalHistorico.item.data_pagamento)} />}
+                {modalHistorico.item.forma_pagamento && <Linha rotulo="Forma de pagamento" valor={modalHistorico.item.forma_pagamento} />}
+                {modalHistorico.item.documento_bancario && <Linha rotulo="Documento bancário" valor={modalHistorico.item.documento_bancario} />}
                 <Linha rotulo="Observações" valor={modalHistorico.item.observacoes} />
                 <Linha rotulo="Status" valor={STATUS_CREDITO_LABEL[modalHistorico.item.status]} />
-                <Linha rotulo="Cadastrado por" valor={`${nomeDe(modalHistorico.item.criado_por_id)} em ${formatarDataHora(modalHistorico.item.criado_em)}`} />
+                <Linha rotulo={modalHistorico.item.importado_de ? 'Origem' : 'Cadastrado por'}
+                  valor={modalHistorico.item.importado_de ? cadastradoTexto(modalHistorico.item) : `${nomeDe(modalHistorico.item.criado_por_id)} em ${formatarDataHora(modalHistorico.item.criado_em)}`} />
                 {modalHistorico.item.status === 'UTILIZADO' && (
                   <>
                     <div className="cd-secao">Utilização / devolução</div>
                     <Linha rotulo="Forma" valor={FORMA_ENCERRAMENTO_LABEL[modalHistorico.item.forma_encerramento]} />
+                    {modalHistorico.item.lancado_fatura_reserva && <Linha rotulo="Lançado na fatura / reserva" valor={modalHistorico.item.lancado_fatura_reserva} />}
+                    {modalHistorico.item.nome_pax_lancado && <Linha rotulo="Pax em que foi lançado" valor={modalHistorico.item.nome_pax_lancado} />}
+                    {modalHistorico.item.valor_devolvido != null && <Linha rotulo="Valor lançado / devolvido" valor={dinheiro(modalHistorico.item.valor_devolvido)} />}
                     <Linha rotulo="Observações" valor={modalHistorico.item.observacoes_encerramento} />
-                    <Linha rotulo="Encerrado por" valor={`${nomeDe(modalHistorico.item.encerrado_por_id)} em ${formatarDataHora(modalHistorico.item.encerrado_em)}`} />
+                    <Linha rotulo="Encerrado por" valor={`${quemEncerrou(modalHistorico.item)} em ${formatarDataHora(modalHistorico.item.encerrado_em)}`} />
                   </>
                 )}
                 {modalHistorico.item.link_comprovante && (
