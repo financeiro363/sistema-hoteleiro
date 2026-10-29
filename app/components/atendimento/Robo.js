@@ -8,7 +8,8 @@
 //   os dados do hotel lidos da Cloudbeds e o outro hotel do grupo que o robô
 //   oferece quando não há quarto aqui
 // - Conteúdo: o que o robô sabe do hotel, em assuntos, com rascunho e
-//   publicação (as versões publicadas ficam guardadas)
+//   publicação (as versões publicadas ficam guardadas); o botão "Procurar
+//   contradições" pede à IA que aponte informações que não batem
 // - Testar: conversa de mentira com o robô, sem enviar nada a cliente
 // ============================================================================
 
@@ -18,6 +19,7 @@ import { chamarApi, dataHora } from './util';
 import {
   MODELOS_IA, MODELO_PADRAO, CANAIS_ROBO, ASSUNTOS_SUGERIDOS, dolares,
 } from '../../../lib/atendimento/roboConfig';
+import { TIPOS_REVISAO, indiceDoAssunto, posicaoDoTrecho } from '../../../lib/atendimento/roboRevisao';
 
 const SEM_SQL = 'Falta rodar no Supabase o SQL da Fase 4 (sql/caixa_de_entrada_fase4.sql).';
 const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '', modo_economico: true, outros_hoteis: [] };
@@ -414,6 +416,67 @@ function Configuracao({
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Resultado de "Procurar contradições"
+const ICONES_REVISAO = { CONTRADICAO: '⚠️', CLOUDBEDS: '🏨', VENCIDA: '📅' };
+
+function Revisao({ revisao, velha, onAbrir, onIgnorar, onFechar }) {
+  const { achados = [] } = revisao;
+  const temCloudbeds = achados.some((a) => a.tipo === 'CLOUDBEDS');
+  const hora = revisao.em.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return (
+    <section className="at-cartao" id="rb-revisao">
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+        <h2 style={{ margin: 0 }}>🔎 Contradições no conteúdo{achados.length ? ` (${achados.length})` : ''}</h2>
+        <button type="button" className="at-btn" onClick={onFechar}>Fechar</button>
+      </div>
+      {velha && (
+        <div className="aviso-erro" style={{ marginTop: 8, background: '#FFF4D6', color: '#7A5600' }}>
+          O texto mudou depois desta revisão. Para conferir a versão nova, clique de novo em <strong>🔎 Procurar contradições</strong>.
+        </div>
+      )}
+      {achados.length === 0 ? (
+        <p style={{ margin: '10px 0 0' }}>
+          {revisao.ignorados ? '✓ Nenhum ponto ficou na lista.' : <>✓ <strong>Nenhuma contradição encontrada</strong> nos {revisao.assuntos} assunto(s){revisao.cloudbeds ? ' nem com os dados da Cloudbeds' : ''}.</>}
+        </p>
+      ) : (
+        <>
+          <p className="at-dica" style={{ margin: '8px 0 0' }}>
+            Clique em <strong>abrir</strong> para ir ao assunto com o trecho marcado. Corrija o que estiver errado, deixe o certo e depois publique.
+          </p>
+          {achados.map((a) => (
+            <div key={a.k} className="at-reserva" style={{ margin: '10px 0 0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
+                <strong>{ICONES_REVISAO[a.tipo]} {TIPOS_REVISAO[a.tipo]}</strong>
+                <button type="button" className="at-link-pequeno" onClick={() => onIgnorar(a.k)} title="Não é problema: tirar da lista">Ignorar</button>
+              </div>
+              <p style={{ margin: '6px 0 4px' }}>{a.explicacao}</p>
+              {a.lados.map((l, j) => (
+                <div key={j} className="at-dica" style={{ margin: '4px 0 0', overflowWrap: 'anywhere' }}>
+                  <strong style={{ color: 'var(--tinta)' }}>{l.fonte === 'CLOUDBEDS' ? 'Na Cloudbeds' : `Em “${l.assunto}”`}:</strong>{' '}
+                  {l.exato ? `“${l.trecho}”` : l.trecho}
+                  {l.fonte === 'CONTEUDO' && <>{' '}<button type="button" className="at-link-pequeno" onClick={() => onAbrir(l)}>abrir</button></>}
+                </div>
+              ))}
+              {a.sugestao && <p className="at-dica" style={{ margin: '6px 0 0' }}>👉 {a.sugestao}</p>}
+            </div>
+          ))}
+          {temCloudbeds && (
+            <p className="at-dica">
+              🏨 Quando o conteúdo e a Cloudbeds não batem, o robô segue o que está escrito aqui. Se o errado for o da Cloudbeds, corrija lá também: o cliente pode ver esses dados ao reservar.
+            </p>
+          )}
+        </>
+      )}
+      {revisao.incompleta && <p className="at-dica">A lista pode estar incompleta. Depois de corrigir estes pontos, procure de novo.</p>}
+      {!revisao.cloudbeds && <p className="at-dica">Os dados do hotel na Cloudbeds ainda não foram lidos (Robô → Configuração → “Dados do hotel na Cloudbeds”); a revisão olhou só o conteúdo.</p>}
+      <p className="at-dica" style={{ marginBottom: 0 }}>
+        Revisão das {hora}, feita pela IA econômica · custou {Number(revisao.custo) < 0.01 ? 'menos de 1 centavo de dólar' : dolares(revisao.custo)}. A IA pode deixar passar alguma coisa ou apontar algo que não é problema: confira antes de mudar o texto.
+      </p>
+    </section>
+  );
+}
+
 function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRascunhoSalvo }) {
   const [assuntos, setAssuntos] = useState(() => (Array.isArray(conteudo?.rascunho) && conteudo.rascunho.length ? conteudo.rascunho : conteudo?.publicado || []));
   const [ocupado, setOcupado] = useState(false);
@@ -421,6 +484,9 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRas
   const [versoes, setVersoes] = useState(null);
   const [aberto, setAberto] = useState(null);
   const [lacunas, setLacunas] = useState(null); // perguntas que o robô não soube
+  const [revisao, setRevisao] = useState(null); // resultado de "Procurar contradições"
+  const [revisando, setRevisando] = useState(false);
+  const [marcar, setMarcar] = useState(null); // trecho a marcar na caixa do assunto aberto
 
   useEffect(() => {
     let ativo = true;
@@ -549,6 +615,37 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRas
   const alterar = (i, campos) => setAssuntos(assuntos.map((a, k) => (k === i ? { ...a, ...campos } : a)));
   const adicionar = (titulo = 'Novo assunto') => { setAssuntos([...assuntos, { titulo, texto: '' }]); setAberto(assuntos.length); };
 
+  // A IA lê os assuntos desta tela (mesmo antes de publicar) e a Cloudbeds
+  async function revisar() {
+    setRevisando(true); setErro(''); setOk('');
+    try {
+      const base = normalizarAssuntos(assuntos);
+      const r = await chamarApi('/api/atendimento', { acao: 'robo_revisar', hotelId, assuntos: base });
+      setRevisao({ ...r, achados: (r.achados || []).map((a, k) => ({ ...a, k })), em: new Date(), base: JSON.stringify(base) });
+    } catch (e) { setErro(erroAmigavel(e)); }
+    setRevisando(false);
+  }
+  const ignorarAchado = (k) => setRevisao((r) => (r ? { ...r, achados: r.achados.filter((a) => a.k !== k), ignorados: (r.ignorados || 0) + 1 } : r));
+
+  function abrirTrecho(lado) {
+    const i = indiceDoAssunto(assuntos, lado.assunto);
+    if (i < 0) { setErro(`Não achei o assunto “${lado.assunto}”. Ele pode ter sido apagado ou ter mudado de nome.`); return; }
+    setAberto(i);
+    setMarcar({ i, trecho: lado.trecho, vez: Date.now() });
+  }
+
+  // Abre o assunto, rola até ele e deixa o trecho marcado na caixa de texto
+  useEffect(() => {
+    if (!marcar) return;
+    document.getElementById(`rb-assunto-${marcar.i}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const caixa = document.getElementById(`rb-texto-${marcar.i}`);
+    if (!caixa) return;
+    caixa.focus({ preventScroll: true });
+    const pos = posicaoDoTrecho(caixa.value, marcar.trecho);
+    if (pos) caixa.setSelectionRange(pos[0], pos[1]);
+  }, [marcar]);
+  const revisaoVelha = !!revisao && revisao.base !== JSON.stringify(atuais);
+
   function aplicarColado(modo) {
     const novos = separarAssuntos(colar);
     if (!novos.length) { setErro('Não achei nenhum texto para importar.'); return; }
@@ -592,11 +689,19 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRas
           <button type="button" className="at-btn" onClick={() => executar(() => salvarRascunho())} disabled={ocupado || bloqueado || !mudouDoSalvo}>💾 Salvar rascunho</button>
           <button type="button" className="at-btn at-btn-verde" onClick={publicar} disabled={ocupado || bloqueado || !atuais.length || !diferenteDoPublicado}>🚀 Publicar</button>
           {conteudo?.publicado_em && diferenteDoPublicado && <button type="button" className="at-btn" onClick={descartar} disabled={ocupado}>Descartar alterações</button>}
+          <button type="button" className="at-btn" onClick={revisar} disabled={revisando || bloqueado || !atuais.some((a) => a.texto)}
+            title="A IA lê os assuntos desta tela e os dados da Cloudbeds e aponta informações que não batem. Não muda nada no texto.">
+            {revisando ? '🔎 Procurando…' : '🔎 Procurar contradições'}
+          </button>
           <button type="button" className="at-btn" onClick={() => setColar('')}>📋 Colar texto pronto</button>
           <button type="button" className="at-btn" onClick={versoes ? () => setVersoes(null) : verVersoes}>{versoes ? 'Esconder versões' : '🕘 Versões publicadas'}</button>
         </div>
         <p className="at-dica">{assuntos.length} assunto(s) · {caracteres.toLocaleString('pt-BR')} caracteres{caracteres > 40000 ? ' — está grande; textos muito longos deixam o robô mais caro e mais lento.' : ''}</p>
       </section>
+
+      {revisao && (
+        <Revisao revisao={revisao} velha={revisaoVelha} onAbrir={abrirTrecho} onIgnorar={ignorarAchado} onFechar={() => setRevisao(null)} />
+      )}
 
       {lacunas && lacunas.length > 0 && (
         <section className="at-cartao">
@@ -644,7 +749,7 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRas
         <h2>Assuntos</h2>
         {assuntos.length === 0 && <p className="at-dica">Nenhum assunto ainda. Comece pelos sugeridos abaixo ou cole um texto pronto.</p>}
         {assuntos.map((a, i) => (
-          <div key={i} className="at-reserva">
+          <div key={i} id={`rb-assunto-${i}`} className="at-reserva">
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <input className="campo" style={{ flex: '1 1 220px', margin: 0, fontWeight: 600 }} value={a.titulo} onChange={(e) => alterar(i, { titulo: e.target.value })} aria-label="Título do assunto" />
               <button type="button" className="at-btn" onClick={() => setAberto(aberto === i ? null : i)}>{aberto === i ? 'Fechar' : 'Editar'}</button>
@@ -653,10 +758,10 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRas
               <button type="button" className="at-btn at-btn-perigo" onClick={() => { if (window.confirm(`Apagar o assunto “${a.titulo}”?`)) setAssuntos(assuntos.filter((_, k) => k !== i)); }} aria-label="Apagar">🗑</button>
             </div>
             {aberto === i ? (
-              <textarea className="campo" rows={8} style={{ marginTop: 8 }} value={a.texto} onChange={(e) => alterar(i, { texto: e.target.value })}
+              <textarea id={`rb-texto-${i}`} className="campo" rows={8} style={{ marginTop: 8 }} value={a.texto} onChange={(e) => alterar(i, { texto: e.target.value })}
                 placeholder={ASSUNTOS_SUGERIDOS.find(([t]) => t === a.titulo)?.[1] || 'Escreva aqui…'} />
             ) : (
-              <p className="at-dica" style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{a.texto ? (a.texto.length > 220 ? `${a.texto.slice(0, 220)}…` : a.texto) : '(vazio)'}</p>
+              <p className="at-dica" style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{a.texto ? (a.texto.length > 220 ? `${a.texto.slice(0, 220)}…` : a.texto) : '(vazio)'}</p>
             )}
           </div>
         ))}

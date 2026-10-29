@@ -26,6 +26,7 @@
 //   robo_chave        → guarda (criptografada) e testa a chave da Anthropic (ADMIN)
 //   robo_info_hotel   → lê de novo os dados do hotel na Cloudbeds para o robô (ADMIN)
 //   robo_testar       → conversa de teste com o robô, sem enviar nada (ADMIN)
+//   robo_revisar      → a IA procura contradições no conteúdo do robô (ADMIN)
 //   robo_pendentes    → robô responde mensagens que ficaram sem resposta (agendada)
 //   automacoes_rodar  → automações da Fase 5: agenda e envia os disparos (agendada)
 //   automacoes        → lista as automações, os disparos e os números (ADMIN)
@@ -58,7 +59,7 @@ import {
 import { origemDoSite } from '../../../lib/atendimento/servidor';
 import { importarLote, limparImportacaoAnterior } from '../../../lib/atendimento/asksuite';
 import {
-  pausar as pausarRobo, responderPendentes, atualizarInfosVelhas, atualizarInfoHotel, testarRobo, testarChave, CHAVE_SEGREDO,
+  pausar as pausarRobo, responderPendentes, atualizarInfosVelhas, atualizarInfoHotel, testarRobo, testarChave, revisarConteudo, CHAVE_SEGREDO,
 } from '../../../lib/atendimento/robo';
 import { MODELOS_IA, CANAIS_ROBO } from '../../../lib/atendimento/roboConfig';
 import { avisarVisitantesPorEmail } from '../../../lib/atendimento/chatSite';
@@ -144,6 +145,7 @@ export async function POST(request) {
       case 'robo_chave': return await acaoRoboChave(supabaseAdmin, chamador, corpo);
       case 'robo_info_hotel': return await acaoRoboInfoHotel(supabaseAdmin, chamador, corpo);
       case 'robo_testar': return await acaoRoboTestar(supabaseAdmin, chamador, corpo, request);
+      case 'robo_revisar': return await acaoRoboRevisar(supabaseAdmin, chamador, corpo);
       case 'automacoes': return await acaoAutomacoes(supabaseAdmin, chamador, corpo);
       case 'automacao_salvar': {
         const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
@@ -1032,5 +1034,12 @@ async function acaoRoboTestar(supabaseAdmin, chamador, corpo, request) {
   try {
     const r = await testarRobo(supabaseAdmin, hotelId, { mensagens: corpo.mensagens, usarRascunho: !!corpo.usarRascunho, origem: origemDoSite(request) });
     return Response.json({ sucesso: true, ...r });
+  } catch (e) { return respostaErro(e.message); }
+}
+
+async function acaoRoboRevisar(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  try {
+    return Response.json({ sucesso: true, ...(await revisarConteudo(supabaseAdmin, hotelId, { assuntos: corpo.assuntos })) });
   } catch (e) { return respostaErro(e.message); }
 }
