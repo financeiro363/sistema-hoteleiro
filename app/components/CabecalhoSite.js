@@ -53,7 +53,7 @@ const CATEGORIAS_MENU = [
       { href: '/contabilidade', rotulo: 'Contabilidade', soAdminOuContador: true, contadorVe: true },
       { href: '/usuarios', rotulo: 'Usuários', soAdmin: true },
       { href: '/contratos-trabalho', rotulo: 'Contratos de Trabalho', soAdmin: true },
-      { href: '/fichas-epi', rotulo: 'Fichas de EPI', soAdmin: true },
+      { href: '/documentos-colaboradores', rotulo: 'Documentos dos Colaboradores', soAdmin: true },
       { href: '/atestados', rotulo: 'Atestados', soAdminOuContador: true, contadorVe: true },
     ],
   },
