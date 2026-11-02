@@ -175,8 +175,8 @@ export function gravarPreferencia(chave, valor) {
   try { localStorage.setItem(chave, JSON.stringify(valor)); } catch (e) { /* nada */ }
 }
 
-export const ICONE_CANAL = { WHATSAPP: '🟢', EMAIL: '✉️', INSTAGRAM: '📸', FACEBOOK: '💬', SITE: '🌐' };
-export const NOME_CANAL = { WHATSAPP: 'WhatsApp', EMAIL: 'E-mail', INSTAGRAM: 'Instagram', FACEBOOK: 'Facebook', SITE: 'Chat do site' };
+export const ICONE_CANAL = { WHATSAPP: '🟢', EMAIL: '✉️', INSTAGRAM: '📸', FACEBOOK: '💬', SITE: '🌐', TELEGRAM: '✈️' };
+export const NOME_CANAL = { WHATSAPP: 'WhatsApp', EMAIL: 'E-mail', INSTAGRAM: 'Instagram', FACEBOOK: 'Facebook', SITE: 'Chat do site', TELEGRAM: 'Telegram' };
 
 // Nome para mostrar quando o cliente ainda não disse quem é
 export function nomeDaConversa(c) {

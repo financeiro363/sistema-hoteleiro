@@ -30,6 +30,7 @@
 //   robo_pendentes    → robô responde mensagens que ficaram sem resposta (agendada);
 //                       também calcula o valor estimado dos pedidos de grupo novos
 //   grupo_estimar     → recalcula pela Cloudbeds o valor estimado de um pedido de grupo
+//   grupo_registrar   → registra à mão um pedido de grupo (telefone, balcão, e-mail…)
 //   automacoes_rodar  → automações da Fase 5: agenda e envia os disparos (agendada)
 //   automacoes        → lista as automações, os disparos e os números (ADMIN)
 //   automacao_salvar  → liga/desliga e configura uma automação (ADMIN)
@@ -44,7 +45,7 @@ import {
   caminhoAnexo, PASTA_ANEXOS, hotelPermitido, soDigitos,
 } from '../../../lib/atendimento/servidor';
 import {
-  tokenDoCanal, marcarComoLida, listarModelos, baixarMidia, variantesNumero, criarModelo, excluirModelo,
+  tokenDoCanal, marcarComoLida, listarModelos, baixarMidia, variantesNumero, criarModelo, excluirModelo, normalizarNumero,
 } from '../../../lib/atendimento/whatsapp';
 import { validarModeloNovo, normalizarNomeModelo, montarComponentes } from '../../../lib/atendimento/modelosNovos';
 import { previaCampanha, criarCampanha, mudarCampanha, rodarCampanhas } from '../../../lib/atendimento/campanhas';
@@ -53,7 +54,7 @@ import {
 } from '../../../lib/atendimento/gmail';
 import { conexaoCloudbeds, procurarReservas, detalheReserva } from '../../../lib/atendimento/cloudbeds';
 import {
-  buscarDisponibilidade, linkDoMotor, detectarMotor, verificarReservasHotel, reais, dataBR,
+  buscarDisponibilidade, linkDoMotor, detectarMotor, verificarReservasHotel, reais, dataBR, hojeLocal,
 } from '../../../lib/atendimento/cotacao';
 import {
   enviarPelaConversa, enviarCotacao, registrarSemDisponibilidade, preferenciasCotacao,
@@ -65,6 +66,7 @@ import {
 } from '../../../lib/atendimento/robo';
 import { MODELOS_IA, CANAIS_ROBO } from '../../../lib/atendimento/roboConfig';
 import { estimarGrupo, estimarGruposPendentes } from '../../../lib/atendimento/grupos';
+import { montarGrupoManual } from '../../../lib/atendimento/grupoManual';
 import { avisarVisitantesPorEmail } from '../../../lib/atendimento/chatSite';
 import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/atendimento/automacoes';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
@@ -72,7 +74,7 @@ import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDesc
 
 export const dynamic = 'force-dynamic';
 
-const LIMITE_ANEXOS_MB = { WHATSAPP: 100, EMAIL: 25 };
+const LIMITE_ANEXOS_MB = { WHATSAPP: 100, EMAIL: 25, INSTAGRAM: 25, FACEBOOK: 25, TELEGRAM: 50 };
 const INTERVALO_MINIMO_SINCRONIZACAO_MS = 30 * 1000;
 
 export async function POST(request) {
@@ -152,6 +154,7 @@ export async function POST(request) {
       case 'robo_testar': return await acaoRoboTestar(supabaseAdmin, chamador, corpo, request);
       case 'robo_revisar': return await acaoRoboRevisar(supabaseAdmin, chamador, corpo);
       case 'grupo_estimar': return await acaoGrupoEstimar(supabaseAdmin, chamador, corpo);
+      case 'grupo_registrar': return await acaoGrupoRegistrar(supabaseAdmin, chamador, corpo);
       case 'automacoes': return await acaoAutomacoes(supabaseAdmin, chamador, corpo);
       case 'automacao_salvar': {
         const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
@@ -1050,6 +1053,42 @@ async function acaoRoboRevisar(supabaseAdmin, chamador, corpo) {
   try {
     return Response.json({ sucesso: true, ...(await revisarConteudo(supabaseAdmin, hotelId, { assuntos: corpo.assuntos })) });
   } catch (e) { return respostaErro(e.message); }
+}
+
+// "+ Registrar grupo": pedido que chegou por telefone, no balcão, por e-mail…
+// Entra como os do robô (Solicitações e painel de grupos), já com quem
+// registrou como responsável, e o valor estimado sai na hora pela Cloudbeds.
+async function acaoGrupoRegistrar(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelPermitido(chamador, corpo.hotelId || chamador.hotel_id);
+  const g = montarGrupoManual(corpo, hojeLocal());
+  if (g.erros.length) return respostaErro(g.erros.join(' '));
+
+  // Contato: liga ao cadastro pelo telefone (ou e-mail), criando se não existir
+  let contatoId = null;
+  try {
+    const { data } = g.telefone
+      ? await supabaseAdmin.rpc('atendimento_contato_para', { p_hotel: hotelId, p_tipo: 'WHATSAPP', p_chave: normalizarNumero(g.telefone), p_endereco: null, p_nome: g.dados.nome })
+      : await supabaseAdmin.rpc('atendimento_contato_para', { p_hotel: hotelId, p_tipo: 'EMAIL', p_chave: null, p_endereco: g.email, p_nome: g.dados.nome });
+    contatoId = data || null;
+  } catch (e) { /* o contato é um extra */ }
+
+  let registro = {
+    hotel_id: hotelId, conversa_id: null, contato_id: contatoId, tipo: 'GRUPO', resumo: g.resumo, dados: g.dados,
+    situacao: 'EM_ANDAMENTO', responsavel_id: chamador.id, criado_pelo_robo: false, criado_por_id: chamador.id,
+    grupo_pessoas: g.numeros.pessoas, grupo_quartos: g.numeros.quartos, grupo_quartos_estimado: g.numeros.quartosEstimado, grupo_noites: g.numeros.noites,
+  };
+  let { data: sol, error } = await supabaseAdmin.from('atendimento_solicitacoes').insert(registro).select().single();
+  if (error && /grupo_/i.test(error.message || '')) {
+    // Sem o SQL do painel de grupos: grava sem os números
+    const { grupo_pessoas: _p, grupo_quartos: _q, grupo_quartos_estimado: _e, grupo_noites: _n, ...semGrupo } = registro;
+    registro = semGrupo;
+    ({ data: sol, error } = await supabaseAdmin.from('atendimento_solicitacoes').insert(registro).select().single());
+  }
+  if (error) throw error;
+  if ('valor_estimado' in sol) {
+    try { sol = (await estimarGrupo(supabaseAdmin, sol, { forcar: true })).solicitacao; } catch (e) { /* a função agendada tenta de novo */ }
+  }
+  return Response.json({ sucesso: true, solicitacao: sol });
 }
 
 // Botão "Recalcular pela Cloudbeds" de um pedido de grupo (quem atende o hotel)

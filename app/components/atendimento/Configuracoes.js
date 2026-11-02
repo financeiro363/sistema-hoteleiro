@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
 import { chamarApi, dataHora } from './util';
+import { SecaoMetaPaginas, SecaoTelegram, ProntoParaDesligar } from './CanaisNovos';
 
 function Copiar({ valor }) {
   const [copiado, setCopiado] = useState(false);
@@ -113,6 +114,8 @@ export function ConfigCanais() {
       {aviso && <div className="aviso-sucesso">{aviso}</div>}
       {erro && <div className="aviso-erro">{erro}</div>}
 
+      <ProntoParaDesligar />
+
       {/* ------------------------------------------------------------ E-MAIL */}
       <section className="at-cartao">
         <h2>✉️ E-mails (Gmail do Google Workspace)</h2>
@@ -189,7 +192,7 @@ export function ConfigCanais() {
       {/* ------------------------------------------------------------ WHATSAPP */}
       <section className="at-cartao">
         <h2>🟢 WhatsApp (API oficial da Meta)</h2>
-        <p className="at-dica">Use primeiro o número de teste. Um número só pode estar ligado a um sistema por vez (se estiver no Asksuite, precisa sair de lá).</p>
+        <p className="at-dica">O número oficial do hotel pode ser conectado aqui antes de desligar o Asksuite; a conferência “Desligar o Asksuite” (no topo) mostra se as mensagens já estão chegando. Até a troca, deixe o robô do sistema desligado no WhatsApp e <strong>não use “Registrar número”</strong> no número oficial (ele já está registrado).</p>
 
         <h3 style={{ fontSize: 15, margin: '14px 0 4px' }}>1. App da Meta</h3>
         <div className="at-grade">
@@ -357,10 +360,8 @@ export function ConfigCanais() {
         )}
       </section>
 
-      <section className="at-cartao">
-        <h2>📸 Instagram e 💬 Facebook</h2>
-        <p className="at-dica">Chegam na Parte B, usando o mesmo app da Meta configurado acima.</p>
-      </section>
+      <SecaoMetaPaginas dados={dados} acao={acao} ocupado={ocupado} metaPronta={metaPronta} Situacao={Situacao} />
+      <SecaoTelegram dados={dados} acao={acao} ocupado={ocupado} Situacao={Situacao} />
     </div>
   );
 }

@@ -14,11 +14,13 @@
 // registrado no canal), para a Meta não reenviar sem parar.
 // Robô (Fase 4): depois de gravar a mensagem, o robô responde aqui mesmo, se
 // estiver ligado. Se não der tempo, a função agendada tenta de novo.
-// Instagram e Facebook (Parte B) vão usar esta mesma rota.
+// Instagram (objeto "instagram") e Facebook Messenger (objeto "page") usam
+// esta mesma rota: lib/atendimento/metaMensagens.js.
 // ============================================================================
 
 import { clienteAdmin, lerSegredo, origemDoSite } from '../../../lib/atendimento/servidor';
 import { assinaturaValida, processarValorWebhook } from '../../../lib/atendimento/whatsapp';
+import { processarEntradaMeta } from '../../../lib/atendimento/metaMensagens';
 import { responderPendentes } from '../../../lib/atendimento/robo';
 import { aplicarFrases } from '../../../lib/atendimento/frases';
 import { tratarRespostas } from '../../../lib/atendimento/automacoes';
@@ -54,16 +56,62 @@ export async function POST(request) {
   let supabaseAdmin;
   try { supabaseAdmin = clienteAdmin(); } catch (e) { return new Response('Servidor não configurado', { status: 500 }); }
 
-  if (corpo?.object !== 'whatsapp_business_account') {
-    return Response.json({ ok: true, ignorado: corpo?.object || 'desconhecido' });
-  }
+  const tipoDoObjeto = { whatsapp_business_account: 'WHATSAPP', page: 'FACEBOOK', instagram: 'INSTAGRAM' }[corpo?.object];
+  if (!tipoDoObjeto) return Response.json({ ok: true, ignorado: corpo?.object || 'desconhecido' });
 
   const assinatura = request.headers.get('x-hub-signature-256') || '';
   const segredosConferidos = {}; // hotel_id → true/false
   let algumaInvalida = false;
   const paraORobo = [];
 
+  // Confere a assinatura com a chave secreta do app (uma vez por hotel)
+  async function assinaturaDoHotel(canal) {
+    if (segredosConferidos[canal.hotel_id] === undefined) {
+      const appSecret = await lerSegredo(supabaseAdmin, canal.hotel_id, 'meta_app_secret');
+      segredosConferidos[canal.hotel_id] = assinaturaValida(corpoBruto, assinatura, appSecret);
+    }
+    if (segredosConferidos[canal.hotel_id]) return true;
+    algumaInvalida = true;
+    await supabaseAdmin.from('atendimento_canais').update({
+      status: 'ERRO',
+      erro: 'Chegou uma mensagem com assinatura que não confere. Confira a "Chave secreta do app" (App Secret) em Canais.',
+      atualizado_em: new Date().toISOString(),
+    }).eq('id', canal.id);
+    return false;
+  }
+
+  async function depoisDeProcessar(canal, r) {
+    paraORobo.push(...r.conversas);
+    // Etiquetas por frase (1ª mensagem do cliente): uma vez por conversa
+    const vistas = new Set();
+    for (const e of r.entradas || []) {
+      if (vistas.has(e.conversaId)) continue;
+      vistas.add(e.conversaId);
+      try { await aplicarFrases(supabaseAdmin, { conversaId: e.conversaId, canal, texto: e.texto, data: e.data }); } catch (erro) { /* a etiqueta é um extra */ }
+    }
+    await supabaseAdmin.from('atendimento_canais').update({
+      status: r.erros.length ? 'ERRO' : 'OK',
+      erro: r.erros.length ? r.erros.slice(0, 3).join(' | ').slice(0, 500) : null,
+      ultima_sincronizacao: new Date().toISOString(),
+    }).eq('id', canal.id);
+  }
+
   for (const entrada of corpo.entry || []) {
+    // Instagram (Direct) e Facebook (Messenger): o "entry" é da conta/Página
+    if (tipoDoObjeto !== 'WHATSAPP') {
+      const { data: canal } = await supabaseAdmin.from('atendimento_canais')
+        .select('*').eq('tipo', tipoDoObjeto).eq('identificador', String(entrada.id)).maybeSingle();
+      if (!canal || !canal.ativo) continue;
+      if (!(await assinaturaDoHotel(canal))) continue;
+      try {
+        await depoisDeProcessar(canal, await processarEntradaMeta(supabaseAdmin, canal, entrada));
+      } catch (e) {
+        await supabaseAdmin.from('atendimento_canais').update({ status: 'ERRO', erro: String(e.message).slice(0, 500) }).eq('id', canal.id);
+      }
+      continue;
+    }
+
+    // WhatsApp
     for (const mudanca of entrada.changes || []) {
       if (mudanca.field !== 'messages') continue;
       const valor = mudanca.value || {};
@@ -73,37 +121,10 @@ export async function POST(request) {
       const { data: canal } = await supabaseAdmin.from('atendimento_canais')
         .select('*').eq('tipo', 'WHATSAPP').eq('identificador', String(phoneNumberId)).maybeSingle();
       if (!canal || !canal.ativo) continue;
-
-      // Confere a assinatura com a chave secreta do app (uma vez por hotel)
-      if (segredosConferidos[canal.hotel_id] === undefined) {
-        const appSecret = await lerSegredo(supabaseAdmin, canal.hotel_id, 'meta_app_secret');
-        segredosConferidos[canal.hotel_id] = assinaturaValida(corpoBruto, assinatura, appSecret);
-      }
-      if (!segredosConferidos[canal.hotel_id]) {
-        algumaInvalida = true;
-        await supabaseAdmin.from('atendimento_canais').update({
-          status: 'ERRO',
-          erro: 'Chegou uma mensagem com assinatura que não confere. Confira a "Chave secreta do app" (App Secret) em Canais.',
-          atualizado_em: new Date().toISOString(),
-        }).eq('id', canal.id);
-        continue;
-      }
+      if (!(await assinaturaDoHotel(canal))) continue;
 
       try {
-        const r = await processarValorWebhook(supabaseAdmin, canal, valor);
-        paraORobo.push(...r.conversas);
-        // Etiquetas por frase (1ª mensagem do cliente): uma vez por conversa
-        const vistas = new Set();
-        for (const e of r.entradas || []) {
-          if (vistas.has(e.conversaId)) continue;
-          vistas.add(e.conversaId);
-          try { await aplicarFrases(supabaseAdmin, { conversaId: e.conversaId, canal, texto: e.texto, data: e.data }); } catch (erro) { /* a etiqueta é um extra */ }
-        }
-        await supabaseAdmin.from('atendimento_canais').update({
-          status: r.erros.length ? 'ERRO' : 'OK',
-          erro: r.erros.length ? r.erros.slice(0, 3).join(' | ').slice(0, 500) : null,
-          ultima_sincronizacao: new Date().toISOString(),
-        }).eq('id', canal.id);
+        await depoisDeProcessar(canal, await processarValorWebhook(supabaseAdmin, canal, valor));
       } catch (e) {
         await supabaseAdmin.from('atendimento_canais').update({ status: 'ERRO', erro: String(e.message).slice(0, 500) }).eq('id', canal.id);
       }
@@ -114,7 +135,7 @@ export async function POST(request) {
 
   // Automações (Fase 5): "SAIR" e nota da pesquisa de satisfação (o robô não responde a elas)
   let tratadas = [];
-  if (paraORobo.length) {
+  if (paraORobo.length && tipoDoObjeto === 'WHATSAPP') {
     try { tratadas = await tratarRespostas(supabaseAdmin, [...new Set(paraORobo)]); } catch (e) { /* sem o SQL da Fase 5 */ }
   }
   const restantes = [...new Set(paraORobo)].filter((id) => !tratadas.includes(id));
