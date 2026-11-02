@@ -1,78 +1,80 @@
 // ============================================================================
 // ROTA DE SERVIDOR: /api/governanca-configurar-webhook
 // ============================================================================
-// Ativa/desativa a inscrição no webhook oficial "housekeeping/
-// room_condition_changed" da Cloudbeds (documentação:
-// https://developers.cloudbeds.com/docs/webhooks-1), usando o endpoint
-// oficial POST /postWebhook. Formato do call confirmado na documentação:
-//
-//   curl -X POST 'https://hotels.cloudbeds.com/api/v1.3/postWebhook' \
-//     -H 'Authorization: Bearer <chave>' \
-//     -H 'Content-Type: application/x-www-form-urlencoded' \
-//     --data-urlencode 'endpointUrl=...' \
-//     --data-urlencode 'object=housekeeping' \
-//     --data-urlencode 'action=room_condition_changed'
-//
-// ⚠️ O formato exato do "deleteWebhook" (pra desativar) não veio explícito
-// na documentação pública — implementei da forma mais comum (parâmetro
-// subscriptionID na URL). Se a desativação der erro, o aviso vai mostrar a
-// mensagem exata da Cloudbeds pra ajustarmos.
+// Liga/desliga a inscrição no aviso oficial "housekeeping/room_condition_changed"
+// da Cloudbeds (POST /postWebhook e DELETE /deleteWebhook, API v1.3).
+//   GET                    → { ativo, comSenha }
+//   POST { ativar: true }  → cria uma senha nova, inscreve o endereço com a
+//                            senha e, se havia inscrição antiga, tenta apagá-la
+//   POST { ativar: false } → apaga a inscrição e a senha
+// A senha fica criptografada (atendimento_segredos) e nunca volta para a tela.
+// Só administrador.
 // ============================================================================
 
-import { createClient } from '@supabase/supabase-js';
-import { descriptografar } from '../../../lib/cloudbedsCrypto';
+import { autenticarChamada } from '../../../lib/cloudbedsCaixa';
+import { lerSegredo, gravarSegredo } from '../../../lib/atendimento/servidor';
+import { carregarCloudbeds, novaSenhaWebhook } from '../../../lib/governanca/cloudbeds';
 
+export const dynamic = 'force-dynamic';
+
+const API_WEBHOOK = 'https://hotels.cloudbeds.com/api/v1.3';
 const URL_ENDPOINT_WEBHOOK = 'https://chokmahsystem.netlify.app/api/governanca-webhook-cloudbeds';
+const CHAVE_SENHA = 'governanca_webhook_senha';
+
+async function chamador(request) {
+  const auth = await autenticarChamada(request);
+  if (auth.resposta) return auth;
+  if (auth.chamador.papel !== 'ADMIN') return { resposta: Response.json({ erro: 'Só administradores podem configurar isso.' }, { status: 403 }) };
+  return auth;
+}
+
+export async function GET(request) {
+  try {
+    const auth = await chamador(request);
+    if (auth.resposta) return auth.resposta;
+    const { chamador: eu, supabaseAdmin } = auth;
+    const { data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).maybeSingle();
+    const senha = await lerSegredo(supabaseAdmin, eu.hotel_id, CHAVE_SENHA);
+    return Response.json({ ativo: !!hotel?.governanca_webhook_id, comSenha: !!senha });
+  } catch (erro) {
+    return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
+  }
+}
+
+async function apagarInscricao(cb, id) {
+  const resposta = await fetch(`${API_WEBHOOK}/deleteWebhook?subscriptionID=${encodeURIComponent(id)}&propertyID=${encodeURIComponent(cb.propertyId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${cb.apiKey}`, 'x-property-id': cb.propertyId, Accept: 'application/json' },
+  });
+  const dados = await resposta.json().catch(() => null);
+  if (!resposta.ok || dados?.success === false) throw new Error(dados?.message || 'A Cloudbeds recusou o cancelamento da inscrição.');
+}
 
 export async function POST(request) {
   try {
-    const { ativar } = await request.json();
+    const { ativar } = await request.json().catch(() => ({}));
+    const auth = await chamador(request);
+    if (auth.resposta) return auth.resposta;
+    const { chamador: eu, supabaseAdmin, segredoCripto } = auth;
 
-    const tokenAcesso = (request.headers.get('authorization') || '').replace('Bearer ', '');
-    if (!tokenAcesso) return Response.json({ erro: 'Não autorizado — faça login novamente.' }, { status: 401 });
+    let cb;
+    try { cb = await carregarCloudbeds(supabaseAdmin, eu.hotel_id, segredoCripto); }
+    catch (e) { return Response.json({ erro: e.message }, { status: 400 }); }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const chaveAnonima = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    const chaveMestra = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const segredoCripto = process.env.CLOUDBEDS_CRYPTO_SECRET;
-    if (!supabaseUrl || !chaveAnonima || !chaveMestra || !segredoCripto) {
-      return Response.json({ erro: 'O servidor não está configurado corretamente (faltam variáveis de ambiente).' }, { status: 500 });
-    }
-
-    const supabaseComoChamador = createClient(supabaseUrl, chaveAnonima, {
-      global: { headers: { Authorization: `Bearer ${tokenAcesso}` } },
-    });
-    const { data: dadosAuth, error: erroAuth } = await supabaseComoChamador.auth.getUser(tokenAcesso);
-    if (erroAuth || !dadosAuth?.user) return Response.json({ erro: 'Sessão inválida ou expirada.' }, { status: 401 });
-    const { data: chamador, error: erroChamador } = await supabaseComoChamador
-      .from('usuarios').select('id, hotel_id, papel').eq('auth_id', dadosAuth.user.id).single();
-    if (erroChamador || !chamador) return Response.json({ erro: 'Não foi possível confirmar seu usuário.' }, { status: 403 });
-    if (chamador.papel !== 'ADMIN') return Response.json({ erro: 'Só administradores podem configurar isso.' }, { status: 403 });
-
-    const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
-
-    const { data: credencial, error: erroCred } = await supabaseAdmin
-      .from('cloudbeds_credenciais').select('*').eq('hotel_id', chamador.hotel_id).maybeSingle();
-    if (erroCred || !credencial?.api_key_cifrada) {
-      return Response.json({ erro: 'A integração com a Cloudbeds ainda não foi configurada para este hotel.' }, { status: 400 });
-    }
-    let apiKey;
-    try { apiKey = descriptografar(credencial.api_key_cifrada, segredoCripto); }
-    catch (e) { return Response.json({ erro: 'Não foi possível ler a credencial salva.' }, { status: 500 }); }
-
-    const { data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', chamador.hotel_id).single();
+    const { data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).single();
+    const antiga = hotel?.governanca_webhook_id || null;
 
     if (ativar) {
+      const senha = novaSenhaWebhook();
       const parametros = new URLSearchParams({
-        endpointUrl: URL_ENDPOINT_WEBHOOK,
+        propertyID: cb.propertyId,
+        endpointUrl: `${URL_ENDPOINT_WEBHOOK}?chave=${encodeURIComponent(senha)}`,
         object: 'housekeeping',
         action: 'room_condition_changed',
       });
-      if (credencial.cloudbeds_property_id) parametros.set('propertyID', credencial.cloudbeds_property_id);
-
-      const resposta = await fetch('https://hotels.cloudbeds.com/api/v1.3/postWebhook', {
+      const resposta = await fetch(`${API_WEBHOOK}/postWebhook`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        headers: { Authorization: `Bearer ${cb.apiKey}`, 'x-property-id': cb.propertyId, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: parametros.toString(),
       });
       const dados = await resposta.json().catch(() => null);
@@ -83,23 +85,27 @@ export async function POST(request) {
           : '';
         return Response.json({ erro: `${mensagem}${dicaEscopo}` }, { status: 400 });
       }
-      const idInscricao = dados?.data?.id || dados?.id || null;
-      await supabaseAdmin.from('hoteis').update({ governanca_webhook_id: idInscricao }).eq('id', chamador.hotel_id);
-      return Response.json({ sucesso: true });
-    } else {
-      if (hotel?.governanca_webhook_id) {
-        const resposta = await fetch(`https://hotels.cloudbeds.com/api/v1.3/deleteWebhook?subscriptionID=${encodeURIComponent(hotel.governanca_webhook_id)}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-        });
-        const dados = await resposta.json().catch(() => null);
-        if (!resposta.ok || dados?.success === false) {
-          return Response.json({ erro: dados?.message || 'A Cloudbeds recusou o cancelamento da inscrição.' }, { status: 400 });
-        }
+      const idInscricao = dados?.data?.subscriptionID || dados?.data?.id || dados?.subscriptionID || dados?.id || 'ativo';
+      // Primeiro a senha, depois o número da inscrição: a partir daqui só
+      // avisos com a senha nova são aceitos.
+      await gravarSegredo(supabaseAdmin, eu.hotel_id, CHAVE_SENHA, senha);
+      await supabaseAdmin.from('hoteis').update({ governanca_webhook_id: String(idInscricao) }).eq('id', eu.hotel_id);
+
+      let aviso = null;
+      if (antiga && antiga !== 'ativo' && antiga !== String(idInscricao)) {
+        try { await apagarInscricao(cb, antiga); }
+        catch (e) { aviso = 'A inscrição antiga (sem senha) não pôde ser apagada na Cloudbeds, mas os avisos dela agora são recusados.'; }
       }
-      await supabaseAdmin.from('hoteis').update({ governanca_webhook_id: null }).eq('id', chamador.hotel_id);
-      return Response.json({ sucesso: true });
+      return Response.json({ sucesso: true, aviso });
     }
+
+    if (antiga && antiga !== 'ativo') {
+      try { await apagarInscricao(cb, antiga); }
+      catch (e) { return Response.json({ erro: e.message }, { status: 400 }); }
+    }
+    await supabaseAdmin.from('hoteis').update({ governanca_webhook_id: null }).eq('id', eu.hotel_id);
+    await supabaseAdmin.from('atendimento_segredos').delete().eq('hotel_id', eu.hotel_id).eq('canal_id', 0).eq('chave', CHAVE_SENHA);
+    return Response.json({ sucesso: true });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
   }
