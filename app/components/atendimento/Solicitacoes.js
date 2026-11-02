@@ -15,10 +15,100 @@ import { supabase } from '../../../lib/supabaseClient';
 import { dataHora, ICONE_CANAL, baixarCsv, nomeDaConversa, chamarApi } from './util';
 import { TIPOS_SOLICITACAO, SITUACOES_SOLICITACAO } from '../../../lib/atendimento/roboConfig';
 import { MOTIVOS_PERDA, PESSOAS_POR_QUARTO, lerReais, valorDoGrupo } from '../../../lib/atendimento/gruposConfig';
+import { ORIGENS_GRUPO, montarGrupoManual } from '../../../lib/atendimento/grupoManual';
+
+const telefoneBonito = (d) => {
+  const t = String(d || '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+  return t.length >= 10 ? `(${t.slice(0, 2)}) ${t.slice(2, t.length - 4)}-${t.slice(-4)}` : t;
+};
+const hojeAqui = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+const grupoVazio = (hotelId) => ({ hotelId: hotelId || '', nome: '', telefone: '', email: '', origem: 'TELEFONE', checkin: '', checkout: '', pessoas: '', quartos: '', detalhes: '' });
+
+// ---------------------------------------------------------------------------
+// "+ Registrar grupo": pedido que chegou por telefone, no balcão, por e-mail…
+function RegistrarGrupo({ hoteis, multiHotel, onFechar, onRegistrado }) {
+  const [f, setF] = useState(grupoVazio(hoteis.length === 1 ? hoteis[0].id : ''));
+  const [erro, setErro] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  const mudar = (campo) => (e) => setF({ ...f, [campo]: e.target.value });
+
+  async function salvar(e) {
+    e.preventDefault();
+    setErro('');
+    if (multiHotel && !f.hotelId) { setErro('Escolha o hotel.'); return; }
+    const conferido = montarGrupoManual(f, hojeAqui());
+    if (conferido.erros.length) { setErro(conferido.erros.join(' ')); return; }
+    setSalvando(true);
+    try {
+      const r = await chamarApi('/api/atendimento', { acao: 'grupo_registrar', ...f, hotelId: Number(f.hotelId) || undefined });
+      onRegistrado(r.solicitacao);
+    } catch (erroApi) { setErro(erroApi.message); }
+    setSalvando(false);
+  }
+
+  return (
+    <form className="at-reserva sg-form" onSubmit={salvar}>
+      <strong>✍️ Registrar pedido de grupo</strong>
+      <p className="at-dica" style={{ margin: '2px 0 8px' }}>Para o grupo que chegou por telefone, no balcão ou por e-mail. Ele entra em Solicitações e no painel de grupos, com o valor estimado pela Cloudbeds.</p>
+      <div className="sg-grade">
+        {multiHotel && (
+          <label className="sg-campo"><span>Hotel *</span>
+            <select className="at-select" value={f.hotelId} onChange={mudar('hotelId')}>
+              <option value="">Escolha…</option>
+              {hoteis.map((h) => <option key={h.id} value={h.id}>{h.nome}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="sg-campo sg-larga"><span>Cliente ou empresa *</span>
+          <input className="campo" value={f.nome} onChange={mudar('nome')} maxLength={120} placeholder="ex.: Igreja Batista Central — Pr. Marcos" />
+        </label>
+        <label className="sg-campo"><span>Telefone</span>
+          <input className="campo" value={f.telefone} onChange={mudar('telefone')} inputMode="tel" placeholder="(83) 98888-7777" />
+        </label>
+        <label className="sg-campo"><span>E-mail</span>
+          <input className="campo" type="email" value={f.email} onChange={mudar('email')} placeholder="cliente@email.com" />
+        </label>
+        <label className="sg-campo"><span>Como chegou</span>
+          <select className="at-select" value={f.origem} onChange={mudar('origem')}>
+            {Object.entries(ORIGENS_GRUPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </label>
+        <label className="sg-campo"><span>Entrada</span>
+          <input className="campo" type="date" value={f.checkin} onChange={mudar('checkin')} />
+        </label>
+        <label className="sg-campo"><span>Saída</span>
+          <input className="campo" type="date" value={f.checkout} onChange={mudar('checkout')} />
+        </label>
+        <label className="sg-campo"><span>Pessoas</span>
+          <input className="campo" inputMode="numeric" value={f.pessoas} onChange={mudar('pessoas')} placeholder="ex.: 30" />
+        </label>
+        <label className="sg-campo"><span>Quartos</span>
+          <input className="campo" inputMode="numeric" value={f.quartos} onChange={mudar('quartos')} placeholder={`em branco: ${PESSOAS_POR_QUARTO} pessoas por quarto`} />
+        </label>
+        <label className="sg-campo sg-larga"><span>Detalhes</span>
+          <textarea className="campo" rows={3} value={f.detalhes} onChange={mudar('detalhes')} maxLength={2000} placeholder="ex.: evento, café da manhã, ônibus, forma de pagamento combinada…" />
+        </label>
+      </div>
+      {erro && <div className="aviso-erro" style={{ margin: '8px 0 0' }}>{erro}</div>}
+      <div className="at-botoes">
+        <button type="submit" className="at-btn at-btn-verde" disabled={salvando}>{salvando ? 'Registrando…' : 'Registrar grupo'}</button>
+        <button type="button" className="at-btn" onClick={onFechar} disabled={salvando}>Cancelar</button>
+      </div>
+      <style>{`
+        .sg-form { background: #FAFBF9; }
+        .sg-grade { display: grid; grid-template-columns: 1fr; gap: 6px 12px; }
+        .sg-campo { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 13px; font-weight: 600; }
+        .sg-campo .campo, .sg-campo .at-select { margin: 0; font-weight: 400; }
+        @media (min-width: 640px) { .sg-grade { grid-template-columns: 1fr 1fr; } .sg-larga { grid-column: 1 / -1; } }
+        @media (min-width: 980px) { .sg-grade { grid-template-columns: 1fr 1fr 1fr; } }
+      `}</style>
+    </form>
+  );
+}
 
 const ROTULOS_DADOS = {
-  nome: 'Nome', email: 'E-mail', checkin: 'Entrada', checkout: 'Saída', pessoas: 'Pessoas', quartos: 'Quartos',
-  numero_reserva: 'Nº da reserva', detalhes: 'Detalhes',
+  nome: 'Nome', telefone: 'Telefone', email: 'E-mail', checkin: 'Entrada', checkout: 'Saída', pessoas: 'Pessoas', quartos: 'Quartos',
+  numero_reserva: 'Nº da reserva', detalhes: 'Detalhes', origem: 'Como chegou',
 };
 const dataCurta = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? iso.split('-').reverse().join('/') : iso);
 const reais = (v) => (v == null ? '' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
@@ -190,6 +280,7 @@ export function Solicitacoes({ usuario, hoteis, multiHotel, nomes, onAbrirConver
   const [tipo, setTipo] = useState('');
   const [hotel, setHotel] = useState('');
   const [aberta, setAberta] = useState(null);
+  const [registrando, setRegistrando] = useState(false);
 
   const carregar = useCallback(async () => {
     let q = supabase.from('atendimento_solicitacoes')
@@ -236,9 +327,20 @@ export function Solicitacoes({ usuario, hoteis, multiHotel, nomes, onAbrirConver
     <section className="at-cartao">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <h2>📋 Solicitações</h2>
-        <button type="button" className="at-btn" onClick={exportar} disabled={!lista.length}>⬇ Exportar</button>
+        <div className="at-botoes" style={{ marginTop: 0 }}>
+          <button type="button" className="at-btn at-btn-verde" onClick={() => { setRegistrando(true); setOk(''); setErro(''); }} disabled={registrando}>+ Registrar grupo</button>
+          <button type="button" className="at-btn" onClick={exportar} disabled={!lista.length}>⬇ Exportar</button>
+        </div>
       </div>
-      <p className="at-dica" style={{ marginTop: 0 }}>Pedidos que o robô registrou para a equipe: grupos, pedidos especiais, problemas ao reservar e reservas que já existem. Nos grupos, marque “Fechou” ou “Não fechou”: o resultado aparece no Painel.</p>
+      {registrando && (
+        <RegistrarGrupo hoteis={hoteis} multiHotel={multiHotel} onFechar={() => setRegistrando(false)} onRegistrado={async (sol) => {
+          setRegistrando(false);
+          setOk(`Grupo nº ${sol.id} registrado${sol.valor_estimado != null ? `: valor estimado ${reais(sol.valor_estimado)}` : ''}. Ele ficou com você, em “Em andamento”.`);
+          await carregar();
+          onMudou?.();
+        }} />
+      )}
+      <p className="at-dica" style={{ marginTop: 0 }}>Pedidos que o robô registrou para a equipe: grupos, pedidos especiais, problemas ao reservar e reservas que já existem. Nos grupos, marque “Fechou” ou “Não fechou”: o resultado aparece no Painel. Grupo que chegou por telefone ou no balcão: use “+ Registrar grupo”.</p>
       <div className="at-filtros-mais" style={{ marginBottom: 10 }}>
         <label><span>Situação</span>
           <select className="at-select" value={situacao} onChange={(e) => setSituacao(e.target.value)}>
@@ -277,7 +379,9 @@ export function Solicitacoes({ usuario, hoteis, multiHotel, nomes, onAbrirConver
             </div>
             <div style={{ margin: '4px 0' }}>{s.resumo}</div>
             <div className="at-dica" style={{ margin: 0 }}>
-              {ICONE_CANAL[conv.canal_tipo] || ''} {nomeDaConversa(conv)}{conv.contato_endereco ? ` · ${conv.contato_endereco}` : ''}
+              {s.conversa_id
+                ? <>{ICONE_CANAL[conv.canal_tipo] || ''} {nomeDaConversa(conv)}{conv.contato_endereco ? ` · ${conv.contato_endereco}` : ''}</>
+                : <>✍️ {s.dados?.nome || 'Cliente'}{s.dados?.telefone ? ` · ${telefoneBonito(s.dados.telefone)}` : ''}{s.dados?.email ? ` · ${s.dados.email}` : ''} · registrado à mão{s.criado_por_id ? ` por ${(nomes[s.criado_por_id] || '').split(' ')[0] || `#${s.criado_por_id}`}` : ''}{s.dados?.origem ? ` (${s.dados.origem.toLowerCase()})` : ''}</>}
               {s.email_enviado_em ? ' · ✉️ aviso enviado por e-mail' : s.email_erro ? ` · ⚠️ e-mail não enviado: ${s.email_erro}` : ''}
             </div>
             {s.tipo === 'GRUPO' && 'valor_estimado' in s && (

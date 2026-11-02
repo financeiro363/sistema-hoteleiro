@@ -53,7 +53,7 @@ function minutosTexto(min) {
   return `${Math.round(h / 24)} dias`;
 }
 
-const NOMES_CANAL = { WHATSAPP: 'WhatsApp', INSTAGRAM: 'Instagram', EMAIL: 'E-mail', BOOKING: 'Mensagens do Booking.com', SITE: 'Chat do site', FACEBOOK: 'Facebook' };
+const NOMES_CANAL = { WHATSAPP: 'WhatsApp', INSTAGRAM: 'Instagram', EMAIL: 'E-mail', BOOKING: 'Mensagens do Booking.com', SITE: 'Chat do site', FACEBOOK: 'Facebook', TELEGRAM: 'Telegram' };
 function nomeCanal(f) {
   const t = String(f || '').trim();
   return NOMES_CANAL[t.toUpperCase().replace(/[^A-Z]/g, '')] || t || 'Não informado';

@@ -552,7 +552,8 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
     }
   }
 
-  const bloqueadoPelaJanela = canal?.tipo === 'WHATSAPP' && !janelaAberta && !nota;
+  // WhatsApp, Instagram e Messenger: só 24 h depois da última mensagem do cliente
+  const bloqueadoPelaJanela = ['WHATSAPP', 'INSTAGRAM', 'FACEBOOK'].includes(canal?.tipo) && !janelaAberta && !nota;
   const canalDesligado = canal && !canal.ativo;
 
   return (
@@ -573,12 +574,16 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
 
       {canalDesligado && <div className="at-aviso-janela">O canal “{canal.nome}” está desligado. Só é possível escrever notas internas.</div>}
       {ehSite && !nota && !canalDesligado && <AvisoChatSite conversa={conversa} />}
-      {bloqueadoPelaJanela && !canalDesligado && (
+      {bloqueadoPelaJanela && !canalDesligado && (canal.tipo === 'WHATSAPP' ? (
         <div className="at-aviso-janela">
           <span>⏰ Passaram 24 horas desde a última mensagem do cliente. Pela regra do WhatsApp, agora só dá para enviar um <strong>modelo aprovado</strong>.</span>
           <button type="button" className="at-btn" onClick={onAbrirModelo}>Enviar modelo</button>
         </div>
-      )}
+      ) : (
+        <div className="at-aviso-janela">
+          <span>⏰ Passaram 24 horas desde a última mensagem do cliente. Pela regra do {canal.tipo === 'INSTAGRAM' ? 'Instagram' : 'Messenger'}, não dá mais para responder por aqui. Se tiver o WhatsApp ou o e-mail do cliente, continue por lá.</span>
+        </div>
+      ))}
 
       <div className="at-escrever-ferramentas">
         <button type="button" className={`at-ferramenta ${nota ? 'ativa' : ''}`} onClick={() => setNota(!nota)} title="A nota fica só para a equipe; o cliente não vê">
@@ -803,9 +808,11 @@ export function Conversa({
               {conversa.visitante?.pagina ? ` · ${paginaCurta(conversa.visitante.pagina)}` : ''}
             </div>
           )}
-          {conversa.canal_tipo === 'WHATSAPP' && (
+          {['WHATSAPP', 'INSTAGRAM', 'FACEBOOK'].includes(conversa.canal_tipo) && (
             <div className="at-conv-sub">
-              {janelaAberta ? `🟢 Pode responder livremente até ${soHora(fimJanela)}${rotuloDia(fimJanela) !== 'Hoje' ? ` de ${rotuloDia(fimJanela).toLowerCase()}` : ''}` : '⏰ Janela de 24 h fechada — só modelos'}
+              {janelaAberta
+                ? `🟢 Pode responder livremente até ${soHora(fimJanela)}${rotuloDia(fimJanela) !== 'Hoje' ? ` de ${rotuloDia(fimJanela).toLowerCase()}` : ''}`
+                : conversa.canal_tipo === 'WHATSAPP' ? '⏰ Janela de 24 h fechada — só modelos' : '⏰ Janela de 24 h fechada — não dá mais para responder por aqui'}
             </div>
           )}
           {esperando !== null && (
@@ -864,7 +871,7 @@ export function Conversa({
       <Escrever
         conversa={conversa} canal={canal} usuario={usuario} respostas={respostas} modelos={modelos} nomeHotel={nomeHotelReal}
         janelaAberta={janelaAberta} onEnviado={onRecarregar} onAbrirModelo={() => setMostrarModelo(true)}
-        onAbrirCotacao={canal && ['WHATSAPP', 'EMAIL', 'SITE'].includes(canal.tipo) ? () => setMostrarCotacao(true) : null}
+        onAbrirCotacao={canal && ['WHATSAPP', 'EMAIL', 'SITE', 'INSTAGRAM', 'FACEBOOK', 'TELEGRAM'].includes(canal.tipo) ? () => setMostrarCotacao(true) : null}
       />
       {mostrarCotacao && canal && (
         <ModalCotacao
