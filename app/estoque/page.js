@@ -11,6 +11,9 @@
 //      entrada rápida, editar e excluir (com confirmação).
 //   3. Histórico de Lançamentos (só ADMIN) — auditoria imutável, filtro por
 //      tipo (Cadastro/Entrada/Saída/Edição/Exclusão) e busca.
+// - Produto pode ser marcado como ENXOVAL (lençol, toalha, fronha...).
+// - Faixa de alerta no topo com o que está no mínimo ou abaixo (total ou por
+//   depósito) — a mesma lista aparece no Painel da Governança.
 // ============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
@@ -18,6 +21,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { buscarTodos } from '../../lib/buscarTodos';
+import { alertasDeEstoque, textoDoAlerta } from '../../lib/estoqueAlertas';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -114,6 +118,8 @@ export default function Estoque() {
   const [gMinima, setGMinima] = useState('');
   const [gValor, setGValor] = useState('');
   const [gLocal, setGLocal] = useState('');
+  const [gEnxoval, setGEnxoval] = useState(false);
+  const [verAlertas, setVerAlertas] = useState(false);
   const [erroForm, setErroForm] = useState('');
   const [entradaProduto, setEntradaProduto] = useState(null); // {produto}
   const [entradaQtd, setEntradaQtd] = useState('');
@@ -344,7 +350,7 @@ export default function Estoque() {
     setEditandoId(null);
     setGNome(''); setGCodigo(''); setGDescricao(''); setGQuantidade('');
     setGDepositoInicial(depositos.find((d) => d.ativo)?.id ? String(depositos.find((d) => d.ativo).id) : '');
-    setGMinima(''); setGValor(''); setGLocal('');
+    setGMinima(''); setGValor(''); setGLocal(''); setGEnxoval(false);
     setErroForm('');
     setMostrarForm(true);
   }
@@ -354,7 +360,7 @@ export default function Estoque() {
     setGNome(p.nome); setGCodigo(p.codigo || ''); setGDescricao(p.descricao || '');
     setGQuantidade(''); setGDepositoInicial('');
     setGMinima(String(p.qtd_minima));
-    setGValor(String(p.valor)); setGLocal(p.localizacao || '');
+    setGValor(String(p.valor)); setGLocal(p.localizacao || ''); setGEnxoval(!!p.enxoval);
     setErroForm('');
     setMostrarForm(true);
   }
@@ -376,6 +382,7 @@ export default function Estoque() {
       qtd_minima: Number(gMinima) || 0,
       valor: Number(gValor) || 0,
       localizacao: gLocal.trim() || null,
+      enxoval: gEnxoval,
     };
 
     setSalvando(true);
@@ -521,6 +528,8 @@ export default function Estoque() {
 
   const totalCarrinho = carrinho.reduce((s, i) => s + i.quantidade, 0);
 
+  const alertas = alertasDeEstoque(produtos, saldos, depositos);
+
   if (verificandoLogin) {
     return (
       <main className="conteudo">
@@ -538,6 +547,23 @@ export default function Estoque() {
 
       {aviso && <div className="aviso-sucesso">{aviso}</div>}
       {erro && <div className="aviso-erro">{erro}</div>}
+
+      {!carregando && alertas.length > 0 && (
+        <div className="es-alerta" role="status">
+          <button type="button" className="es-alerta-topo" onClick={() => setVerAlertas(!verAlertas)} aria-expanded={verAlertas}>
+            <span>⚠️ <strong>{alertas.length}</strong> {alertas.length === 1 ? 'item está' : 'itens estão'} no mínimo ou abaixo
+              {alertas.some((a) => a.enxoval) ? ` (${alertas.filter((a) => a.enxoval).length} de enxoval)` : ''}</span>
+            <span className="es-alerta-seta">{verAlertas ? 'Fechar ▴' : 'Ver ▾'}</span>
+          </button>
+          {verAlertas && (
+            <ul className="es-alerta-lista">
+              {alertas.map((a) => (
+                <li key={a.chave}>{a.zerado ? '🔴' : '🟡'} {a.enxoval ? '🧺 ' : ''}{textoDoAlerta(a)}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Sub-abas (Gerenciar, Depósitos e Histórico só para ADMIN) */}
       <nav className="es-abas" aria-label="Seções">
@@ -748,6 +774,11 @@ export default function Estoque() {
               <label className="rotulo">Descrição</label>
               <input className="campo" type="text" value={gDescricao} onChange={(e) => setGDescricao(e.target.value)} placeholder="Opcional" />
 
+              <label className="es-check-enxoval">
+                <input type="checkbox" checked={gEnxoval} onChange={(e) => setGEnxoval(e.target.checked)} />
+                <span>🧺 É enxoval (lençol, toalha, fronha, edredom…) — aparece primeiro nos alertas da Governança</span>
+              </label>
+
               {!editandoId && (
                 <div className="es-duas">
                   <div>
@@ -804,6 +835,7 @@ export default function Estoque() {
                       <div className="es-item-ger-topo">
                         <strong>{p.nome}</strong>
                         <span className="es-badge" style={{ background: st.fundo, color: st.cor }}>{st.rotulo}</span>
+                        {p.enxoval && <span className="es-badge es-badge-enxoval">🧺 Enxoval</span>}
                       </div>
                       <div className="es-item-ger-meta">
                         {qtd(quantidadeExibida(p))} {depositoFiltro === 'GERAL' ? 'no total' : `em ${nomeDeposito(Number(depositoFiltro))}`} · mín. padrão {qtd(p.qtd_minima)} · {dinheiro(p.valor)}/un
@@ -1067,6 +1099,13 @@ function EstilosEstoque() {
       .es-item-ger-topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       .es-item-ger-topo strong { font-size: 16px; }
       .es-item-ger-meta { font-size: 13px; color: var(--texto-suave); margin-top: 4px; }
+      .es-badge-enxoval { background: #E7EEF8; color: #2C4C7C; }
+      .es-check-enxoval { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; font-size: 14px; cursor: pointer; }
+      .es-check-enxoval input { width: 20px; height: 20px; flex-shrink: 0; }
+      .es-alerta { background: #FDF3D7; color: #6B4C00; border-radius: 12px; margin: 0 0 14px; border: 1px solid #F0DFA8; }
+      .es-alerta-topo { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; background: none; border: none; padding: 12px 14px; font-size: 14px; color: inherit; cursor: pointer; text-align: left; font-family: inherit; }
+      .es-alerta-seta { font-size: 13px; font-weight: 700; white-space: nowrap; }
+      .es-alerta-lista { margin: 0; padding: 0 14px 12px 34px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
       .es-saldos-deposito {
         display: flex; flex-direction: column; gap: 4px; margin-top: 10px;
         background: #F7F8F6; border-radius: 8px; padding: 8px 10px;
