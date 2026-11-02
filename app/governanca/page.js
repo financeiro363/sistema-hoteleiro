@@ -16,7 +16,11 @@
 //   Trocar o estado acerta a limpeza e a Cloudbeds (regras em
 //   lib/governanca/regras.js). "Interditado" pede a previsão de volta e
 //   bloqueia o quarto na Cloudbeds até esse dia (sai da venda).
-// - Insights (admin): limpos x pendentes, ranking, log detalhado.
+// - Painel (admin + colaborador): escala do dia e distribuição automática por
+//   andar, vistoria opcional, estoque e enxoval no mínimo
+//   (app/components/governanca/PainelGovernanta.js).
+// - Insights (admin): limpos x pendentes, produtividade por camareira (saída
+//   x quarto com hóspede, vistorias), tempo médio por apartamento, log.
 // - Configurações (admin): integração com a Cloudbeds (mesma credencial de
 //   Fichas de Hóspedes/PDV), "Corrigir status" e os avisos em tempo real da
 //   Cloudbeds (com senha no endereço).
@@ -34,6 +38,9 @@ import {
   estadoAoTerminar, cloudbedsAoTerminar, estadoAposCloudbeds, estadoInicialDaCloudbeds,
   dataDeVoltaInvalida, bloqueioVencido, formatarDia, hojeNoHotel,
 } from '../../lib/governanca/regras';
+import { andarDoQuarto, nomeDoAndar, tipoDoQuarto, resumoProdutividade, media, LIMITE_MEDIA_MIN } from '../../lib/governanca/distribuicao';
+import PainelGovernanta from '../components/governanca/PainelGovernanta';
+import CamareirasCloudbeds from '../components/governanca/CamareirasCloudbeds';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -145,6 +152,8 @@ export default function Governanca() {
   const [qMotivoInterdicao, setQMotivoInterdicao] = useState('');
   const [qPrioridade, setQPrioridade] = useState(false);
   const [qPrioridadeObs, setQPrioridadeObs] = useState('');
+  const [qAndar, setQAndar] = useState('');
+  const [vistorias, setVistorias] = useState([]);
   const [erroFormQuarto, setErroFormQuarto] = useState('');
   const [excluindoQuartoId, setExcluindoQuartoId] = useState(null);
 
@@ -198,6 +207,7 @@ export default function Governanca() {
       if (!ativo) return;
       setUsuario(dadosUsuario);
       if (bloquearSeNaoPermitido(dadosUsuario.papel, router, '/governanca')) return;
+      if (dadosUsuario.papel === 'ADMIN' || dadosUsuario.papel === 'COLABORADOR') setSubAba('painel');
       setVerificandoLogin(false);
     }
     verificar();
@@ -238,6 +248,9 @@ export default function Governanca() {
     }
 
     if (u.papel === 'ADMIN') {
+      const { data: vs } = await supabase.from('governanca_vistorias').select('*')
+        .eq('hotel_id', u.hotel_id).order('criado_em', { ascending: false }).limit(1000);
+      setVistorias(vs || []);
       const { data: cfg } = await supabase
         .from('governanca_config').select('*').eq('hotel_id', u.hotel_id).maybeSingle();
       setConfig(cfg);
@@ -258,12 +271,16 @@ export default function Governanca() {
     if (usuario) carregarTudo(usuario);
   }, [usuario, carregarTudo]);
 
-  // Só a lista de quartos (tempo real e conferência de 1 em 1 minuto)
+  // Quartos e arrumações (tempo real e conferência de 1 em 1 minuto)
   const recarregarQuartos = useCallback(async () => {
     const u = usuarioRef.current;
     if (!u) return;
-    const { data } = await supabase.from('quartos').select('*').eq('hotel_id', u.hotel_id).order('numero', { ascending: true });
+    const [{ data }, { data: listaSessoes }] = await Promise.all([
+      supabase.from('quartos').select('*').eq('hotel_id', u.hotel_id).order('numero', { ascending: true }),
+      supabase.from('governanca_sessoes').select('*').eq('hotel_id', u.hotel_id).order('inicio_em', { ascending: false }).limit(1000),
+    ]);
     if (data) setQuartos(data);
+    if (listaSessoes) setSessoes(listaSessoes);
   }, []);
 
   useEffect(() => {
@@ -362,6 +379,7 @@ export default function Governanca() {
         inicio_em: inicioEm,
         checklist: CHECKLIST_VAZIO,
         hotel_id: usuario.hotel_id,
+        tipo: tipoDoQuarto(quarto),
       })
       .select().single();
     if (error) {
@@ -534,7 +552,7 @@ export default function Governanca() {
   function abrirNovoQuarto() {
     setEditandoQuartoId(null);
     setQNumero(''); setQCamareira(''); setQEstadoApartamento('SAIDA_SUJO'); setErroFormQuarto('');
-    setQInterditadoAte(''); setQMotivoInterdicao(''); setQPrioridade(false); setQPrioridadeObs('');
+    setQInterditadoAte(''); setQMotivoInterdicao(''); setQPrioridade(false); setQPrioridadeObs(''); setQAndar('');
     setMostrarFormNovoQuarto(true);
   }
 
@@ -545,6 +563,7 @@ export default function Governanca() {
     setQEstadoApartamento(q.estado_apartamento || 'SAIDA_SUJO');
     setQInterditadoAte(q.interditado_ate || ''); setQMotivoInterdicao('');
     setQPrioridade(!!q.prioridade); setQPrioridadeObs(q.prioridade_obs || '');
+    setQAndar(q.andar === null || q.andar === undefined ? '' : String(q.andar));
     setErroFormQuarto('');
   }
 
@@ -572,6 +591,10 @@ export default function Governanca() {
     if (salvando) return;
     setErroFormQuarto('');
     if (!qNumero.trim()) { setErroFormQuarto('Informe o número do apartamento.'); return; }
+    if (qAndar.trim() !== '' && (!Number.isFinite(Number(qAndar)) || Number(qAndar) < -5 || Number(qAndar) > 200)) {
+      setErroFormQuarto('Andar inválido. Deixe vazio para o sistema descobrir pelo número.');
+      return;
+    }
     const interditado = qEstadoApartamento === 'INTERDITADO';
     if (interditado) {
       const problema = dataDeVoltaInvalida(qInterditadoAte);
@@ -586,6 +609,7 @@ export default function Governanca() {
       ...mudanca.campos,
       prioridade: qPrioridade,
       prioridade_obs: qPrioridade && qPrioridadeObs.trim() ? qPrioridadeObs.trim().slice(0, 140) : null,
+      andar: qAndar.trim() === '' ? null : Math.trunc(Number(qAndar)),
       // Com bloqueio feito na Cloudbeds, quem troca a data é a rota do
       // bloqueio (ela precisa saber a data antiga se o bloqueio já venceu).
       interditado_ate: quartoAntes?.cloudbeds_bloqueio_id ? (quartoAntes.interditado_ate || null) : (interditado ? qInterditadoAte : null),
@@ -693,17 +717,10 @@ export default function Governanca() {
   const quartosLimposAgora = quartos.filter((q) => q.status === 'LIMPO').length;
   const quartosPendentesAgora = quartos.filter((q) => precisaArrumar(q) || q.status === 'EM_ARRUMACAO').length;
 
-  // Ranking de produtividade
-  const porCamareira = {};
-  sessoesFinalizadasPeriodo.forEach((s) => {
-    const chave = s.camareira_id || s.camareira_nome;
-    if (!porCamareira[chave]) porCamareira[chave] = { nome: nomeDe(s.camareira_id) || s.camareira_nome, total: 0, somaMinutos: 0 };
-    porCamareira[chave].total += 1;
-    porCamareira[chave].somaMinutos += Number(s.duracao_minutos || 0);
-  });
-  const ranking = Object.values(porCamareira)
-    .map((c) => ({ ...c, tempoMedio: c.total > 0 ? c.somaMinutos / c.total : 0 }))
-    .sort((a, b) => b.total - a.total);
+  // Produtividade: por camareira (saída x quarto com hóspede, vistorias) e por apartamento
+  const vistoriasPeriodo = vistorias.filter((v) => dentroDoPeriodo(v.criado_em));
+  const produtividade = resumoProdutividade(sessoesFinalizadasPeriodo, vistoriasPeriodo, (id) => (id ? nomesUsuarios[id] : null));
+  const ranking = produtividade.porCamareira;
 
   // ================= CONFIGURAÇÕES / INTEGRAÇÃO REAL COM A CLOUDBEDS =================
 
@@ -858,6 +875,10 @@ export default function Governanca() {
               onChange={(e) => setQMotivoInterdicao(e.target.value)} placeholder="Ex.: troca do ar-condicionado" />
           </div>
         )}
+        <label className="rotulo" htmlFor="gv-andar">Andar</label>
+        <input id="gv-andar" className="campo" type="number" inputMode="numeric" min={-5} max={200} value={qAndar}
+          onChange={(e) => setQAndar(e.target.value)}
+          placeholder={`Vazio = pelo número${andarDoQuarto({ numero: qNumero }) !== null ? ` (${nomeDoAndar(andarDoQuarto({ numero: qNumero }))})` : ''}`} />
         <label className="gv-check-prioridade">
           <input type="checkbox" checked={qPrioridade} onChange={(e) => setQPrioridade(e.target.checked)} />
           <span>⭐ Prioridade — a camareira faz este quarto primeiro</span>
@@ -891,6 +912,12 @@ export default function Governanca() {
 
       {/* Sub-abas */}
       <nav className="gv-abas" aria-label="Seções">
+        {podeVerQuartos && (
+          <button type="button" className={subAba === 'painel' ? 'gv-aba gv-aba-ativa' : 'gv-aba'}
+            onClick={() => setSubAba('painel')}>
+            Painel
+          </button>
+        )}
         <button type="button" className={subAba === 'camareira' ? 'gv-aba gv-aba-ativa' : 'gv-aba'}
           onClick={() => setSubAba('camareira')}>
           Camareira
@@ -994,6 +1021,12 @@ export default function Governanca() {
             </div>
           )}
         </section>
+      )}
+
+      {/* ================= PAINEL (governanta / recepção) ================= */}
+      {!carregando && subAba === 'painel' && podeVerQuartos && (
+        <PainelGovernanta usuario={usuario} quartos={quartos} sessoes={sessoes} camareiras={camareiras}
+          recarregar={recarregarQuartos} mostrarAviso={mostrarAviso} mostrarSync={mostrarSync} />
       )}
 
       {/* ================= QUARTOS (admin + colaborador) ================= */}
@@ -1127,6 +1160,7 @@ export default function Governanca() {
                         <div className="texto-suave" style={{ fontSize: 13 }}>
                           {q.camareira_id ? `Camareira: ${nomeDe(q.camareira_id)}` : 'Sem camareira atribuída'}
                           {q.ultima_limpeza ? ` · última limpeza em ${formatarDataHora(q.ultima_limpeza)}` : ''}
+                          {andarDoQuarto(q) !== null ? ` · ${nomeDoAndar(andarDoQuarto(q))}` : ''}
                           {q.prioridade && q.prioridade_obs ? ` · ⭐ ${q.prioridade_obs}` : ''}
                         </div>
                         {quartosCloudbeds && (
@@ -1204,25 +1238,56 @@ export default function Governanca() {
             <div className="cartao gv-numero"><div className="gv-numero-valor">{quartosLimposAgora}</div><div className="gv-numero-rot">🟢 Limpos agora</div></div>
             <div className="cartao gv-numero"><div className="gv-numero-valor">{quartosPendentesAgora}</div><div className="gv-numero-rot">🔴 Pendentes agora</div></div>
             <div className="cartao gv-numero"><div className="gv-numero-valor">{sessoesFinalizadasPeriodo.length}</div><div className="gv-numero-rot">✅ Arrumações no período</div></div>
+            <div className="cartao gv-numero"><div className="gv-numero-valor">{duracaoLegivel(produtividade.mediaGeral)}</div><div className="gv-numero-rot">⏱️ Tempo médio por quarto</div></div>
           </div>
 
           <div className="cartao" style={{ marginTop: 14 }}>
-            <h3 style={{ fontSize: '1rem', marginTop: 0 }}>Ranking de produtividade</h3>
+            <h3 style={{ fontSize: '1rem', marginTop: 0 }}>Produtividade por camareira</h3>
             {ranking.length === 0 ? (
               <p className="texto-suave" style={{ fontSize: 14 }}>Sem arrumações concluídas no período selecionado.</p>
             ) : (
-              <div className="gv-ranking">
-                {ranking.map((c, i) => (
-                  <div key={i} className="gv-ranking-linha">
-                    <span className="gv-ranking-pos">{i + 1}º</span>
-                    <span className="gv-ranking-nome">{c.nome}</span>
-                    <span className="gv-ranking-total">{c.total} quarto(s)</span>
-                    <span className="gv-ranking-tempo">média {duracaoLegivel(c.tempoMedio)}</span>
-                  </div>
-                ))}
+              <div className="gv-tabela-envelope">
+                <table className="gv-tabela gv-tabela-prod">
+                  <thead>
+                    <tr><th>#</th><th>Camareira</th><th>Quartos</th><th>Tempo médio</th><th>Saída</th><th>Com hóspede</th><th>Vistorias</th></tr>
+                  </thead>
+                  <tbody>
+                    {ranking.map((c, i) => (
+                      <tr key={c.chave}>
+                        <td>{i + 1}º</td>
+                        <td><strong>{c.nome}</strong></td>
+                        <td>{c.total}</td>
+                        <td>{duracaoLegivel(media(c.tudo))}</td>
+                        <td>{c.saidas ? `${c.saidas} · ${duracaoLegivel(media(c.SAIDA))}` : '—'}</td>
+                        <td>{c.ocupados ? `${c.ocupados} · ${duracaoLegivel(media(c.OCUPADO))}` : '—'}</td>
+                        <td>{c.aprovadas + c.reprovadas ? `✅ ${c.aprovadas} · ↩️ ${c.reprovadas}` : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
+            <p className="texto-suave" style={{ fontSize: 12, marginBottom: 0 }}>
+              Saída e com hóspede contam a partir desta versão. Arrumação esquecida aberta por mais de {LIMITE_MEDIA_MIN / 60} h fica fora da média.
+            </p>
           </div>
+
+          {produtividade.porQuarto.length > 0 && (
+            <div className="cartao" style={{ marginTop: 14 }}>
+              <h3 style={{ fontSize: '1rem', marginTop: 0 }}>Tempo médio por apartamento</h3>
+              <div className="gv-tabela-envelope">
+                <table className="gv-tabela">
+                  <thead><tr><th>Apartamento</th><th>Arrumações</th><th>Tempo médio</th></tr></thead>
+                  <tbody>
+                    {produtividade.porQuarto.slice(0, 30).map((q) => (
+                      <tr key={q.numero}><td>{q.numero}</td><td>{q.total}</td><td>{duracaoLegivel(media(q.tudo))}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="texto-suave" style={{ fontSize: 12, marginBottom: 0 }}>Os mais demorados primeiro.</p>
+            </div>
+          )}
 
           <div className="cartao" style={{ marginTop: 14 }}>
             <h3 style={{ fontSize: '1rem', marginTop: 0 }}>Log detalhado</h3>
@@ -1334,6 +1399,8 @@ export default function Governanca() {
               </div>
             )}
           </div>
+
+          <CamareirasCloudbeds camareiras={camareiras} mostrarAviso={mostrarAviso} />
         </section>
       )}
 
@@ -1550,7 +1617,8 @@ function EstilosGovernanca() {
       .mn-periodo { display: flex; gap: 6px; flex-wrap: wrap; }
       .gv-periodo-ativo { background: var(--marca); border-color: var(--marca); color: var(--branco); }
 
-      .gv-numeros { display: grid; grid-template-columns: 1fr; gap: 12px; }
+      .gv-numeros { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .gv-tabela-prod { min-width: 640px; }
       .gv-numero { text-align: center; padding: 18px 12px; }
       .gv-numero-valor { font-family: var(--fonte-titulo); font-weight: 700; font-size: 30px; color: var(--marca); }
       .gv-numero-rot { font-size: 13px; color: var(--texto-suave); margin-top: 4px; }
@@ -1592,7 +1660,7 @@ function EstilosGovernanca() {
       @media (min-width: 640px) {
         .gv-barra { flex-direction: row; align-items: center; justify-content: space-between; }
         .gv-item-quarto { flex-direction: row; justify-content: space-between; align-items: flex-start; }
-        .gv-numeros { grid-template-columns: 1fr 1fr 1fr; }
+        .gv-numeros { grid-template-columns: repeat(4, 1fr); }
       }
     `}</style>
   );
