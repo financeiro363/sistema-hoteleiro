@@ -19,6 +19,13 @@ export default function RootLayout({ children }) {
           rel="stylesheet"
         />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {/* Instalar na tela de início do celular (necessário para os avisos no iPhone) */}
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <meta name="theme-color" content="#0E5A4E" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="Hotel" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
       </head>
       <body>
         <CabecalhoSite />

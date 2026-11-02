@@ -4,15 +4,21 @@
 // Quarto "Interditado" sai da venda na Cloudbeds: cria um bloqueio
 // "fora de serviço" (POST /postRoomBlock, API v1.3) de hoje até a previsão de
 // volta. Ao tirar de Interditado, apaga o bloqueio (POST /deleteRoomBlock).
-//   { quartoId, acao: 'bloquear', ate: 'AAAA-MM-DD', motivo? }
-//   { quartoId, acao: 'liberar' }
+//   { quartoId, acao: 'bloquear', ate: 'AAAA-MM-DD', motivo?, interditar? }
+//   { quartoId, acao: 'liberar', estadoDepois? }
+// interditar: true → o próprio servidor muda o quarto para "Interditado"
+//   (usado pela tela de Manutenção, ao abrir um chamado que tira o quarto da venda)
+// estadoDepois: 'SAIDA_SUJO' | 'LIMPO' → ao liberar, tira de "Interditado"
+//   (usado ao concluir o chamado: o quarto vai para a lista da camareira)
 // Camareira não usa. O número do bloqueio fica salvo no quarto
 // (cloudbeds_bloqueio_id) para poder liberar depois.
 // ============================================================================
 
 import { autenticarChamada, hojeFortaleza } from '../../../lib/cloudbedsCaixa';
-import { carregarCloudbeds, bloquearNaCloudbeds, liberarNaCloudbeds } from '../../../lib/governanca/cloudbeds';
-import { dataDeVoltaInvalida, formatarDia } from '../../../lib/governanca/regras';
+import { carregarCloudbeds, bloquearNaCloudbeds, liberarNaCloudbeds, enviarSituacao } from '../../../lib/governanca/cloudbeds';
+import { dataDeVoltaInvalida, formatarDia, mudancaDeEstado } from '../../../lib/governanca/regras';
+
+const ESTADOS_DEPOIS = ['SAIDA_SUJO', 'LIMPO'];
 
 export const dynamic = 'force-dynamic';
 
@@ -27,9 +33,10 @@ export async function POST(request) {
     const auth = await autenticarChamada(request);
     if (auth.resposta) return auth.resposta;
     const { chamador, supabaseAdmin, segredoCripto } = auth;
-    if (!['ADMIN', 'COLABORADOR'].includes(chamador.papel)) {
-      return Response.json({ erro: 'Só a governança e a recepção bloqueiam quartos.' }, { status: 403 });
+    if (!['ADMIN', 'COLABORADOR', 'MANUTENCAO'].includes(chamador.papel)) {
+      return Response.json({ erro: 'Só a governança, a recepção e a manutenção bloqueiam quartos.' }, { status: 403 });
     }
+    const estadoDepois = acao === 'liberar' && ESTADOS_DEPOIS.includes(corpo.estadoDepois) ? corpo.estadoDepois : null;
 
     const { data: quarto, error } = await supabaseAdmin
       .from('quartos').select('*').eq('id', quartoId).eq('hotel_id', chamador.hotel_id).maybeSingle();
@@ -48,14 +55,32 @@ export async function POST(request) {
       if (e) throw new Error('Não foi possível salvar o bloqueio no quarto: ' + e.message);
     }
 
+    // Muda o estado do quarto aqui no servidor (Manutenção) e devolve o que
+    // avisar à Cloudbeds sobre a limpeza
+    async function aplicarEstado(novo) {
+      const m = mudancaDeEstado(quarto, novo);
+      if (!m.mudou) return null;
+      await gravar(m.campos);
+      Object.assign(quarto, m.campos);
+      return m.cloudbeds;
+    }
+    let situacao = null;
+    if (acao === 'bloquear' && corpo.interditar) situacao = await aplicarEstado('INTERDITADO');
+
     if (!quarto.cloudbeds_room_id) {
       await gravar(acao === 'bloquear' ? { interditado_ate: ate } : { interditado_ate: null, cloudbeds_bloqueio_id: null });
+      if (estadoDepois && quarto.estado_apartamento === 'INTERDITADO') await aplicarEstado(estadoDepois);
       return Response.json({ naoVinculado: true });
     }
 
     let cb;
     try { cb = await carregarCloudbeds(supabaseAdmin, chamador.hotel_id, segredoCripto); }
     catch (e) { return Response.json({ erro: e.message }, { status: 400 }); }
+    async function avisarLimpeza(params) {
+      if (!params || !Object.keys(params).length) return;
+      try { await enviarSituacao(cb, quarto.cloudbeds_room_id, params); } catch (e) { /* a limpeza é um extra; o bloqueio é o que importa */ }
+    }
+    await avisarLimpeza(situacao);
 
     // Tira o bloqueio antigo (liberar, ou trocar a data). Bloqueio que já
     // venceu pode nem existir mais lá — nesse caso seguimos em frente.
@@ -70,7 +95,10 @@ export async function POST(request) {
     } else if (acao === 'liberar') {
       await gravar({ interditado_ate: null });
     }
-    if (acao === 'liberar') return Response.json({ sucesso: true });
+    if (acao === 'liberar') {
+      if (estadoDepois && quarto.estado_apartamento === 'INTERDITADO') await avisarLimpeza(await aplicarEstado(estadoDepois));
+      return Response.json({ sucesso: true, estado: quarto.estado_apartamento });
+    }
 
     const motivo = String(corpo.motivo || '').trim().slice(0, 120);
     let bloqueioId;
