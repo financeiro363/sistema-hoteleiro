@@ -13,8 +13,8 @@
 //   de barras dos locais que mais geram chamados (SVG puro, sem dependências)
 // - Log de Auditoria (admin, imutável): abertura, atribuição, mudança de
 //   status e conclusão, com quem/quando
-// - Campo "origem" já preparado para a futura integração com a Governança
-//   (chamado aberto pela camareira → entra em Pendentes automaticamente)
+// - Chamados abertos pela camareira na Governança chegam com origem
+//   GOVERNANCA ("Via checklist") e, se ela tirou, com a foto do problema
 // ============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
@@ -93,6 +93,7 @@ export default function Manutencao() {
 
   // Exclusão
   const [excluindoId, setExcluindoId] = useState(null);
+  const [fotoAberta, setFotoAberta] = useState(null); // { local, url } ou { local, erro }
 
   const souAdmin = usuario?.papel === 'ADMIN';
 
@@ -156,6 +157,14 @@ export default function Manutencao() {
   useEffect(() => {
     if (usuario) carregarTudo(usuario);
   }, [usuario, carregarTudo]);
+
+  // Foto do chamado (pasta privada): link temporário de 10 minutos
+  async function verFoto(c) {
+    setFotoAberta({ local: c.local, carregando: true });
+    const { data, error } = await supabase.storage.from('anexos').createSignedUrl(c.foto_caminho, 600);
+    if (error || !data?.signedUrl) { setFotoAberta({ local: c.local, erro: 'Não foi possível abrir a foto. ' + (error?.message || '') }); return; }
+    setFotoAberta({ local: c.local, url: data.signedUrl });
+  }
 
   async function registrarLog(local, acao, detalhe) {
     await supabase.from('manutencoes_log').insert({
@@ -317,6 +326,9 @@ export default function Manutencao() {
           {c.origem === 'GOVERNANCA' && <span className="mn-tag mn-tag-gov">Via checklist</span>}
         </div>
         <div className="mn-card-desc">{c.descricao}</div>
+        {c.foto_caminho && (
+          <button type="button" className="mn-ver-foto" onClick={() => verFoto(c)}>📷 Ver foto</button>
+        )}
         <div className="mn-card-meta">
           {c.responsavel_id ? `Técnico: ${nomeDe(c.responsavel_id)}` : 'Sem técnico atribuído'} · aberto em {formatarDataHora(c.criado_em)}
         </div>
@@ -587,6 +599,20 @@ export default function Manutencao() {
           </div>
         </section>
       )}
+
+      {fotoAberta && (
+        <div className="mn-foto-fundo" role="dialog" aria-modal="true" aria-label={`Foto — ${fotoAberta.local}`} onClick={() => setFotoAberta(null)}>
+          <div className="mn-foto-caixa" onClick={(e) => e.stopPropagation()}>
+            <div className="mn-foto-topo">
+              <strong>{fotoAberta.local}</strong>
+              <button type="button" className="botao botao-suave" onClick={() => setFotoAberta(null)}>Fechar</button>
+            </div>
+            {fotoAberta.carregando && <p className="texto-suave">Abrindo a foto…</p>}
+            {fotoAberta.erro && <div className="aviso-erro">{fotoAberta.erro}</div>}
+            {fotoAberta.url && <img src={fotoAberta.url} alt={`Foto do problema — ${fotoAberta.local}`} className="mn-foto" />}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -625,6 +651,11 @@ function EstilosManutencao() {
       .mn-tag-gov { background: #F4ECD7; color: var(--latao-texto); }
       .mn-card-desc { font-size: 14px; margin: 8px 0; }
       .mn-card-meta { font-size: 12px; color: var(--texto-suave); }
+      .mn-ver-foto { background: none; border: 1px solid var(--borda); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; margin-bottom: 6px; font-family: inherit; color: var(--tinta); }
+      .mn-foto-fundo { position: fixed; inset: 0; background: rgba(15, 25, 22, 0.6); display: flex; align-items: center; justify-content: center; z-index: 90; padding: 16px; }
+      .mn-foto-caixa { background: var(--branco); border-radius: 16px; padding: 14px; width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; }
+      .mn-foto-topo { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+      .mn-foto { width: 100%; height: auto; border-radius: 10px; display: block; }
       .mn-atribuir { margin-top: 10px; }
       .mn-card-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
       .mn-concluido-info { font-size: 12px; color: var(--sucesso-texto); }

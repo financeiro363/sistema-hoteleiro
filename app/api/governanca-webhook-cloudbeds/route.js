@@ -1,73 +1,77 @@
 // ============================================================================
-// ROTA DE SERVIDOR (WEBHOOK): /api/governanca-webhook-cloudbeds
+// ROTA DE SERVIDOR (WEBHOOK): /api/governanca-webhook-cloudbeds?chave=...
 // ============================================================================
-// A Cloudbeds chama essa rota sozinha, automaticamente, toda vez que o
-// status de limpeza de um quarto muda por lá — evento oficial confirmado:
-// "housekeeping/room_condition_changed" (documentação:
-// https://developers.cloudbeds.com/docs/webhooks-1). Isso cobre tanto
-// mudanças manuais feitas na Cloudbeds quanto o que ela já marca sozinha
-// (ex.: deixar "sujo" automaticamente após um check-out).
+// A Cloudbeds chama esta rota sozinha toda vez que a limpeza de um quarto muda
+// por lá — evento oficial "housekeeping/room_condition_changed"
+// (https://developers.cloudbeds.com/docs/webhooks-1), inclusive o "sujo" que
+// ela marca sozinha depois de um check-out.
 //
-// Formato esperado do aviso (conforme documentação oficial):
-// { "roomId": "128837-7", "propertyId": "12345", "condition": "clean",
-//   "event": "housekeeping/room_condition_changed", ... }
+// Formato do aviso: { "roomId": "128837-7", "propertyId": "12345",
+//   "condition": "clean", "event": "housekeeping/room_condition_changed" }
 //
-// ⚠️ Não exige login — quem chama é a Cloudbeds, não uma pessoa logada no
-// nosso site. A documentação da Cloudbeds não define uma assinatura/segredo
-// pra validar que o aviso é legítimo (ao contrário de alguns outros
-// serviços) — então essa rota confirma o quarto pelo cloudbeds_room_id já
-// salvo e ignora silenciosamente qualquer aviso que não bata com um quarto
-// conhecido nosso, em vez de aceitar cegamente.
+// Senha: ao ativar as notificações, o sistema cria uma senha e a coloca no
+// endereço (?chave=...). Ela fica guardada criptografada e só o servidor lê.
+// Aviso sem a senha certa é recusado. (Inscrições antigas, feitas antes da
+// senha existir, continuam aceitas até o administrador reativar — a tela de
+// Configurações avisa.)
+//
+// Além da limpeza (status), acerta o estado do apartamento: pergunta à
+// Cloudbeds se o quarto está ocupado e aplica as regras de
+// lib/governanca/regras.js (ex.: saída feita → "Saída / Apt Sujo").
+// "Interditado" e "Serviços gerais" só a equipe muda.
 // ============================================================================
 
-import { createClient } from '@supabase/supabase-js';
+import { clienteAdmin, lerSegredo } from '../../../lib/atendimento/servidor';
+import { carregarCloudbeds, situacaoNaCloudbeds, senhaWebhookConfere } from '../../../lib/governanca/cloudbeds';
+import { estadoAposCloudbeds } from '../../../lib/governanca/regras';
 
-function mapearCondicaoParaStatus(condicao) {
-  if (condicao === 'dirty') return 'SUJO';
-  if (condicao === 'clean' || condicao === 'inspected') return 'LIMPO';
-  return null; // valor desconhecido — não faz nada, por segurança
-}
+export const dynamic = 'force-dynamic';
+
+const ok = () => Response.json({ recebido: true }, { status: 200 });
 
 export async function POST(request) {
   try {
     const corpo = await request.json().catch(() => null);
-    if (!corpo || corpo.event !== 'housekeeping/room_condition_changed') {
-      // Evento que não nos interessa (ou payload vazio) — confirma
-      // recebimento mesmo assim, pra Cloudbeds não ficar reenviando à toa.
-      return Response.json({ recebido: true }, { status: 200 });
-    }
+    if (!corpo || corpo.event !== 'housekeeping/room_condition_changed') return ok();
 
     const propertyId = String(corpo.propertyId ?? corpo.propertyID ?? '');
-    const roomId = String(corpo.roomId ?? '');
-    const novoStatus = mapearCondicaoParaStatus(corpo.condition);
-    if (!propertyId || !roomId || !novoStatus) {
-      return Response.json({ recebido: true }, { status: 200 });
-    }
+    const roomId = String(corpo.roomId ?? corpo.roomID ?? '');
+    const condicao = String(corpo.condition ?? '');
+    if (!propertyId || !roomId || !['dirty', 'clean', 'inspected'].includes(condicao)) return ok();
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const chaveMestra = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !chaveMestra) {
-      return Response.json({ recebido: true }, { status: 200 });
-    }
-    const supabaseAdmin = createClient(supabaseUrl, chaveMestra);
+    let supabaseAdmin;
+    try { supabaseAdmin = clienteAdmin(); } catch (e) { return ok(); }
 
-    // Descobre a qual dos nossos hotéis esse propertyID pertence.
     const { data: credencial } = await supabaseAdmin
       .from('cloudbeds_credenciais').select('hotel_id')
       .eq('cloudbeds_property_id', propertyId).maybeSingle();
-    if (!credencial) {
-      return Response.json({ recebido: true }, { status: 200 });
+    if (!credencial) return ok();
+    const hotelId = credencial.hotel_id;
+
+    const senha = await lerSegredo(supabaseAdmin, hotelId, 'governanca_webhook_senha');
+    if (senha && !senhaWebhookConfere(new URL(request.url).searchParams.get('chave'), senha)) {
+      return Response.json({ erro: 'Senha do aviso não confere.' }, { status: 401 });
     }
 
-    await supabaseAdmin.from('quartos')
-      .update({ status: novoStatus })
-      .eq('hotel_id', credencial.hotel_id)
-      .eq('cloudbeds_room_id', roomId);
+    const { data: quartos } = await supabaseAdmin.from('quartos').select('*')
+      .eq('hotel_id', hotelId).eq('cloudbeds_room_id', roomId);
+    if (!quartos?.length) return ok();
 
-    return Response.json({ recebido: true }, { status: 200 });
+    // Ocupado ou vago? Se a Cloudbeds não responder, segue só com a limpeza.
+    let ocupado = null;
+    try {
+      const cb = await carregarCloudbeds(supabaseAdmin, hotelId, process.env.CLOUDBEDS_CRYPTO_SECRET);
+      const s = await situacaoNaCloudbeds(cb, roomId);
+      if (s) ocupado = s.ocupado;
+    } catch (e) { /* sem a ocupação */ }
+
+    for (const quarto of quartos) {
+      const campos = estadoAposCloudbeds(quarto, { condicao, ocupado });
+      if (campos) await supabaseAdmin.from('quartos').update(campos).eq('id', quarto.id);
+    }
+    return ok();
   } catch (erro) {
-    // Erro de verdade e inesperado — devolve status de erro pra Cloudbeds
-    // tentar de novo em 1 minuto (ela reenvia até 5 vezes).
+    // Erro inesperado: a Cloudbeds tenta de novo em 1 minuto (até 5 vezes)
     return Response.json({ erro: erro.message }, { status: 500 });
   }
 }

@@ -2,69 +2,47 @@
 
 // ============================================================================
 // GOVERNANÇA (Housekeeping)
-// - Camareira: só vê os quartos SUJOS pré-atribuídos a ela. Clicar num quarto
-//   específico JÁ REPRESENTA a leitura do QR físico daquele apartamento —
-//   não existe botão genérico de "escanear". Sem cronômetro visível na tela
-//   (o tempo só é registrado para os Insights). Checklist de 7 itens.
-// - Ao finalizar: pop-up "Detectou problema de manutenção?" (Sim → cria
-//   chamado em Manutenção, origem GOVERNANCA) seguido automaticamente do
-//   pop-up "Encontrou item esquecido?" (Sim → cadastra em Achados e Perdidos,
-//   origem GOVERNANCA, foto obrigatória, local pré-preenchido).
-// - Quartos (admin): cadastro, status colorido, camareira responsável,
-//   "Marcar sujo" (simula check-out). Quarto sem camareira fica invisível
-//   pra todo mundo na tela de arrumação.
-// - Insights (admin): limpos x pendentes, ranking de produtividade por
-//   camareira, log detalhado (Apartamento | Camareira | Início | Fim | Duração).
-// - Configurações (admin): status da integração real com a Cloudbeds
-//   (reaproveita a mesma credencial já usada em Fichas de Hóspedes/PDV — não
-//   tem chave própria aqui) + botão de testar conexão. O vínculo entre cada
-//   apartamento e o quarto correspondente na Cloudbeds é feito na aba
-//   "Quartos". Ao marcar um quarto como sujo, ou finalizar a arrumação
-//   (fica limpo), o status é enviado de verdade pra Cloudbeds via
-//   POST /postHousekeepingStatus (endpoint oficial, API v1.3) — só quando o
-//   quarto já tiver esse vínculo configurado.
+// - Camareira (celular): lista dos quartos dela já na ordem certa
+//   (prioridade da recepção → saídas → quartos com hóspede → "Não perturbe"
+//   no fim). Botões grandes: "Entrei no quarto", "Não Perturbe" e, lá dentro,
+//   "Quarto Limpo". Quartos sujos sem camareira aparecem em "Sem camareira"
+//   para quem quiser pegar. Se o celular recarregar no meio, a arrumação
+//   aberta volta sozinha. Checklist de 7 itens; o tempo vai para os Insights.
+// - Ao terminar: pop-up "Detectou problema de manutenção?" (Sim → chamado em
+//   Manutenção, origem GOVERNANCA, com foto opcional) e depois "Encontrou item
+//   esquecido?" (Sim → Achados e Perdidos, origem GOVERNANCA, foto obrigatória).
+// - Quartos (admin + colaborador): estado do apartamento com os 8 nomes das
+//   camareiras, camareira responsável, prioridade da recepção, "Marcar sujo".
+//   Trocar o estado acerta a limpeza e a Cloudbeds (regras em
+//   lib/governanca/regras.js). "Interditado" pede a previsão de volta e
+//   bloqueia o quarto na Cloudbeds até esse dia (sai da venda).
+// - Insights (admin): limpos x pendentes, ranking, log detalhado.
+// - Configurações (admin): integração com a Cloudbeds (mesma credencial de
+//   Fichas de Hóspedes/PDV), "Corrigir status" e os avisos em tempo real da
+//   Cloudbeds (com senha no endereço).
+// - A tela se atualiza sozinha quando um quarto muda (Supabase Realtime, e a
+//   cada minuto por garantia).
 // ============================================================================
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
+import {
+  STATUS_QUARTO_LABEL, ESTADO_APARTAMENTO_LABEL,
+  mudancaDeEstado, precisaArrumar, naoPerturbeAtivo, grupoNaFila, ordenarFila, compararNumero, rotuloDoEstado,
+  estadoAoTerminar, cloudbedsAoTerminar, estadoAposCloudbeds, estadoInicialDaCloudbeds,
+  dataDeVoltaInvalida, bloqueioVencido, formatarDia, hojeNoHotel,
+} from '../../lib/governanca/regras';
 
 // ---- Constantes -------------------------------------------------------------
 
-const STATUS_QUARTO_LABEL = {
-  LIMPO: 'Limpo', SUJO: 'Sujo', EM_ARRUMACAO: 'Em Arrumação', MANUTENCAO: 'Manutenção',
-};
 const STATUS_QUARTO_COR = {
   LIMPO: { fundo: '#DDF2E4', texto: '#1E6B3C' },
   SUJO: { fundo: '#FBDDDD', texto: '#A31212' },
   EM_ARRUMACAO: { fundo: '#FDF3D7', texto: '#8A6100' },
   MANUTENCAO: { fundo: '#EFEFEF', texto: '#666666' },
 };
-
-// Estado interno detalhado — 8 situações operacionais. Separado do
-// STATUS_QUARTO_LABEL acima: aquele controla o fluxo de trabalho da
-// camareira (sujo → em arrumação → limpo); este classifica a SITUAÇÃO do
-// quarto (é uma saída? tem hóspede ainda? tá interditado?) e é o que
-// decide o que mandar pra Cloudbeds quando a arrumação termina.
-const ESTADO_APARTAMENTO_LABEL = {
-  SAIDA_SUJO: 'Saída / Apt Sujo',
-  ARRUMACAO_OCUPADO: 'Arrumação / Apt ocupado',
-  VIROU_ARRUMACAO_OCUPADO: 'Virou arrumação / Apt ocupado',
-  NAO_DESEJA_ARRUMACAO_OCUPADO: 'Não deseja arrumação / Apt ocupado',
-  PREVISAO_SAIDA_OCUPADO: 'Previsão de saída / Apt ocupado',
-  LIMPO: 'Limpo / Apt limpo',
-  SERVICOS_GERAIS: 'Serviços gerais',
-  INTERDITADO: 'Interditado',
-};
-
-// Só "Limpo / Apt limpo" libera o quarto na Cloudbeds (manda "clean").
-// Todos os outros 7 estados mantêm "dirty" lá — mesmo que a camareira já
-// tenha arrumado aqui no nosso sistema — porque ou ainda tem hóspede no
-// quarto (não pode vender), ou o quarto está em manutenção/interditado.
-function condicaoCloudbedsParaEstado(estado) {
-  return estado === 'LIMPO' ? 'clean' : 'dirty';
-}
 
 const CHECKLIST_ITENS = [
   { chave: 'trocaEnxoval', rotulo: 'Troca de enxoval' },
@@ -100,6 +78,22 @@ function duracaoLegivel(minutos) {
   return `${horas.toFixed(1)} h`;
 }
 
+function horaCurta(valor) {
+  if (!valor) return '';
+  try { return new Date(valor).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' }); }
+  catch (e) { return ''; }
+}
+
+function nomeDeArquivo(nome) {
+  return String(nome || 'foto').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w.-]+/g, '_').slice(-80);
+}
+
+// O que a governança escolhe na hora de mandar para a Cloudbeds: aceita o
+// texto antigo ('dirty'/'clean') ou { roomCondition, doNotDisturb, refusedService }.
+function paraCloudbeds(params) {
+  return typeof params === 'string' ? { roomCondition: params } : (params || {});
+}
+
 const CHECKLIST_VAZIO = CHECKLIST_ITENS.reduce((acc, item) => ({ ...acc, [item.chave]: false }), {});
 
 // ---- Componente principal ---------------------------------------------------
@@ -125,13 +119,14 @@ export default function Governanca() {
   // ---- Camareira: sessão ativa ----
   const [sessaoAtiva, setSessaoAtiva] = useState(null); // {id, quarto, checklist}
   const [checklist, setChecklist] = useState(CHECKLIST_VAZIO);
-  const [msgSync, setMsgSync] = useState('');
+  const [msgSync, setMsgSync] = useState([]);
 
   // ---- Pop-ups pós-limpeza ----
   const [popupManutencao, setPopupManutencao] = useState(null); // {quartoNumero}
   const [manutTemProblema, setManutTemProblema] = useState(null); // true/false
   const [manutDescricao, setManutDescricao] = useState('');
   const [manutPrioridade, setManutPrioridade] = useState('MEDIA');
+  const [manutFoto, setManutFoto] = useState(null);
 
   const [popupAchados, setPopupAchados] = useState(null); // {quartoNumero}
   const [achadosTemItem, setAchadosTemItem] = useState(null);
@@ -146,6 +141,10 @@ export default function Governanca() {
   const [qNumero, setQNumero] = useState('');
   const [qCamareira, setQCamareira] = useState('');
   const [qEstadoApartamento, setQEstadoApartamento] = useState('SAIDA_SUJO');
+  const [qInterditadoAte, setQInterditadoAte] = useState('');
+  const [qMotivoInterdicao, setQMotivoInterdicao] = useState('');
+  const [qPrioridade, setQPrioridade] = useState(false);
+  const [qPrioridadeObs, setQPrioridadeObs] = useState('');
   const [erroFormQuarto, setErroFormQuarto] = useState('');
   const [excluindoQuartoId, setExcluindoQuartoId] = useState(null);
 
@@ -163,15 +162,23 @@ export default function Governanca() {
   const [configurandoWebhook, setConfigurandoWebhook] = useState(false);
   const [erroWebhook, setErroWebhook] = useState('');
   const [webhookAtivo, setWebhookAtivo] = useState(false);
+  const [webhookComSenha, setWebhookComSenha] = useState(true);
+  const usuarioRef = useRef(null);
+  const sessaoAtivaRef = useRef(null);
+  useEffect(() => { sessaoAtivaRef.current = sessaoAtiva; }, [sessaoAtiva]);
 
   const souAdmin = usuario?.papel === 'ADMIN';
   // Quartos: admin e colaborador podem ver e operar (é onde se atribui a
   // camareira de cada apartamento). Insights e Configurações continuam só admin.
   const podeVerQuartos = souAdmin || usuario?.papel === 'COLABORADOR';
 
+  // Cada aviso novo cancela o relógio do anterior (senão o relógio velho
+  // apagava a mensagem nova antes da hora)
+  const relogiosAviso = useRef({});
   function mostrarAviso(texto) {
     setAviso(texto);
-    setTimeout(() => setAviso(''), 5000);
+    clearTimeout(relogiosAviso.current.aviso);
+    relogiosAviso.current.aviso = setTimeout(() => setAviso(''), 5000);
   }
 
   const nomeDe = useCallback(
@@ -212,51 +219,99 @@ export default function Governanca() {
     }
 
     const { data: listaQuartos, error: e1 } = await supabase
-      .from('quartos').select('*').order('numero', { ascending: true });
+      .from('quartos').select('*').eq('hotel_id', u.hotel_id).order('numero', { ascending: true });
     if (e1) setErro('Não foi possível carregar os quartos. Detalhe técnico: ' + e1.message);
     else setQuartos(listaQuartos || []);
 
     const { data: listaSessoes } = await supabase
-      .from('governanca_sessoes').select('*').order('inicio_em', { ascending: false }).limit(1000);
+      .from('governanca_sessoes').select('*').eq('hotel_id', u.hotel_id).order('inicio_em', { ascending: false }).limit(1000);
     setSessoes(listaSessoes || []);
+
+    // Arrumação que ficou aberta (o celular recarregou no meio): volta sozinha
+    if (!sessaoAtivaRef.current && listaQuartos) {
+      const aberta = (listaSessoes || []).find((s) => !s.fim_em && !s.cancelada && s.camareira_id === u.id);
+      const quartoAberto = aberta && listaQuartos.find((q) => q.id === aberta.quarto_id && q.status === 'EM_ARRUMACAO');
+      if (quartoAberto) {
+        setSessaoAtiva({ ...aberta, quarto: quartoAberto });
+        setChecklist({ ...CHECKLIST_VAZIO, ...(aberta.checklist || {}) });
+      }
+    }
 
     if (u.papel === 'ADMIN') {
       const { data: cfg } = await supabase
         .from('governanca_config').select('*').eq('hotel_id', u.hotel_id).maybeSingle();
       setConfig(cfg);
 
-      const { data: hotelInfo } = await supabase
-        .from('hoteis').select('governanca_webhook_id').eq('id', u.hotel_id).maybeSingle();
-      setWebhookAtivo(!!hotelInfo?.governanca_webhook_id);
+      try {
+        const { data: sessao } = await supabase.auth.getSession();
+        const resposta = await fetch('/api/governanca-configurar-webhook', { headers: { Authorization: `Bearer ${sessao.session.access_token}` } });
+        const r = await resposta.json();
+        if (resposta.ok) { setWebhookAtivo(!!r.ativo); setWebhookComSenha(!!r.comSenha); }
+      } catch (e) { /* a tela continua; o cartão mostra "desativado" */ }
     }
 
     setCarregando(false);
   }, []);
 
   useEffect(() => {
+    usuarioRef.current = usuario;
     if (usuario) carregarTudo(usuario);
   }, [usuario, carregarTudo]);
 
+  // Só a lista de quartos (tempo real e conferência de 1 em 1 minuto)
+  const recarregarQuartos = useCallback(async () => {
+    const u = usuarioRef.current;
+    if (!u) return;
+    const { data } = await supabase.from('quartos').select('*').eq('hotel_id', u.hotel_id).order('numero', { ascending: true });
+    if (data) setQuartos(data);
+  }, []);
+
+  useEffect(() => {
+    if (!usuario) return undefined;
+    let espera = null;
+    const agendar = () => { clearTimeout(espera); espera = setTimeout(recarregarQuartos, 400); };
+    const canal = supabase
+      .channel(`governanca-quartos-${usuario.hotel_id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'quartos', filter: `hotel_id=eq.${usuario.hotel_id}` }, agendar)
+      .subscribe();
+    const relogio = setInterval(() => { if (document.visibilityState === 'visible') recarregarQuartos(); }, 60000);
+    const aoVoltar = () => { if (document.visibilityState === 'visible') recarregarQuartos(); };
+    document.addEventListener('visibilitychange', aoVoltar);
+    return () => {
+      clearTimeout(espera); clearInterval(relogio);
+      document.removeEventListener('visibilitychange', aoVoltar);
+      supabase.removeChannel(canal);
+    };
+  }, [usuario, recarregarQuartos]);
+
+  // Avisos da Cloudbeds: dois que chegam juntos (ex.: limpeza + bloqueio)
+  // aparecem um embaixo do outro
   function mostrarSync(msg) {
-    setMsgSync(msg);
-    setTimeout(() => setMsgSync(''), 4000);
+    setMsgSync((lista) => [...(Array.isArray(lista) ? lista : []).filter((m) => m !== msg), msg].slice(-3));
+    clearTimeout(relogiosAviso.current.sync);
+    relogiosAviso.current.sync = setTimeout(() => setMsgSync([]), 8000);
   }
 
-  // Envia a mudança de status pra Cloudbeds de verdade (via nossa rota de
-  // servidor — a chave nunca passa pelo navegador). Se o quarto ainda não
-  // tiver vínculo configurado, avisa isso claramente em vez de fingir que
-  // sincronizou.
-  async function sincronizarComCloudbeds(quarto, roomCondition) {
+  function trocarQuarto(id, campos) {
+    setQuartos((lista) => lista.map((q) => (q.id === id ? { ...q, ...campos } : q)));
+  }
+
+  // Envia a mudança pra Cloudbeds de verdade (via nossa rota de servidor — a
+  // chave nunca passa pelo navegador). Se o quarto ainda não tiver vínculo
+  // configurado, avisa isso claramente em vez de fingir que sincronizou.
+  async function sincronizarComCloudbeds(quarto, params) {
+    const corpo = paraCloudbeds(params);
+    if (!Object.keys(corpo).length) return;
     try {
       const { data: sessao } = await supabase.auth.getSession();
       const resposta = await fetch('/api/governanca-atualizar-cloudbeds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
-        body: JSON.stringify({ quartoId: quarto.id, roomCondition }),
+        body: JSON.stringify({ quartoId: quarto.id, ...corpo }),
       });
       const resultado = await resposta.json();
       if (resultado.naoVinculado) {
-        mostrarSync(`Apartamento ${quarto.numero}: status atualizado aqui (esse quarto ainda não está vinculado a um quarto da Cloudbeds — configure em Quartos).`);
+        mostrarSync(`🔄 Apartamento ${quarto.numero}: status atualizado aqui (esse quarto ainda não está vinculado a um quarto da Cloudbeds — configure em Quartos).`);
         return;
       }
       if (!resposta.ok || resultado.erro) {
@@ -271,15 +326,32 @@ export default function Governanca() {
 
   // ================= CAMAREIRA: fluxo de arrumação =================
 
-  // Só os quartos SUJOS atribuídos a ela — sem etapa de "escanear para ver a
-  // lista": a lista já é o que aparece, e clicar num quarto específico É a
-  // leitura do QR daquele apartamento.
-  const meusQuartos = quartos.filter((q) => q.status === 'SUJO' && q.camareira_id === usuario?.id);
+  // A lista dela já vem na ordem certa: prioridade da recepção, saídas,
+  // quartos com hóspede e, no fim, os "Não perturbe" de hoje. Tocar em
+  // "Entrei no quarto" equivale a ler o QR Code da porta.
+  const agoraTela = new Date();
+  const meusQuartos = ordenarFila(quartos.filter((q) => precisaArrumar(q) && q.camareira_id === usuario?.id), agoraTela);
+  const semCamareira = ordenarFila(quartos.filter((q) => precisaArrumar(q) && !q.camareira_id), agoraTela);
+  const proximasSaidas = quartos
+    .filter((q) => q.estado_apartamento === 'PREVISAO_SAIDA_OCUPADO' && (q.camareira_id === usuario?.id || !q.camareira_id))
+    .sort((a, b) => compararNumero(a.numero, b.numero));
 
-  async function iniciarArrumacao(quarto) {
+  async function entrarNoQuarto(quarto) {
     if (salvando) return;
     setSalvando(true);
+    setErro('');
     const inicioEm = new Date().toISOString();
+    // Só entra se o quarto ainda estiver sujo (duas camareiras não pegam o mesmo)
+    const campos = { status: 'EM_ARRUMACAO', ...(quarto.camareira_id ? {} : { camareira_id: usuario.id }), ...(quarto.nao_perturbe_em ? { nao_perturbe_em: null } : {}) };
+    const { data: pegou, error: erroQuarto } = await supabase.from('quartos')
+      .update(campos).eq('id', quarto.id).eq('status', 'SUJO').select('id');
+    if (erroQuarto) { setSalvando(false); setErro('Não foi possível entrar no quarto. Detalhe técnico: ' + erroQuarto.message); return; }
+    if (!pegou || pegou.length === 0) {
+      setSalvando(false);
+      mostrarAviso(`O apartamento ${quarto.numero} já não está mais sujo — outra pessoa entrou ou mudou o quarto.`);
+      recarregarQuartos();
+      return;
+    }
     const { data: novaSessao, error } = await supabase
       .from('governanca_sessoes')
       .insert({
@@ -292,16 +364,48 @@ export default function Governanca() {
         hotel_id: usuario.hotel_id,
       })
       .select().single();
-    if (error) { setSalvando(false); setErro('Não foi possível iniciar. Detalhe técnico: ' + error.message); return; }
-
-    await supabase.from('quartos').update({ status: 'EM_ARRUMACAO' }).eq('id', quarto.id);
+    if (error) {
+      await supabase.from('quartos').update({ status: 'SUJO' }).eq('id', quarto.id);
+      setSalvando(false);
+      setErro('Não foi possível iniciar. Detalhe técnico: ' + error.message);
+      return;
+    }
     setSalvando(false);
     setChecklist(CHECKLIST_VAZIO);
-    setSessaoAtiva({ ...novaSessao, quarto });
-    setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, status: 'EM_ARRUMACAO' } : q)));
-    // Não há status equivalente a "em arrumação" na Cloudbeds (ela só
-    // conhece limpo/sujo/inspecionado) — por isso não avisamos nada aqui;
-    // a sincronização de verdade acontece quando o quarto fica pronto.
+    const quartoAgora = { ...quarto, ...campos, nao_perturbe_em: quarto.nao_perturbe_em || null };
+    setSessaoAtiva({ ...novaSessao, quarto: quartoAgora });
+    trocarQuarto(quarto.id, campos);
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { /* sem rolagem */ }
+    // A Cloudbeds não tem "em arrumação" (só limpo/sujo/inspecionado): ela
+    // fica sabendo quando o quarto fica pronto.
+  }
+
+  // Hóspede pediu para não incomodar: o quarto vai para o fim da lista de hoje
+  // e a Cloudbeds marca "Não perturbe".
+  async function marcarNaoPerturbe(quarto) {
+    if (salvando) return;
+    setSalvando(true);
+    const quando = new Date().toISOString();
+    const { error } = await supabase.from('quartos').update({ nao_perturbe_em: quando }).eq('id', quarto.id);
+    setSalvando(false);
+    if (error) { setErro('Não foi possível marcar. Detalhe técnico: ' + error.message); return; }
+    trocarQuarto(quarto.id, { nao_perturbe_em: quando });
+    mostrarAviso(`Apartamento ${quarto.numero}: "Não perturbe". Ele foi para o fim da sua lista — tente de novo mais tarde.`);
+    sincronizarComCloudbeds(quarto, { doNotDisturb: true });
+  }
+
+  // Entrou no quarto errado: volta para a lista sem contar nos Insights
+  async function desistirDoQuarto() {
+    if (!sessaoAtiva || salvando) return;
+    setSalvando(true);
+    const fimEm = new Date().toISOString();
+    await supabase.from('governanca_sessoes').update({ fim_em: fimEm, cancelada: true, checklist }).eq('id', sessaoAtiva.id);
+    await supabase.from('quartos').update({ status: 'SUJO' }).eq('id', sessaoAtiva.quarto.id).eq('status', 'EM_ARRUMACAO');
+    trocarQuarto(sessaoAtiva.quarto.id, { status: 'SUJO' });
+    setSalvando(false);
+    mostrarAviso(`Apartamento ${sessaoAtiva.quarto.numero} voltou para a lista.`);
+    setSessaoAtiva(null);
+    carregarTudo(usuario);
   }
 
   async function alternarChecklist(chave) {
@@ -324,26 +428,24 @@ export default function Governanca() {
       .eq('id', sessaoAtiva.id);
     if (error) { setSalvando(false); setErro('Não foi possível finalizar. Detalhe técnico: ' + error.message); return; }
 
-    // Se era uma saída (checkout), a arrumação terminando já deixa o
-    // quarto pronto pra vender — o estado interno também vira "Limpo". Se
-    // era um quarto ocupado (pernoite), o estado interno continua o mesmo
-    // (o hóspede segue lá) — só marcamos aqui, localmente, que a arrumação
-    // de hoje já foi feita.
-    const eraSaidaSuja = sessaoAtiva.quarto.estado_apartamento === 'SAIDA_SUJO';
-    const novoEstadoApartamento = eraSaidaSuja ? 'LIMPO' : (sessaoAtiva.quarto.estado_apartamento || 'LIMPO');
-    const condicaoCloudbeds = condicaoCloudbedsParaEstado(novoEstadoApartamento);
+    // Saída arrumada vira "Limpo / Apt limpo" (pronto pra vender). Quarto
+    // com hóspede continua com o estado dele, mas a limpeza fica LIMPO e a
+    // Cloudbeds recebe "clean" (lá aparece como "Ocupado e limpo").
+    const quartoAntes = quartos.find((q) => q.id === sessaoAtiva.quarto.id) || sessaoAtiva.quarto;
+    const novoEstadoApartamento = estadoAoTerminar(quartoAntes.estado_apartamento);
+    const campos = { status: 'LIMPO', estado_apartamento: novoEstadoApartamento, ultima_limpeza: fimEm };
+    if (quartoAntes.prioridade) { campos.prioridade = false; campos.prioridade_obs = null; }
+    if (quartoAntes.nao_perturbe_em) campos.nao_perturbe_em = null;
 
-    await supabase.from('quartos')
-      .update({ status: 'LIMPO', estado_apartamento: novoEstadoApartamento, ultima_limpeza: fimEm })
-      .eq('id', sessaoAtiva.quarto.id);
+    await supabase.from('quartos').update(campos).eq('id', sessaoAtiva.quarto.id);
 
     setSalvando(false);
     const numero = sessaoAtiva.quarto.numero;
-    setQuartos(quartos.map((q) => (q.id === sessaoAtiva.quarto.id ? { ...q, status: 'LIMPO', estado_apartamento: novoEstadoApartamento, ultima_limpeza: fimEm } : q)));
-    sincronizarComCloudbeds(sessaoAtiva.quarto, condicaoCloudbeds);
+    trocarQuarto(sessaoAtiva.quarto.id, campos);
+    sincronizarComCloudbeds(sessaoAtiva.quarto, cloudbedsAoTerminar(sessaoAtiva.quarto));
 
     setPopupManutencao({ quartoNumero: numero });
-    setManutTemProblema(null); setManutDescricao(''); setManutPrioridade('MEDIA'); setErroPopup('');
+    setManutTemProblema(null); setManutDescricao(''); setManutPrioridade('MEDIA'); setManutFoto(null); setErroPopup('');
     setSessaoAtiva(null);
     carregarTudo(usuario);
   }
@@ -353,16 +455,29 @@ export default function Governanca() {
     setErroPopup('');
     if (manutTemProblema === true) {
       if (!manutDescricao.trim()) { setErroPopup('Descreva o problema encontrado.'); return; }
+      if (manutFoto && !/^image\//.test(manutFoto.type || '')) { setErroPopup('A foto precisa ser uma imagem.'); return; }
       setSalvando(true);
+      // Foto (opcional): ajuda o técnico a ver o problema antes de subir
+      let foto = {};
+      if (manutFoto) {
+        const caminho = `${usuario.hotel_id}/manutencao/${Date.now()}_${nomeDeArquivo(manutFoto.name)}`;
+        const { error: erroUpload } = await supabase.storage.from('anexos').upload(caminho, manutFoto);
+        if (erroUpload) {
+          setSalvando(false);
+          setErroPopup('Não foi possível enviar a foto. Detalhe técnico: ' + erroUpload.message);
+          return;
+        }
+        foto = { foto_caminho: caminho, foto_nome: manutFoto.name };
+      }
       const local = `Apartamento ${popupManutencao.quartoNumero}`;
       const { error } = await supabase.from('manutencoes').insert({
         local, descricao: manutDescricao.trim(), prioridade: manutPrioridade,
-        origem: 'GOVERNANCA', criado_por_id: usuario.id, hotel_id: usuario.hotel_id,
+        origem: 'GOVERNANCA', criado_por_id: usuario.id, hotel_id: usuario.hotel_id, ...foto,
       });
       if (!error) {
         await supabase.from('manutencoes_log').insert({
           usuario_id: usuario.id, local, acao: 'Chamado aberto',
-          detalhe: `Chamado aberto via checklist da governança por ${usuario.nome} (prioridade ${PRIORIDADE_LABEL[manutPrioridade]}).`,
+          detalhe: `Chamado aberto via checklist da governança por ${usuario.nome} (prioridade ${PRIORIDADE_LABEL[manutPrioridade]}${foto.foto_caminho ? ', com foto' : ''}).`,
           hotel_id: usuario.hotel_id,
         });
       }
@@ -384,7 +499,7 @@ export default function Governanca() {
       if (!achadosDescricao.trim()) { setErroPopup('Descreva o item encontrado.'); return; }
 
       setSalvando(true);
-      const caminho = `${usuario.hotel_id}/achados/${Date.now()}_${achadosFoto.name}`;
+      const caminho = `${usuario.hotel_id}/achados/${Date.now()}_${nomeDeArquivo(achadosFoto.name)}`;
       const { error: erroUpload } = await supabase.storage.from('anexos').upload(caminho, achadosFoto);
       if (erroUpload) {
         setSalvando(false);
@@ -419,6 +534,7 @@ export default function Governanca() {
   function abrirNovoQuarto() {
     setEditandoQuartoId(null);
     setQNumero(''); setQCamareira(''); setQEstadoApartamento('SAIDA_SUJO'); setErroFormQuarto('');
+    setQInterditadoAte(''); setQMotivoInterdicao(''); setQPrioridade(false); setQPrioridadeObs('');
     setMostrarFormNovoQuarto(true);
   }
 
@@ -427,7 +543,28 @@ export default function Governanca() {
     setEditandoQuartoId(q.id);
     setQNumero(q.numero); setQCamareira(q.camareira_id ? String(q.camareira_id) : '');
     setQEstadoApartamento(q.estado_apartamento || 'SAIDA_SUJO');
+    setQInterditadoAte(q.interditado_ate || ''); setQMotivoInterdicao('');
+    setQPrioridade(!!q.prioridade); setQPrioridadeObs(q.prioridade_obs || '');
     setErroFormQuarto('');
+  }
+
+  async function chamarBloqueio(quarto, corpo) {
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/governanca-bloqueio-cloudbeds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify({ quartoId: quarto.id, ...corpo }),
+      });
+      const r = await resposta.json().catch(() => ({}));
+      if (r.naoVinculado) return `Apartamento ${quarto.numero}: não está vinculado à Cloudbeds — ${corpo.acao === 'bloquear' ? 'bloqueie' : 'libere'} por lá se precisar.`;
+      if (!resposta.ok || r.erro) return `⚠️ Apartamento ${quarto.numero}: ${r.erro || 'a Cloudbeds não respondeu.'} ${corpo.acao === 'bloquear' ? 'Bloqueie o quarto à mão na Cloudbeds.' : 'Libere o quarto à mão na Cloudbeds.'}`;
+      return corpo.acao === 'bloquear'
+        ? `🔒 Apartamento ${quarto.numero}: bloqueado na Cloudbeds até ${formatarDia(corpo.ate)} (fora da venda).`
+        : `🔓 Apartamento ${quarto.numero}: liberado na Cloudbeds (volta para a venda).`;
+    } catch (e) {
+      return `⚠️ Apartamento ${quarto.numero}: falha de conexão com o servidor — confira o bloqueio na Cloudbeds.`;
+    }
   }
 
   async function salvarQuarto(evento) {
@@ -435,35 +572,53 @@ export default function Governanca() {
     if (salvando) return;
     setErroFormQuarto('');
     if (!qNumero.trim()) { setErroFormQuarto('Informe o número do apartamento.'); return; }
+    const interditado = qEstadoApartamento === 'INTERDITADO';
+    if (interditado) {
+      const problema = dataDeVoltaInvalida(qInterditadoAte);
+      if (problema) { setErroFormQuarto(problema); return; }
+    }
 
+    const quartoAntes = editandoQuartoId ? quartos.find((q) => q.id === editandoQuartoId) : null;
+    const mudanca = mudancaDeEstado(quartoAntes || { status: 'SUJO', estado_apartamento: null }, qEstadoApartamento);
     const dados = {
       numero: qNumero.trim(),
       camareira_id: qCamareira ? Number(qCamareira) : null,
-      estado_apartamento: qEstadoApartamento,
+      ...mudanca.campos,
+      prioridade: qPrioridade,
+      prioridade_obs: qPrioridade && qPrioridadeObs.trim() ? qPrioridadeObs.trim().slice(0, 140) : null,
+      // Com bloqueio feito na Cloudbeds, quem troca a data é a rota do
+      // bloqueio (ela precisa saber a data antiga se o bloqueio já venceu).
+      interditado_ate: quartoAntes?.cloudbeds_bloqueio_id ? (quartoAntes.interditado_ate || null) : (interditado ? qInterditadoAte : null),
     };
 
     setSalvando(true);
     if (editandoQuartoId) {
-      const quartoAntes = quartos.find((q) => q.id === editandoQuartoId);
-      const estadoMudou = quartoAntes && quartoAntes.estado_apartamento !== qEstadoApartamento;
       const { error } = await supabase.from('quartos').update(dados).eq('id', editandoQuartoId);
       setSalvando(false);
       if (error) { setErroFormQuarto('Não foi possível salvar. Detalhe técnico: ' + error.message); return; }
       mostrarAviso('Quarto atualizado!');
       setEditandoQuartoId(null);
-      // Mudou a classificação do apartamento (ex.: virou "Interditado" ou
-      // "Não deseja arrumação")? Manda a atualização pra Cloudbeds na
-      // hora, sem esperar a próxima arrumação terminar.
-      if (estadoMudou && quartoAntes.cloudbeds_room_id) {
-        sincronizarComCloudbeds({ ...quartoAntes, ...dados }, condicaoCloudbedsParaEstado(qEstadoApartamento));
+      const quartoDepois = { ...quartoAntes, ...dados };
+      // Trocou o estado? A Cloudbeds fica sabendo na hora.
+      if (mudanca.mudou && quartoAntes.cloudbeds_room_id) sincronizarComCloudbeds(quartoDepois, mudanca.cloudbeds);
+      // Interditado: bloqueia (ou troca a data); saiu de Interditado: libera
+      const precisaBloquear = interditado && (mudanca.mudou || !quartoAntes.cloudbeds_bloqueio_id || quartoAntes.interditado_ate !== qInterditadoAte);
+      const precisaLiberar = !interditado && (quartoAntes.cloudbeds_bloqueio_id || quartoAntes.estado_apartamento === 'INTERDITADO');
+      if (precisaBloquear) {
+        chamarBloqueio(quartoDepois, { acao: 'bloquear', ate: qInterditadoAte, motivo: qMotivoInterdicao }).then((t) => { mostrarSync(t); recarregarQuartos(); });
+      } else if (precisaLiberar && quartoAntes.cloudbeds_bloqueio_id) {
+        chamarBloqueio(quartoDepois, { acao: 'liberar' }).then((t) => { mostrarSync(t); recarregarQuartos(); });
+      } else if (precisaLiberar && quartoAntes.cloudbeds_room_id) {
+        mostrarSync(`Apartamento ${quartoAntes.numero}: não havia bloqueio feito por aqui — se ele foi bloqueado direto na Cloudbeds, libere por lá.`);
       }
     } else {
-      const { error } = await supabase.from('quartos')
-        .insert({ ...dados, status: 'SUJO', hotel_id: usuario.hotel_id });
+      const { data: novo, error } = await supabase.from('quartos')
+        .insert({ ...dados, hotel_id: usuario.hotel_id }).select().single();
       setSalvando(false);
       if (error) { setErroFormQuarto('Não foi possível cadastrar. Detalhe técnico: ' + error.message); return; }
       mostrarAviso('Quarto cadastrado!');
       setMostrarFormNovoQuarto(false);
+      if (interditado && novo) chamarBloqueio(novo, { acao: 'bloquear', ate: qInterditadoAte, motivo: qMotivoInterdicao }).then((t) => { mostrarSync(t); recarregarQuartos(); });
     }
     carregarTudo(usuario);
   }
@@ -471,13 +626,46 @@ export default function Governanca() {
   async function marcarSujo(quarto) {
     if (salvando) return;
     setSalvando(true);
-    const { error } = await supabase.from('quartos')
-      .update({ status: 'SUJO', estado_apartamento: 'SAIDA_SUJO' }).eq('id', quarto.id);
+    const mudanca = mudancaDeEstado(quarto, 'SAIDA_SUJO');
+    const campos = { status: 'SUJO', estado_apartamento: 'SAIDA_SUJO' };
+    const { error } = await supabase.from('quartos').update(campos).eq('id', quarto.id);
     setSalvando(false);
     if (error) { setErro('Não foi possível atualizar. Detalhe técnico: ' + error.message); return; }
-    setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, status: 'SUJO', estado_apartamento: 'SAIDA_SUJO' } : q)));
+    trocarQuarto(quarto.id, campos);
     mostrarAviso(`Quarto ${quarto.numero} marcado como sujo (check-out simulado).`);
-    sincronizarComCloudbeds(quarto, 'dirty');
+    sincronizarComCloudbeds(quarto, { roomCondition: 'dirty', ...(mudanca.cloudbeds.refusedService === false ? { refusedService: false } : {}) });
+  }
+
+  // Bloqueio que ficou para trás (a Cloudbeds não respondeu na hora)
+  async function liberarBloqueio(quarto) {
+    if (salvando) return;
+    setSalvando(true);
+    const texto = await chamarBloqueio(quarto, { acao: 'liberar' });
+    setSalvando(false);
+    mostrarSync(texto);
+    recarregarQuartos();
+  }
+
+  // Interditado que a Cloudbeds não bloqueou na hora: tentar de novo
+  async function bloquearDeNovo(quarto) {
+    if (salvando) return;
+    setSalvando(true);
+    const texto = await chamarBloqueio(quarto, { acao: 'bloquear', ate: quarto.interditado_ate });
+    setSalvando(false);
+    mostrarSync(texto);
+    recarregarQuartos();
+  }
+
+  // Recepção: "faça este primeiro" (hóspede chegando cedo, por exemplo)
+  async function alternarPrioridade(quarto) {
+    if (salvando) return;
+    setSalvando(true);
+    const campos = quarto.prioridade ? { prioridade: false, prioridade_obs: null } : { prioridade: true };
+    const { error } = await supabase.from('quartos').update(campos).eq('id', quarto.id);
+    setSalvando(false);
+    if (error) { setErro('Não foi possível marcar a prioridade. Detalhe técnico: ' + error.message); return; }
+    trocarQuarto(quarto.id, campos);
+    mostrarAviso(campos.prioridade ? `⭐ Apartamento ${quarto.numero} vai para o topo da lista da camareira.` : `Apartamento ${quarto.numero} sem prioridade.`);
   }
 
   async function excluirQuarto(q) {
@@ -500,10 +688,10 @@ export default function Governanca() {
     return true;
   }
 
-  const sessoesFinalizadasPeriodo = sessoes.filter((s) => s.fim_em && dentroDoPeriodo(s.fim_em));
+  const sessoesFinalizadasPeriodo = sessoes.filter((s) => s.fim_em && !s.cancelada && dentroDoPeriodo(s.fim_em));
 
   const quartosLimposAgora = quartos.filter((q) => q.status === 'LIMPO').length;
-  const quartosPendentesAgora = quartos.filter((q) => q.status === 'SUJO' || q.status === 'EM_ARRUMACAO').length;
+  const quartosPendentesAgora = quartos.filter((q) => precisaArrumar(q) || q.status === 'EM_ARRUMACAO').length;
 
   // Ranking de produtividade
   const porCamareira = {};
@@ -543,7 +731,7 @@ export default function Governanca() {
       .update({ cloudbeds_room_id: cloudbedsRoomId || null }).eq('id', quarto.id);
     setSalvandoVinculo(null);
     if (error) { setErro('Não foi possível salvar o vínculo. Detalhe técnico: ' + error.message); return; }
-    setQuartos(quartos.map((q) => (q.id === quarto.id ? { ...q, cloudbeds_room_id: cloudbedsRoomId || null } : q)));
+    trocarQuarto(quarto.id, { cloudbeds_room_id: cloudbedsRoomId || null });
     mostrarAviso(cloudbedsRoomId ? `Apartamento ${quarto.numero} vinculado à Cloudbeds!` : `Vínculo removido do apartamento ${quarto.numero}.`);
   }
 
@@ -553,13 +741,11 @@ export default function Governanca() {
   // Cloudbeds como número) já com o vínculo pronto. Quartos que já existirem
   // aqui (mesmo número, comparando sem diferenciar maiúsculas/espaços) só
   // recebem o vínculo, sem duplicar.
-  // Traduz o status real da Cloudbeds pro nosso — usado na importação e na
-  // sincronização manual. roomBlocked (fora de serviço) tem prioridade.
-  function mapearCondicaoParaStatus(rc) {
-    if (rc.roomBlocked) return 'MANUTENCAO';
-    if (rc.roomCondition === 'dirty') return 'SUJO';
-    if (rc.roomCondition === 'clean' || rc.roomCondition === 'inspected') return 'LIMPO';
-    return 'SUJO';
+  // Traduz a situação real da Cloudbeds para o nosso quarto (limpeza +
+  // estado do apartamento) — mesmas regras do aviso automático.
+  // "Interditado" e "Serviços gerais" só a equipe muda.
+  function camposDaCloudbeds(q, rc) {
+    return estadoAposCloudbeds(q, { condicao: rc.roomCondition, ocupado: !!rc.roomOccupied, bloqueado: !!rc.roomBlocked });
   }
 
   async function importarQuartosDaCloudbeds() {
@@ -572,16 +758,15 @@ export default function Governanca() {
 
     let criados = 0, vinculados = 0, jaOk = 0;
     for (const rc of quartosCloudbeds) {
-      const statusReal = mapearCondicaoParaStatus(rc);
       const existente = porNumero[normalizar(rc.roomName)];
       if (existente) {
-        if (existente.cloudbeds_room_id === rc.roomID && existente.status === statusReal) { jaOk++; continue; }
-        const { error } = await supabase.from('quartos')
-          .update({ cloudbeds_room_id: rc.roomID, status: statusReal }).eq('id', existente.id);
+        const campos = { ...(existente.cloudbeds_room_id !== rc.roomID ? { cloudbeds_room_id: rc.roomID } : {}), ...(camposDaCloudbeds(existente, rc) || {}) };
+        if (!Object.keys(campos).length) { jaOk++; continue; }
+        const { error } = await supabase.from('quartos').update(campos).eq('id', existente.id);
         if (!error) vinculados++;
       } else {
         const { error } = await supabase.from('quartos').insert({
-          numero: rc.roomName, cloudbeds_room_id: rc.roomID, status: statusReal, hotel_id: usuario.hotel_id,
+          numero: rc.roomName, cloudbeds_room_id: rc.roomID, ...estadoInicialDaCloudbeds(rc), hotel_id: usuario.hotel_id,
         });
         if (!error) criados++;
       }
@@ -608,9 +793,9 @@ export default function Governanca() {
       if (!q.cloudbeds_room_id) continue;
       const rc = porRoomId[q.cloudbeds_room_id];
       if (!rc) continue;
-      const statusReal = mapearCondicaoParaStatus(rc);
-      if (statusReal !== q.status) {
-        const { error } = await supabase.from('quartos').update({ status: statusReal }).eq('id', q.id);
+      const campos = camposDaCloudbeds(q, rc);
+      if (campos) {
+        const { error } = await supabase.from('quartos').update(campos).eq('id', q.id);
         if (!error) corrigidos++;
       }
     }
@@ -633,12 +818,56 @@ export default function Governanca() {
       const resultado = await resposta.json();
       setConfigurandoWebhook(false);
       if (!resposta.ok || resultado.erro) { setErroWebhook(resultado.erro || 'Não foi possível concluir.'); return; }
-      mostrarAviso(ativar ? '🔔 Notificações da Cloudbeds ativadas!' : 'Notificações desativadas.');
+      mostrarAviso(ativar ? '🔔 Notificações da Cloudbeds ativadas, com senha!' : 'Notificações desativadas.');
+      if (resultado.aviso) mostrarSync(resultado.aviso);
       carregarTudo(usuario);
     } catch (e) {
       setConfigurandoWebhook(false);
       setErroWebhook('Falha de conexão.');
     }
+  }
+
+  // Campos comuns ao cadastro e à edição: estado (os 8 nomes), previsão de
+  // volta do Interditado e a prioridade da recepção
+  function camposDoEstado() {
+    const efeito = {
+      SAIDA_SUJO: 'Entra na lista da camareira (saída).',
+      ARRUMACAO_OCUPADO: 'Entra na lista da camareira (hóspede no quarto).',
+      VIROU_ARRUMACAO_OCUPADO: 'Entra na lista da camareira (hóspede no quarto).',
+      NAO_DESEJA_ARRUMACAO_OCUPADO: 'Sai da lista de hoje. Na Cloudbeds: "Recusou serviço".',
+      PREVISAO_SAIDA_OCUPADO: 'Aparece em "Próximas saídas". Vira "Saída / Apt Sujo" sozinho no check-out.',
+      LIMPO: 'Limpo — na Cloudbeds fica "limpo".',
+      SERVICOS_GERAIS: 'Fica em manutenção, sem tirar da venda.',
+      INTERDITADO: 'Fica em manutenção e sai da venda na Cloudbeds até a previsão de volta.',
+    }[qEstadoApartamento];
+    return (
+      <>
+        <label className="rotulo">Estado do Apartamento</label>
+        <select className="campo" value={qEstadoApartamento} onChange={(e) => setQEstadoApartamento(e.target.value)}>
+          {Object.entries(ESTADO_APARTAMENTO_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
+        </select>
+        {efeito && <p className="texto-suave gv-efeito">{efeito}</p>}
+        {qEstadoApartamento === 'INTERDITADO' && (
+          <div className="gv-interdicao">
+            <label className="rotulo" htmlFor="gv-volta">Previsão de volta *</label>
+            <input id="gv-volta" className="campo" type="date" min={hojeNoHotel()} value={qInterditadoAte}
+              onChange={(e) => { setQInterditadoAte(e.target.value); setErroFormQuarto(''); }} />
+            <p className="texto-suave gv-efeito">O quarto fica bloqueado na Cloudbeds de hoje até este dia (inclusive).</p>
+            <label className="rotulo" htmlFor="gv-motivo">Motivo (opcional)</label>
+            <input id="gv-motivo" className="campo" type="text" maxLength={120} value={qMotivoInterdicao}
+              onChange={(e) => setQMotivoInterdicao(e.target.value)} placeholder="Ex.: troca do ar-condicionado" />
+          </div>
+        )}
+        <label className="gv-check-prioridade">
+          <input type="checkbox" checked={qPrioridade} onChange={(e) => setQPrioridade(e.target.checked)} />
+          <span>⭐ Prioridade — a camareira faz este quarto primeiro</span>
+        </label>
+        {qPrioridade && (
+          <input className="campo" type="text" maxLength={140} value={qPrioridadeObs}
+            onChange={(e) => setQPrioridadeObs(e.target.value)} placeholder="Motivo (opcional). Ex.: hóspede chega às 11h" aria-label="Motivo da prioridade" />
+        )}
+      </>
+    );
   }
 
   if (verificandoLogin) {
@@ -658,7 +887,7 @@ export default function Governanca() {
 
       {aviso && <div className="aviso-sucesso">{aviso}</div>}
       {erro && <div className="aviso-erro">{erro}</div>}
-      {msgSync && <div className="gv-sync">🔄 {msgSync}</div>}
+      {msgSync.length > 0 && <div className="gv-sync" role="status">{msgSync.map((m) => <div key={m}>{m}</div>)}</div>}
 
       {/* Sub-abas */}
       <nav className="gv-abas" aria-label="Seções">
@@ -693,10 +922,10 @@ export default function Governanca() {
         <section style={{ maxWidth: 520, margin: '0 auto' }}>
           {!sessaoAtiva ? (
             <>
-              <p className="texto-suave" style={{ fontSize: 13 }}>
-                Estes são os apartamentos designados para você. Toque no quarto que for arrumar —
-                isso já representa a leitura do QR Code fixado na porta dele.
-              </p>
+              <div className="gv-cam-topo">
+                <strong>{meusQuartos.length === 0 ? 'Nenhum quarto seu para arrumar' : `${meusQuartos.length} quarto(s) para arrumar`}</strong>
+                <span className="texto-suave">A lista já está na ordem: prioridades, saídas e depois os quartos com hóspede.</span>
+              </div>
               {meusQuartos.length === 0 ? (
                 <div className="cartao" style={{ textAlign: 'center', color: 'var(--texto-suave)' }}>
                   Nenhum apartamento pendente para você no momento. 🎉
@@ -704,27 +933,46 @@ export default function Governanca() {
               ) : (
                 <div className="gv-lista-quartos">
                   {meusQuartos.map((q) => (
-                    <button key={q.id} type="button" className="cartao gv-quarto-botao"
-                      onClick={() => iniciarArrumacao(q)} disabled={salvando}>
-                      <span className="gv-quarto-numero">
-                        Apartamento {q.numero}
-                        <span className="texto-suave" style={{ display: 'block', fontSize: 12, fontWeight: 400 }}>
-                          {ESTADO_APARTAMENTO_LABEL[q.estado_apartamento] || ESTADO_APARTAMENTO_LABEL.SAIDA_SUJO}
-                        </span>
-                      </span>
-                      <span className="gv-quarto-seta">→</span>
-                    </button>
+                    <CartaoDaCamareira key={q.id} q={q} agora={agoraTela} salvando={salvando}
+                      onEntrar={() => entrarNoQuarto(q)} onNaoPerturbe={() => marcarNaoPerturbe(q)} />
                   ))}
+                </div>
+              )}
+
+              {semCamareira.length > 0 && (
+                <div className="gv-cam-bloco">
+                  <h2 className="gv-cam-titulo">Sem camareira ({semCamareira.length})</h2>
+                  <p className="texto-suave" style={{ fontSize: 13, margin: '0 0 8px' }}>
+                    Ninguém pegou estes ainda. Ao tocar em &quot;Pegar e entrar&quot;, o quarto passa a ser seu.
+                  </p>
+                  <div className="gv-lista-quartos">
+                    {semCamareira.map((q) => (
+                      <CartaoDaCamareira key={q.id} q={q} agora={agoraTela} salvando={salvando} semDona
+                        onEntrar={() => entrarNoQuarto(q)} onNaoPerturbe={() => marcarNaoPerturbe(q)} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {proximasSaidas.length > 0 && (
+                <div className="gv-cam-bloco">
+                  <h2 className="gv-cam-titulo">Próximas saídas ({proximasSaidas.length})</h2>
+                  <p className="texto-suave" style={{ fontSize: 13, margin: '0 0 8px' }}>
+                    O hóspede ainda está no quarto. Quando a recepção fizer o check-out, ele entra na sua lista sozinho.
+                  </p>
+                  <div className="gv-saidas">
+                    {proximasSaidas.map((q) => <span key={q.id} className="gv-saida-chip">{q.numero}</span>)}
+                  </div>
                 </div>
               )}
             </>
           ) : (
-            <div className="cartao">
-              <h2 style={{ fontSize: '1.2rem', marginTop: 0 }}>Apartamento {sessaoAtiva.quarto.numero}</h2>
-              <p className="texto-suave" style={{ fontSize: 13 }}>
-                {ESTADO_APARTAMENTO_LABEL[sessaoAtiva.quarto.estado_apartamento] || ESTADO_APARTAMENTO_LABEL.SAIDA_SUJO}
-                {' · '}Marque cada item conforme for concluindo:
+            <div className="cartao gv-sessao">
+              <h2 className="gv-sessao-numero">Apartamento {sessaoAtiva.quarto.numero}</h2>
+              <p className="texto-suave" style={{ fontSize: 13, marginTop: 0 }}>
+                {rotuloDoEstado(sessaoAtiva.quarto)} · você entrou às {horaCurta(sessaoAtiva.inicio_em)}
               </p>
+              <p style={{ fontSize: 14, margin: '10px 0 0' }}>Marque cada item conforme for concluindo:</p>
 
               <div className="gv-checklist">
                 {CHECKLIST_ITENS.map((item) => (
@@ -736,9 +984,12 @@ export default function Governanca() {
                 ))}
               </div>
 
-              <button type="button" className="botao botao-principal" style={{ width: '100%', marginTop: 16 }}
+              <button type="button" className="botao botao-principal gv-botao-grande gv-botao-limpo"
                 onClick={finalizarArrumacao} disabled={salvando}>
-                {salvando ? 'Finalizando…' : 'Finalizar Arrumação'}
+                {salvando ? 'Salvando…' : '✅ Quarto Limpo'}
+              </button>
+              <button type="button" className="gv-desistir" onClick={desistirDoQuarto} disabled={salvando}>
+                Entrei no quarto errado — voltar para a lista
               </button>
             </div>
           )}
@@ -782,7 +1033,7 @@ export default function Governanca() {
 
           <div className="gv-barra">
             <p className="texto-suave" style={{ fontSize: 13, margin: 0 }}>
-              Um quarto sem camareira atribuída fica invisível na tela de arrumação de todo mundo.
+              Quarto sujo sem camareira aparece para todas as camareiras em &quot;Sem camareira&quot;, e a primeira que pegar fica com ele.
             </p>
             {souAdmin && (
               <button type="button" className="botao botao-principal" onClick={abrirNovoQuarto}>
@@ -806,10 +1057,7 @@ export default function Governanca() {
                   Nenhum usuário com o perfil "Camareira" cadastrado ainda — crie um em Administração → Usuários.
                 </p>
               )}
-              <label className="rotulo">Estado do Apartamento</label>
-              <select className="campo" value={qEstadoApartamento} onChange={(e) => setQEstadoApartamento(e.target.value)}>
-                {Object.entries(ESTADO_APARTAMENTO_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
-              </select>
+              {camposDoEstado()}
               {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
                 <button type="submit" className="botao botao-principal" disabled={salvando}>
@@ -842,10 +1090,7 @@ export default function Governanca() {
                           Nenhum usuário com o perfil "Camareira" cadastrado ainda.
                         </p>
                       )}
-                      <label className="rotulo">Estado do Apartamento</label>
-                      <select className="campo" value={qEstadoApartamento} onChange={(e) => setQEstadoApartamento(e.target.value)}>
-                        {Object.entries(ESTADO_APARTAMENTO_LABEL).map(([chave, rotulo]) => <option key={chave} value={chave}>{rotulo}</option>)}
-                      </select>
+                      {camposDoEstado()}
                       {erroFormQuarto && <div className="aviso-erro">{erroFormQuarto}</div>}
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
                         <button type="submit" className="botao botao-principal" disabled={salvando}>
@@ -865,10 +1110,24 @@ export default function Governanca() {
                           <span className="gv-badge" style={{ background: '#EAF0FB', color: '#2C4C7C' }}>
                             {ESTADO_APARTAMENTO_LABEL[q.estado_apartamento] || ESTADO_APARTAMENTO_LABEL.SAIDA_SUJO}
                           </span>
+                          {q.prioridade && <span className="gv-badge gv-tag-prioridade">⭐ Prioridade</span>}
+                          {naoPerturbeAtivo(q) && <span className="gv-badge gv-tag-dnd">🚫 Não perturbe às {horaCurta(q.nao_perturbe_em)}</span>}
+                          {q.cloudbeds_bloqueio_id && (
+                            <span className={bloqueioVencido(q) ? 'gv-badge gv-tag-vencido' : 'gv-badge gv-tag-bloqueio'}>
+                              {bloqueioVencido(q) ? `⚠️ Bloqueio venceu em ${formatarDia(q.interditado_ate)}` : `🔒 Fora da venda até ${formatarDia(q.interditado_ate)}`}
+                            </span>
+                          )}
+                          {!q.cloudbeds_bloqueio_id && q.estado_apartamento === 'INTERDITADO' && (
+                            <span className={q.cloudbeds_room_id ? 'gv-badge gv-tag-vencido' : 'gv-badge gv-tag-dnd'}>
+                              {q.cloudbeds_room_id ? '⚠️ Ainda à venda na Cloudbeds' : 'Sem vínculo com a Cloudbeds'}
+                              {q.interditado_ate ? ` · volta prevista ${formatarDia(q.interditado_ate)}` : ''}
+                            </span>
+                          )}
                         </div>
                         <div className="texto-suave" style={{ fontSize: 13 }}>
                           {q.camareira_id ? `Camareira: ${nomeDe(q.camareira_id)}` : 'Sem camareira atribuída'}
                           {q.ultima_limpeza ? ` · última limpeza em ${formatarDataHora(q.ultima_limpeza)}` : ''}
+                          {q.prioridade && q.prioridade_obs ? ` · ⭐ ${q.prioridade_obs}` : ''}
                         </div>
                         {quartosCloudbeds && (
                           <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -886,9 +1145,24 @@ export default function Governanca() {
                         )}
                       </div>
                       <div className="gv-item-quarto-acoes">
-                        {q.status !== 'SUJO' && q.status !== 'EM_ARRUMACAO' && (
+                        {q.status !== 'SUJO' && q.status !== 'EM_ARRUMACAO' && q.status !== 'MANUTENCAO' && (
                           <button type="button" className="botao botao-suave" onClick={() => marcarSujo(q)} disabled={salvando}>
                             Marcar sujo
+                          </button>
+                        )}
+                        {(precisaArrumar(q) || q.prioridade) && (
+                          <button type="button" className="botao botao-suave" onClick={() => alternarPrioridade(q)} disabled={salvando}>
+                            {q.prioridade ? 'Tirar prioridade' : '⭐ Prioridade'}
+                          </button>
+                        )}
+                        {!q.cloudbeds_bloqueio_id && q.cloudbeds_room_id && q.estado_apartamento === 'INTERDITADO' && q.interditado_ate && !bloqueioVencido(q) && (
+                          <button type="button" className="botao botao-suave" onClick={() => bloquearDeNovo(q)} disabled={salvando}>
+                            🔒 Bloquear na Cloudbeds
+                          </button>
+                        )}
+                        {q.cloudbeds_bloqueio_id && q.estado_apartamento !== 'INTERDITADO' && (
+                          <button type="button" className="botao botao-suave" onClick={() => liberarBloqueio(q)} disabled={salvando}>
+                            🔓 Liberar na Cloudbeds
                           </button>
                         )}
                         <button type="button" className="botao botao-suave" onClick={() => abrirEdicaoQuarto(q)}>Editar</button>
@@ -1022,19 +1296,43 @@ export default function Governanca() {
             <p className="texto-suave" style={{ fontSize: 13 }}>
               Quando ativado, a própria Cloudbeds avisa nosso sistema instantaneamente toda vez que o status de limpeza de um quarto mudar por lá (inclusive quando ela marca "sujo" sozinha após um check-out) — sem precisar de nenhuma ação manual ou de ficar clicando em "Corrigir status".
             </p>
+            <p className="texto-suave" style={{ fontSize: 13 }}>
+              Além da limpeza, o aviso acerta o estado do apartamento: check-out feito → &quot;Saída / Apt Sujo&quot;;
+              quarto vago e limpo → &quot;Limpo / Apt limpo&quot;. &quot;Interditado&quot; e &quot;Serviços gerais&quot; só a equipe muda.
+            </p>
             {webhookAtivo ? (
               <>
-                <p style={{ color: 'var(--sucesso-texto, #1E6B3C)', fontWeight: 700, fontSize: 14 }}>✅ Ativado</p>
-                <button type="button" className="botao botao-suave" onClick={() => configurarWebhook(false)} disabled={configurandoWebhook}>
-                  {configurandoWebhook ? 'Desativando…' : 'Desativar notificações'}
-                </button>
+                <p style={{ color: 'var(--sucesso-texto, #1E6B3C)', fontWeight: 700, fontSize: 14 }}>
+                  ✅ Ativado{webhookComSenha ? ' — com senha' : ''}
+                </p>
+                {!webhookComSenha && (
+                  <div className="gv-alerta" role="alert">
+                    ⚠️ Estas notificações foram ativadas antes de existir a senha. Hoje qualquer pessoa que descobrir o endereço
+                    consegue mudar o status dos quartos. Clique em <strong>Reativar com senha</strong> — leva um segundo.
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {!webhookComSenha && (
+                    <button type="button" className="botao botao-principal" onClick={() => configurarWebhook(true)} disabled={configurandoWebhook}>
+                      {configurandoWebhook ? 'Reativando…' : '🔐 Reativar com senha'}
+                    </button>
+                  )}
+                  <button type="button" className="botao botao-suave" onClick={() => configurarWebhook(false)} disabled={configurandoWebhook}>
+                    {configurandoWebhook ? 'Aguarde…' : 'Desativar notificações'}
+                  </button>
+                </div>
               </>
             ) : (
               <button type="button" className="botao botao-principal" onClick={() => configurarWebhook(true)} disabled={configurandoWebhook}>
                 {configurandoWebhook ? 'Ativando…' : '🔔 Ativar notificações da Cloudbeds'}
               </button>
             )}
-            {erroWebhook && <div className="aviso-erro" style={{ marginTop: 10 }}>{erroWebhook}</div>}
+            {erroWebhook && (
+              <div className="aviso-erro" style={{ marginTop: 10 }}>
+                {erroWebhook}
+                {webhookAtivo && ' Se a Cloudbeds disser que a inscrição já existe, clique em "Desativar notificações" e depois ative de novo.'}
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -1064,6 +1362,10 @@ export default function Governanca() {
                     <option key={chave} value={chave}>{rotulo}</option>
                   ))}
                 </select>
+                <label className="rotulo" htmlFor="gv-manut-foto">Foto do problema (opcional)</label>
+                <input id="gv-manut-foto" className="campo" type="file" accept="image/*" capture="environment"
+                  onChange={(e) => setManutFoto(e.target.files?.[0] || null)} />
+                {manutFoto && <p className="texto-suave" style={{ fontSize: 12, margin: '4px 0 0' }}>📷 {manutFoto.name}</p>}
               </>
             )}
 
@@ -1128,6 +1430,35 @@ export default function Governanca() {
   );
 }
 
+// ---- Cartão de um quarto na lista da camareira (celular) --------------------
+
+function CartaoDaCamareira({ q, agora, salvando, semDona, onEntrar, onNaoPerturbe }) {
+  const grupo = grupoNaFila(q, agora);
+  const dnd = naoPerturbeAtivo(q, agora);
+  return (
+    <div className={`cartao gv-cam-cartao gv-grupo-${grupo}`}>
+      <div className="gv-cam-cabeca">
+        <span className="gv-cam-numero">{q.numero}</span>
+        <span className="gv-cam-info">
+          <span className="gv-cam-estado">{rotuloDoEstado(q)}</span>
+          {q.prioridade && <span className="gv-tag gv-tag-prioridade">⭐ Prioridade{q.prioridade_obs ? ` — ${q.prioridade_obs}` : ''}</span>}
+          {dnd && <span className="gv-tag gv-tag-dnd">🚫 Não perturbe às {horaCurta(q.nao_perturbe_em)}</span>}
+        </span>
+      </div>
+      <div className="gv-cam-botoes">
+        <button type="button" className="botao botao-principal gv-botao-grande" onClick={onEntrar} disabled={salvando}>
+          {semDona ? '🙋 Pegar e entrar' : dnd ? '🚪 Tentar de novo' : '🚪 Entrei no quarto'}
+        </button>
+        {!dnd && !semDona && (
+          <button type="button" className="botao gv-botao-grande gv-botao-dnd" onClick={onNaoPerturbe} disabled={salvando}>
+            🚫 Não Perturbe
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- Estilos específicos deste módulo ---------------------------------------
 
 function EstilosGovernanca() {
@@ -1163,6 +1494,43 @@ function EstilosGovernanca() {
         font-size: 15px; cursor: pointer; border-bottom: 1px solid var(--borda);
       }
       .gv-check-item input { width: 22px; height: 22px; flex-shrink: 0; }
+
+      .gv-cam-topo { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; font-size: 15px; }
+      .gv-cam-topo .texto-suave { font-size: 12px; }
+      .gv-cam-cartao { padding: 14px; border-left: 6px solid var(--borda); }
+      .gv-grupo-0 { border-left-color: #C9A227; }
+      .gv-grupo-1 { border-left-color: #C0392B; }
+      .gv-grupo-2 { border-left-color: #2C6FAF; }
+      .gv-grupo-9 { border-left-color: #9AA5A0; opacity: 0.85; }
+      .gv-cam-cabeca { display: flex; align-items: center; gap: 14px; }
+      .gv-cam-numero { font-family: var(--fonte-titulo); font-size: 30px; font-weight: 700; min-width: 64px; line-height: 1; }
+      .gv-cam-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .gv-cam-estado { font-size: 14px; font-weight: 600; }
+      .gv-tag { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 8px; padding: 3px 8px; width: fit-content; max-width: 100%; }
+      .gv-tag-prioridade { background: #FBF0C9; color: #7A5A00; }
+      .gv-tag-dnd { background: #ECEFEE; color: #4A5551; }
+      .gv-tag-bloqueio { background: #F3E5E5; color: #8A1F1F; }
+      .gv-tag-vencido { background: #FDF3D7; color: #8A6100; }
+      .gv-cam-botoes { display: flex; gap: 8px; margin-top: 12px; }
+      .gv-cam-botoes .gv-botao-grande:first-child { flex: 2; }
+      .gv-cam-botoes .gv-botao-grande + .gv-botao-grande { flex: 1; }
+      .gv-botao-grande { min-height: 56px; font-size: 16px; font-weight: 700; border-radius: 14px; }
+      .gv-botao-dnd { background: var(--branco); border: 2px solid #9AA5A0; color: #4A5551; }
+      .gv-cam-bloco { margin-top: 22px; }
+      .gv-cam-titulo { font-size: 1rem; margin: 0 0 4px; }
+      .gv-saidas { display: flex; flex-wrap: wrap; gap: 8px; }
+      .gv-saida-chip { border: 1px dashed var(--borda); border-radius: 10px; padding: 8px 12px; font-weight: 700; background: var(--branco); }
+      .gv-sessao-numero { font-family: var(--fonte-titulo); font-size: 1.7rem; margin: 0 0 4px; }
+      .gv-botao-limpo { width: 100%; margin-top: 16px; min-height: 64px; font-size: 18px; }
+      .gv-desistir {
+        display: block; width: 100%; margin-top: 12px; background: none; border: none; color: var(--texto-suave);
+        text-decoration: underline; font-size: 13px; cursor: pointer; padding: 10px; font-family: inherit;
+      }
+      .gv-efeito { font-size: 12px; margin: 4px 0 0; }
+      .gv-interdicao { background: #FBF4F4; border: 1px solid #EBCACA; border-radius: 12px; padding: 4px 12px 12px; margin-top: 10px; }
+      .gv-check-prioridade { display: flex; align-items: center; gap: 10px; margin: 14px 0 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
+      .gv-check-prioridade input { width: 20px; height: 20px; }
+      .gv-alerta { background: #FDF3D7; color: #8A6100; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin: 8px 0 12px; }
 
       /* Quartos */
       .gv-barra { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
