@@ -2,7 +2,8 @@
 
 // ============================================================================
 // GOVERNANÇA (Housekeeping)
-// - Camareira (celular): lista dos quartos dela já na ordem certa
+// - Camareira (celular): avisos no celular (Web Push) e pedidos especiais da
+//   recepção no topo; lista dos quartos dela já na ordem certa
 //   (prioridade da recepção → saídas → quartos com hóspede → "Não perturbe"
 //   no fim). Botões grandes: "Entrei no quarto", "Não Perturbe" e, lá dentro,
 //   "Quarto Limpo". Quartos sujos sem camareira aparecem em "Sem camareira"
@@ -41,6 +42,8 @@ import {
 import { andarDoQuarto, nomeDoAndar, tipoDoQuarto, resumoProdutividade, media, LIMITE_MEDIA_MIN } from '../../lib/governanca/distribuicao';
 import PainelGovernanta from '../components/governanca/PainelGovernanta';
 import CamareirasCloudbeds from '../components/governanca/CamareirasCloudbeds';
+import AvisosNoCelular from '../components/governanca/AvisosNoCelular';
+import PedidosCamareira from '../components/governanca/PedidosCamareira';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -947,6 +950,8 @@ export default function Governanca() {
       {/* ================= CAMAREIRA ================= */}
       {!carregando && subAba === 'camareira' && (
         <section style={{ maxWidth: 520, margin: '0 auto' }}>
+          {usuario?.papel === 'CAMAREIRA' && <AvisosNoCelular />}
+          <PedidosCamareira usuario={usuario} />
           {!sessaoAtiva ? (
             <>
               <div className="gv-cam-topo">

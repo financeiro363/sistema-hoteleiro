@@ -10,6 +10,8 @@
 // - Vistoria (opcional): quartos limpos hoje ainda não vistoriados; aprovar
 //   manda "Inspecionado" para a Cloudbeds; reprovar devolve o quarto para a
 //   mesma camareira, no topo da lista, com o que precisa refazer
+// - Pedidos especiais (toalha extra...) com aviso no celular da camareira
+//   (PedidosRecepcao.js)
 // - Estoque e enxoval no mínimo
 // Regras em lib/governanca/distribuicao.js e lib/estoqueAlertas.js.
 // ============================================================================
@@ -23,6 +25,7 @@ import {
   ITENS_VISTORIA, resultadoDaVistoria, textoRefazer, paraVistoriar,
 } from '../../../lib/governanca/distribuicao';
 import { alertasDeEstoque, textoDoAlerta } from '../../../lib/estoqueAlertas';
+import PedidosRecepcao from './PedidosRecepcao';
 
 function hora(valor) {
   if (!valor) return '';
@@ -213,6 +216,8 @@ export default function PainelGovernanta({ usuario, quartos, sessoes, camareiras
         <div className="cartao gp-numero"><strong>{filaVistoria.length}</strong><span>Para vistoriar</span></div>
         <div className="cartao gp-numero"><strong>{manutencao}</strong><span>Manutenção</span></div>
       </div>
+
+      <PedidosRecepcao usuario={usuario} quartos={quartos} />
 
       {/* ---- Escala e distribuição ---- */}
       <div className="cartao gp-bloco">

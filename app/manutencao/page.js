@@ -13,6 +13,10 @@
 //   de barras dos locais que mais geram chamados (SVG puro, sem dependências)
 // - Log de Auditoria (admin, imutável): abertura, atribuição, mudança de
 //   status e conclusão, com quem/quando
+// - Chamado de apartamento pode TIRAR O QUARTO DA VENDA até uma data: o
+//   quarto vira "Interditado" na Governança e é bloqueado na Cloudbeds. Ao
+//   concluir o chamado, o sistema oferece liberar (o quarto vai para a lista
+//   da camareira como "Saída / Apt Sujo"). Rota: /api/governanca-bloqueio-cloudbeds.
 // - Chamados abertos pela camareira na Governança chegam com origem
 //   GOVERNANCA ("Via checklist") e, se ela tirou, com a foto do problema
 // ============================================================================
@@ -22,6 +26,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { buscarTodos } from '../../lib/buscarTodos';
+import { dataDeVoltaInvalida, formatarDia, hojeNoHotel, compararNumero, bloqueioVencido } from '../../lib/governanca/regras';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -82,7 +87,12 @@ export default function Manutencao() {
   const [fDescricao, setFDescricao] = useState('');
   const [fPrioridade, setFPrioridade] = useState('MEDIA');
   const [fResponsavel, setFResponsavel] = useState('');
+  const [fQuartoId, setFQuartoId] = useState('');
+  const [fTiraVenda, setFTiraVenda] = useState(false);
+  const [fAte, setFAte] = useState('');
   const [erroForm, setErroForm] = useState('');
+  const [quartos, setQuartos] = useState([]);
+  const [liberar, setLiberar] = useState(null); // { chamado, quarto }
 
   // Insights
   const [insightPeriodo, setInsightPeriodo] = useState('MES'); // DIA | MES | ANO | TUDO
@@ -140,6 +150,12 @@ export default function Manutencao() {
       setNomesUsuarios(mapa);
     }
 
+    // Apartamentos (para tirar da venda pelo chamado). Se não der para ler, a
+    // opção só não aparece.
+    const { data: qs } = await supabase.from('quartos')
+      .select('id, numero, status, estado_apartamento, interditado_ate, cloudbeds_bloqueio_id, cloudbeds_room_id').eq('hotel_id', u.hotel_id);
+    setQuartos((qs || []).sort((a, b) => compararNumero(a.numero, b.numero)));
+
     const { data: lista, error } = await buscarTodos(() => supabase
       .from('manutencoes').select('*').order('criado_em', { ascending: false }));
     if (error) setErro('Não foi possível carregar os chamados. Detalhe técnico: ' + error.message);
@@ -179,6 +195,12 @@ export default function Manutencao() {
     setErroForm('');
     if (!fLocal.trim()) { setErroForm('Informe o local (apartamento ou área).'); return; }
     if (!fDescricao.trim()) { setErroForm('Descreva o problema.'); return; }
+    const quartoEscolhido = quartos.find((q) => String(q.id) === String(fQuartoId)) || null;
+    const tiraVenda = !!quartoEscolhido && fTiraVenda;
+    if (tiraVenda) {
+      const problema = dataDeVoltaInvalida(fAte);
+      if (problema) { setErroForm(problema); return; }
+    }
 
     const responsavelId = fResponsavel ? Number(fResponsavel) : null;
 
@@ -193,20 +215,35 @@ export default function Manutencao() {
         origem: 'MANUAL',
         criado_por_id: usuario.id,
         hotel_id: usuario.hotel_id,
+        ...(quartoEscolhido ? { quarto_id: quartoEscolhido.id, tira_da_venda: tiraVenda } : {}),
       })
       .select().single();
+    if (error) { setSalvando(false); setErroForm('Não foi possível abrir o chamado. Detalhe técnico: ' + error.message); return; }
+
+    // Tira da venda: Interditado na Governança + bloqueio na Cloudbeds
+    let textoBloqueio = '';
+    if (tiraVenda) {
+      const r = await chamarBloqueio({ quartoId: quartoEscolhido.id, acao: 'bloquear', ate: fAte, motivo: fDescricao.trim().slice(0, 120), interditar: true });
+      textoBloqueio = r.naoVinculado
+        ? ` Apartamento ${quartoEscolhido.numero} ficou "Interditado" aqui (não está ligado à Cloudbeds — bloqueie lá à mão).`
+        : r.ok ? ` 🔒 Apartamento ${quartoEscolhido.numero} fora da venda até ${formatarDia(fAte)}.`
+          : ` ⚠️ Apartamento ${quartoEscolhido.numero} ficou "Interditado" aqui, mas a Cloudbeds não bloqueou: ${r.erro} Bloqueie lá à mão.`;
+    }
     setSalvando(false);
-    if (error) { setErroForm('Não foi possível abrir o chamado. Detalhe técnico: ' + error.message); return; }
 
     await registrarLog(criado.local, 'Chamado aberto',
       `Chamado aberto por ${usuario.nome} (prioridade ${PRIORIDADE_LABEL[fPrioridade]}).`);
     if (responsavelId) {
       await registrarLog(criado.local, 'Atribuído', `Atribuído a ${nomeDe(responsavelId)}.`);
     }
+    if (tiraVenda) {
+      await registrarLog(criado.local, 'Fora da venda', `Apartamento ${quartoEscolhido.numero} tirado da venda até ${formatarDia(fAte)} por ${usuario.nome}.`);
+    }
 
     setFLocal(''); setFDescricao(''); setFPrioridade('MEDIA'); setFResponsavel('');
+    setFQuartoId(''); setFTiraVenda(false); setFAte('');
     setMostrarForm(false);
-    mostrarAviso('Chamado aberto!');
+    mostrarAviso('Chamado aberto!' + textoBloqueio);
     carregarTudo(usuario);
   }
 
@@ -232,6 +269,37 @@ export default function Manutencao() {
         : `Status alterado para ${rotulo} por ${usuario.nome}.`);
 
     setChamados(chamados.map((c) => (c.id === chamado.id ? { ...c, status: novoStatus, ...extra } : c)));
+    // Chamado que tirou o quarto da venda: oferece liberar
+    if (novoStatus === 'CONCLUIDO' && chamado.tira_da_venda && chamado.quarto_id) {
+      const q = quartos.find((x) => String(x.id) === String(chamado.quarto_id));
+      if (q && q.estado_apartamento === 'INTERDITADO') setLiberar({ chamado, quarto: q });
+    }
+    carregarTudo(usuario);
+  }
+
+  async function chamarBloqueio(corpo) {
+    try {
+      const { data: sessao } = await supabase.auth.getSession();
+      const resposta = await fetch('/api/governanca-bloqueio-cloudbeds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessao.session.access_token}` },
+        body: JSON.stringify(corpo),
+      });
+      const r = await resposta.json().catch(() => ({}));
+      return { ok: resposta.ok && !r.erro, ...r };
+    } catch (e) { return { ok: false, erro: 'falha de conexão.' }; }
+  }
+
+  async function confirmarLiberar() {
+    if (!liberar || salvando) return;
+    setSalvando(true);
+    const { quarto, chamado } = liberar;
+    const r = await chamarBloqueio({ quartoId: quarto.id, acao: 'liberar', estadoDepois: 'SAIDA_SUJO' });
+    setSalvando(false);
+    setLiberar(null);
+    if (!r.ok && !r.naoVinculado) { setErro(`Não foi possível liberar o apartamento ${quarto.numero}: ${r.erro} Tente pela Governança → Quartos.`); return; }
+    await registrarLog(chamado.local, 'Liberado para venda', `Apartamento ${quarto.numero} liberado por ${usuario.nome} ao concluir o chamado.`);
+    mostrarAviso(`🔓 Apartamento ${quarto.numero} liberado${r.naoVinculado ? ' aqui (libere também na Cloudbeds)' : ' para venda'} e enviado para a camareira arrumar.`);
     carregarTudo(usuario);
   }
 
@@ -324,6 +392,15 @@ export default function Manutencao() {
             {PRIORIDADE_LABEL[c.prioridade]}
           </span>
           {c.origem === 'GOVERNANCA' && <span className="mn-tag mn-tag-gov">Via checklist</span>}
+          {(() => {
+            const q = c.tira_da_venda && quartos.find((x) => String(x.id) === String(c.quarto_id));
+            if (!q || q.estado_apartamento !== 'INTERDITADO') return null;
+            return (
+              <span className={bloqueioVencido(q) ? 'mn-tag mn-tag-vencido' : 'mn-tag mn-tag-bloqueio'}>
+                {q.interditado_ate ? `🔒 Fora da venda até ${formatarDia(q.interditado_ate)}` : '🔒 Fora da venda'}
+              </span>
+            );
+          })()}
         </div>
         <div className="mn-card-desc">{c.descricao}</div>
         {c.foto_caminho && (
@@ -409,6 +486,39 @@ export default function Manutencao() {
           <label className="rotulo">Local *</label>
           <input className="campo" type="text" value={fLocal}
             onChange={(e) => setFLocal(e.target.value)} placeholder="Ex.: Apartamento 104, Piscina, Recepção…" />
+
+          {quartos.length > 0 && (
+            <>
+              <label className="rotulo">Apartamento (se for num apartamento)</label>
+              <select className="campo" value={fQuartoId} onChange={(e) => {
+                const id = e.target.value;
+                setFQuartoId(id);
+                const q = quartos.find((x) => String(x.id) === String(id));
+                if (q && (!fLocal.trim() || /^Apartamento /.test(fLocal))) setFLocal(`Apartamento ${q.numero}`);
+                if (!q) setFTiraVenda(false);
+              }}>
+                <option value="">— Não é apartamento / não escolher —</option>
+                {quartos.map((q) => <option key={q.id} value={q.id}>{q.numero}{q.estado_apartamento === 'INTERDITADO' ? ' (já interditado)' : ''}</option>)}
+              </select>
+              {fQuartoId && (
+                <div className="mn-venda">
+                  <label className="mn-venda-check">
+                    <input type="checkbox" checked={fTiraVenda} onChange={(e) => setFTiraVenda(e.target.checked)} />
+                    <span>🔒 Tirar o apartamento da venda enquanto o conserto não termina</span>
+                  </label>
+                  {fTiraVenda && (
+                    <>
+                      <label className="rotulo" htmlFor="mn-ate">Previsão de volta *</label>
+                      <input id="mn-ate" className="campo" type="date" min={hojeNoHotel()} value={fAte} onChange={(e) => setFAte(e.target.value)} />
+                      <p className="texto-suave" style={{ fontSize: 12, margin: '4px 0 0' }}>
+                        O apartamento fica &quot;Interditado&quot; na Governança e bloqueado na Cloudbeds até este dia. Ao concluir o chamado, o sistema pergunta se libera.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+            </>
+          )}
 
           <label className="rotulo">Descrição do problema *</label>
           <textarea className="campo" rows={3} value={fDescricao}
@@ -600,6 +710,23 @@ export default function Manutencao() {
         </section>
       )}
 
+      {liberar && (
+        <div className="mn-foto-fundo" role="dialog" aria-modal="true" aria-label="Liberar apartamento">
+          <div className="mn-foto-caixa" style={{ maxWidth: 420 }}>
+            <h2 style={{ fontSize: '1.15rem', marginTop: 0 }}>Liberar o apartamento {liberar.quarto.numero}?</h2>
+            <p className="texto-suave" style={{ fontSize: 14 }}>
+              O chamado foi concluído. Ao liberar, o apartamento volta para a venda na Cloudbeds e entra na lista da camareira como &quot;Saída / Apt Sujo&quot;.
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+              <button type="button" className="botao botao-principal" onClick={confirmarLiberar} disabled={salvando}>
+                {salvando ? 'Liberando…' : '🔓 Liberar agora'}
+              </button>
+              <button type="button" className="botao botao-suave" onClick={() => setLiberar(null)} disabled={salvando}>Deixar fora da venda</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {fotoAberta && (
         <div className="mn-foto-fundo" role="dialog" aria-modal="true" aria-label={`Foto — ${fotoAberta.local}`} onClick={() => setFotoAberta(null)}>
           <div className="mn-foto-caixa" onClick={(e) => e.stopPropagation()}>
@@ -651,6 +778,11 @@ function EstilosManutencao() {
       .mn-tag-gov { background: #F4ECD7; color: var(--latao-texto); }
       .mn-card-desc { font-size: 14px; margin: 8px 0; }
       .mn-card-meta { font-size: 12px; color: var(--texto-suave); }
+      .mn-tag-bloqueio { background: #F3E5E5; color: #8A1F1F; }
+      .mn-tag-vencido { background: #FDF3D7; color: #8A6100; }
+      .mn-venda { background: #FBF4F4; border: 1px solid #EBCACA; border-radius: 12px; padding: 10px 12px; margin-top: 8px; }
+      .mn-venda-check { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+      .mn-venda-check input { width: 20px; height: 20px; flex-shrink: 0; }
       .mn-ver-foto { background: none; border: 1px solid var(--borda); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; margin-bottom: 6px; font-family: inherit; color: var(--tinta); }
       .mn-foto-fundo { position: fixed; inset: 0; background: rgba(15, 25, 22, 0.6); display: flex; align-items: center; justify-content: center; z-index: 90; padding: 16px; }
       .mn-foto-caixa { background: var(--branco); border-radius: 16px; padding: 14px; width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; }
