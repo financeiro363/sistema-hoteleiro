@@ -7,6 +7,11 @@
 // para ser compartilhada com o hóspede antes da chegada (por WhatsApp,
 // e-mail, ou um QR code na recepção).
 //
+// No topo, dois avisos (pedido do dono, 03/11/2026): a ficha NÃO é reserva
+// (serve para adiantar o atendimento na chegada e deve ser preenchida depois
+// de reservar) e a FNRH é obrigatória (Lei nº 11.771/2008, art. 26, e
+// Decreto nº 7.381/2010). Para o hóspede estrangeiro, também em inglês e francês.
+//
 // Dois tipos de documento:
 //  • CPF (hóspede brasileiro) — formulário completo, com busca automática
 //    de dados pelo CPF e do endereço pelo CEP.
@@ -487,6 +492,35 @@ function FichaHospede() {
         <h1 style={{ marginBottom: 6 }}>{nomeHotel}</h1>
         <p className="texto-suave">Preencha seus dados abaixo — leva menos de 3 minutos.</p>
 
+        <div className="fnrh-aviso fnrh-aviso-reserva" role="note">
+          <strong>⚠️ Esta ficha não é uma reserva.</strong>
+          <p>
+            Ela serve para <strong>adiantar o seu atendimento na chegada ao hotel</strong>. Preencher a ficha não é o mesmo
+            que reservar um apartamento: faça primeiro a sua reserva e depois preencha esta ficha.
+          </p>
+          {ehPassaporte && (
+            <>
+              <span className="fnrh-tri">This form is not a booking. It only speeds up your check-in when you arrive at the hotel. Please make your reservation first, then fill in this form.</span>
+              <span className="fnrh-tri">Ce formulaire n&apos;est pas une réservation. Il sert seulement à accélérer votre accueil à l&apos;arrivée à l&apos;hôtel. Faites d&apos;abord votre réservation, puis remplissez ce formulaire.</span>
+            </>
+          )}
+        </div>
+
+        <div className="fnrh-aviso fnrh-aviso-lei" role="note">
+          <strong>📋 Preenchimento obrigatório</strong>
+          <p>
+            A obrigatoriedade de preenchimento da Ficha Nacional de Registro de Hóspedes (FNRH) é regulamentada pela
+            Lei nº 11.771/2008 (Lei Geral do Turismo) e pelo Decreto nº 7.381/2010, que estabelecem a exigência do
+            cadastro para todos os meios de hospedagem no Brasil.
+          </p>
+          {ehPassaporte && (
+            <>
+              <span className="fnrh-tri">Filling in the National Guest Registration Form (FNRH) is mandatory for all accommodation in Brazil, under Law No. 11,771/2008 (General Tourism Law) and Decree No. 7,381/2010.</span>
+              <span className="fnrh-tri">Le remplissage de la Fiche nationale d&apos;enregistrement des clients (FNRH) est obligatoire pour tous les hébergements au Brésil, conformément à la loi nº 11.771/2008 (loi générale du tourisme) et au décret nº 7.381/2010.</span>
+            </>
+          )}
+        </div>
+
         <form className="cartao" onSubmit={enviar} style={{ marginTop: 16 }}>
           <div className="fnrh-secao">Documentação</div>
           {ehPassaporte ? (
@@ -818,6 +852,11 @@ function CamposRacaNecessidade({ tri, raca, setRaca, possuiNecessidade, setPossu
 function EstilosFicha() {
   return (
     <style>{`
+      .fnrh-aviso { border-radius: 12px; padding: 12px 14px; margin-top: 12px; font-size: 14px; line-height: 1.45; }
+      .fnrh-aviso p { margin: 4px 0 0; }
+      .fnrh-aviso .fnrh-tri { margin-top: 6px; }
+      .fnrh-aviso-reserva { background: #FDF3D7; color: #5E4300; border: 1px solid #F0DFA8; }
+      .fnrh-aviso-lei { background: var(--marca-clara); color: var(--tinta); border: 1px solid #CFE3DA; font-size: 13px; }
       .fnrh-secao { font-size: 14px; font-weight: 700; color: var(--marca); margin: 18px 0 8px; border-top: 1px solid var(--borda); padding-top: 14px; }
       .fnrh-secao:first-child { margin-top: 0; border-top: none; padding-top: 0; }
       .fnrh-duas { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
