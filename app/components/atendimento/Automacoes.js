@@ -35,6 +35,7 @@ function resumoDaEspera(def, salvo) {
   if (def.tipo === 'POS_CHECKOUT') return `${dias} dia(s) depois, às ${hora}`;
   if (def.tipo === 'SEM_DISPONIBILIDADE') return `consulta a cada ${salvo?.config?.reverificar_horas || def.configPadrao.reverificar_horas} h`;
   if (def.tipo === 'BOAS_VINDAS') return `olha a Cloudbeds a cada 20 min · espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois do check-in`;
+  if (def.tipo === 'OFERTA') return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois da cotação · só abaixo de ${salvo?.config?.ocupacao_max ?? 60}% de ocupação${salvo?.config?.beneficio ? ` · benefício: ${salvo.config.beneficio}` : ''}`;
   if (def.tipo === 'RETOMADA') return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois da última mensagem do cliente`;
   return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)}`;
 }
@@ -79,6 +80,8 @@ function formDe(def, salvo, hotelId) {
     dias: s.config?.dias ?? def.configPadrao?.dias ?? 1,
     reverificar_horas: s.config?.reverificar_horas || def.configPadrao?.reverificar_horas || 6,
     parar_robo: s.config?.parar_robo ?? !!def.pararRobo,
+    beneficio: s.config?.beneficio ?? def.configPadrao?.beneficio ?? '',
+    ocupacao_max: s.config?.ocupacao_max ?? def.configPadrao?.ocupacao_max ?? 60,
   };
 }
 
@@ -88,7 +91,7 @@ function paraSalvar(f) {
     variaveis: f.variaveis, variaveis_cabecalho: f.variaveis_cabecalho, texto_livre: f.texto_livre,
     espera_minutos: Math.round(Number(f.espera_valor || 0) * Number(f.espera_unidade || 1)),
     janela_inicio: f.janela_inicio, janela_fim: f.janela_fim, limite_dia: Number(f.limite_dia),
-    config: { hora: f.hora, dias: Number(f.dias), reverificar_horas: Number(f.reverificar_horas), parar_robo: !!f.parar_robo },
+    config: { hora: f.hora, dias: Number(f.dias), reverificar_horas: Number(f.reverificar_horas), parar_robo: !!f.parar_robo, beneficio: f.beneficio, ocupacao_max: Number(f.ocupacao_max) },
   };
 }
 
@@ -124,7 +127,7 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
     const porNome = (n) => {
       const t = String(n || '').toLowerCase();
       const achado = [['atendente', 'atendente'], ['hotel', 'hotel'], ['empresa', 'hotel'], ['checkin', 'checkin'], ['entrada', 'checkin'], ['checkout', 'checkout'],
-        ['saida', 'checkout'], ['noite', 'noites'], ['link', 'link_reservar'], ['valor', 'valor'], ['preco', 'valor'], ['reserva', 'numero_reserva'], ['nome', 'nome'], ['viajante', 'nome']]
+        ['saida', 'checkout'], ['beneficio', 'beneficio'], ['oferta', 'beneficio'], ['noite', 'noites'], ['link', 'link_reservar'], ['valor', 'valor'], ['preco', 'valor'], ['reserva', 'numero_reserva'], ['nome', 'nome'], ['viajante', 'nome']]
         .find(([k, c]) => t.includes(k) && def.campos.includes(c));
       return achado ? achado[1] : null;
     };
@@ -222,6 +225,16 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {def.tipo === 'OFERTA' && (
+        <div className="at-grade" style={{ marginTop: 8 }}>
+          <label><span className="rotulo">Benefício da oferta (vai na variável “Benefício da oferta” do modelo)</span>
+            <input className="campo" maxLength={120} value={f.beneficio} onChange={(e) => setF({ ...f, beneficio: e.target.value })} placeholder="ex.: late check-out até as 14h, sem custo" /></label>
+          <label><span className="rotulo">Só manda se a ocupação das datas estiver abaixo de (%)</span>
+            <input className="campo" type="number" min={10} max={100} value={f.ocupacao_max} onChange={(e) => setF({ ...f, ocupacao_max: e.target.value })} /></label>
+          <span className="at-dica" style={{ margin: 0, gridColumn: '1 / -1' }}>A equipe cumpre o benefício na chegada: ele aparece na tela “Chegadas e Saídas (Recepção)” e numa nota na conversa. Não prometa desconto se o robô diz que não existe.</span>
         </div>
       )}
 

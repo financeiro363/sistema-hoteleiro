@@ -54,7 +54,7 @@ import {
 } from '../../../lib/atendimento/gmail';
 import { conexaoCloudbeds, procurarReservas, detalheReserva } from '../../../lib/atendimento/cloudbeds';
 import {
-  buscarDisponibilidade, linkDoMotor, detectarMotor, verificarReservasHotel, reais, dataBR, hojeLocal,
+  buscarDisponibilidade, linkDoMotor, detectarMotor, verificarReservasHotel, reais, dataBR, hojeLocal, datasAlternativas,
 } from '../../../lib/atendimento/cotacao';
 import {
   enviarPelaConversa, enviarCotacao, registrarSemDisponibilidade, preferenciasCotacao,
@@ -72,6 +72,7 @@ import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/
 import { temasDoTexto, TEMAS_PERGUNTAS } from '../../../lib/atendimento/vendasConfig';
 import { funilEmReais, lerValorMeta } from '../../../lib/atendimento/metas';
 import { enviarResumo, listaDeEmails } from '../../../lib/atendimento/resumoSemanal';
+import { linhaDoTempo } from '../../../lib/atendimento/linhaDoTempo';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDescricao, MAX_OUTROS_HOTEIS } from '../../../lib/atendimento/outrosHoteis';
 
@@ -156,6 +157,10 @@ export async function POST(request) {
       case 'minha_assinatura': return await acaoMinhaAssinatura(supabaseAdmin, chamador, corpo);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
       case 'perguntas': return await acaoPerguntas(supabaseAdmin, chamador, corpo);
+      case 'linha_do_tempo': {
+        const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
+        return Response.json(await linhaDoTempo(supabaseAdmin, conversa));
+      }
       case 'meta_salvar': return await acaoMetaSalvar(supabaseAdmin, chamador, corpo);
       case 'resumo_config': return await acaoResumoConfig(supabaseAdmin, chamador, corpo);
       case 'resumo_enviar': {
@@ -949,11 +954,16 @@ async function acaoCotacaoBuscar(supabaseAdmin, chamador, corpo) {
   const resultado = await buscarDisponibilidade(cb, corpo);
   // Demanda perdida só conta para o hotel da conversa
   if (!resultado.itens.length && !outro) await registrarSemDisponibilidade(supabaseAdmin, { id: chamador.id }, conversa, resultado);
+  // Sem quarto: datas vizinhas com quarto, até 3 dias antes ou depois (M13)
+  let alternativas = [];
+  if (!resultado.itens.length) {
+    try { alternativas = (await datasAlternativas(cb, resultado, { prazo: Date.now() + 8000 })).map(({ r, ...x }) => x); } catch (e) { alternativas = []; }
+  }
   const motor = await linkDoMotor(supabaseAdmin, cb, hotelDaBusca);
   const pref = await preferenciasCotacao(supabaseAdmin, hotelDaBusca);
   const { data: hotel } = await supabaseAdmin.from('hoteis').select('nome_fantasia').eq('id', conversa.hotel_id).maybeSingle();
   return Response.json({
-    ...resultado, motor: !!motor, abertura: outro ? null : (pref.cotacao_texto_abertura || null), final: pref.cotacao_texto_final || null,
+    ...resultado, alternativas, motor: !!motor, abertura: outro ? null : (pref.cotacao_texto_abertura || null), final: pref.cotacao_texto_final || null,
     nomeHotel: outro ? outro.nome : (hotel?.nome_fantasia || null),
     hotelCotado: outro ? { id: outro.id, nome: outro.nome, descricao: outro.descricao || '' } : null,
     nomeOrigem: hotel?.nome_fantasia || null,

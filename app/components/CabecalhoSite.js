@@ -26,6 +26,7 @@ const CATEGORIAS_MENU = [
       { href: '/achados-perdidos', rotulo: 'Achados e Perdidos' },
       { href: '/recibos', rotulo: 'Recibos' },
       { href: '/fichas-hospedes', rotulo: 'Fichas de Hóspedes' },
+      { href: '/recepcao', rotulo: 'Chegadas e Saídas (Recepção)' },
     ],
   },
   {
