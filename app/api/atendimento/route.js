@@ -70,6 +70,8 @@ import { montarGrupoManual } from '../../../lib/atendimento/grupoManual';
 import { avisarVisitantesPorEmail } from '../../../lib/atendimento/chatSite';
 import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/atendimento/automacoes';
 import { temasDoTexto, TEMAS_PERGUNTAS } from '../../../lib/atendimento/vendasConfig';
+import { funilEmReais, lerValorMeta } from '../../../lib/atendimento/metas';
+import { enviarResumo, listaDeEmails } from '../../../lib/atendimento/resumoSemanal';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDescricao, MAX_OUTROS_HOTEIS } from '../../../lib/atendimento/outrosHoteis';
 
@@ -111,6 +113,17 @@ export async function POST(request) {
       return Response.json(await rodarCampanhas(supabaseAdmin, { prazo: Date.now() + 8500 }));
     } catch (e) { return respostaErro(e.message, 500); }
   }
+  // Resumo semanal (M17): segunda às 8h, um e-mail por hotel com Caixa de Entrada
+  if (corpo?.acao === 'resumo_semanal' && chamadaAgendadaValida(request)) {
+    try {
+      const supabaseAdmin = clienteAdmin();
+      const { data: canais } = await supabaseAdmin.from('atendimento_canais').select('hotel_id').eq('ativo', true);
+      const hoteis = [...new Set((canais || []).map((c) => Number(c.hotel_id)))];
+      const resultados = [];
+      for (const h of hoteis) resultados.push({ hotel: h, ...(await enviarResumo(supabaseAdmin, h, { origemEnvio: 'AGENDADO', origem: origemDoSite(request) })) });
+      return Response.json({ resultados });
+    } catch (e) { return respostaErro(e.message, 500); }
+  }
   // Robô: mensagens que ficaram sem resposta (o webhook não teve tempo)
   if (corpo?.acao === 'robo_pendentes' && chamadaAgendadaValida(request)) {
     try {
@@ -143,6 +156,14 @@ export async function POST(request) {
       case 'minha_assinatura': return await acaoMinhaAssinatura(supabaseAdmin, chamador, corpo);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
       case 'perguntas': return await acaoPerguntas(supabaseAdmin, chamador, corpo);
+      case 'meta_salvar': return await acaoMetaSalvar(supabaseAdmin, chamador, corpo);
+      case 'resumo_config': return await acaoResumoConfig(supabaseAdmin, chamador, corpo);
+      case 'resumo_enviar': {
+        const hotelId = hotelPermitido(chamador, corpo.hotelId);
+        if (!chamador.hoteisAdmin.includes(hotelId)) return respostaErro('Só administradores enviam o resumo.', 403);
+        const r = await enviarResumo(supabaseAdmin, hotelId, { origemEnvio: 'MANUAL', origem: origemDoSite(request) });
+        return r.erro ? respostaErro(r.erro) : Response.json(r);
+      }
       case 'importar_contatos': return await acaoImportarContatos(supabaseAdmin, chamador, corpo);
       case 'cotacao_hoteis': return await acaoCotacaoHoteis(supabaseAdmin, chamador, corpo);
       case 'cotacao_buscar': return await acaoCotacaoBuscar(supabaseAdmin, chamador, corpo);
@@ -665,7 +686,51 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   }
   // Por que não fecharam: conversas arquivadas com motivo no período (sem o SQL das vendas: não aparece)
   const perdas = await motivosDaPerda(supabaseAdmin, pedidos, inicio, fim);
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null, grupos: grupos || null, perdas }, inicio, fim });
+  // Funil em reais e meta do mês (M16); quem pode mudar a meta: ADMIN de todos os hotéis escolhidos
+  let metas = null;
+  try { metas = { ...(await funilEmReais(supabaseAdmin, pedidos, inicio, fim)), pode_editar: pedidos.length === 1 && chamador.hoteisAdmin.includes(pedidos[0]) }; }
+  catch (e) { metas = null; }
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null, grupos: grupos || null, perdas, metas }, inicio, fim });
+}
+
+// ---------------------------------------------------------------- META DE VENDAS (M16)
+async function acaoMetaSalvar(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelPermitido(chamador, corpo.hotelId);
+  if (!chamador.hoteisAdmin.includes(hotelId)) return respostaErro('Só administradores definem a meta.', 403);
+  if (!/^\d{4}-\d{2}$/.test(String(corpo.mes || ''))) return respostaErro('Mês inválido.');
+  const valor = lerValorMeta(corpo.valor);
+  if (Number.isNaN(valor)) return respostaErro('Confira o valor da meta (ex.: 150000 ou 150.000,00).');
+  if (valor === null) {
+    const { error } = await supabaseAdmin.from('atendimento_metas').delete().eq('hotel_id', hotelId).eq('mes', `${corpo.mes}-01`);
+    if (error) return respostaErro(/atendimento_metas/.test(error.message) ? 'Falta rodar no Supabase o SQL da Etapa 2 (sql/gestor_etapa2.sql).' : error.message);
+    return Response.json({ sucesso: true, valor: null });
+  }
+  const { error } = await supabaseAdmin.from('atendimento_metas').upsert({
+    hotel_id: hotelId, mes: `${corpo.mes}-01`, valor, atualizado_por_id: chamador.id, atualizado_em: new Date().toISOString(),
+  }, { onConflict: 'hotel_id,mes' });
+  if (error) return respostaErro(/atendimento_metas/.test(error.message) ? 'Falta rodar no Supabase o SQL da Etapa 2 (sql/gestor_etapa2.sql).' : error.message);
+  return Response.json({ sucesso: true, valor });
+}
+
+// ---------------------------------------------------------------- RESUMO SEMANAL (M17)
+async function acaoResumoConfig(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelPermitido(chamador, corpo.hotelId);
+  if (!chamador.hoteisAdmin.includes(hotelId)) return respostaErro('Só administradores configuram o resumo.', 403);
+  if (corpo.salvar) {
+    const extras = listaDeEmails(corpo.extras).join(', ') || null;
+    const { error } = await supabaseAdmin.from('atendimento_preferencias').upsert({
+      hotel_id: hotelId, resumo_semanal: corpo.ligado !== false, resumo_emails_extras: extras, atualizado_em: new Date().toISOString(),
+    }, { onConflict: 'hotel_id' });
+    if (error) return respostaErro(/resumo_/.test(error.message) ? 'Falta rodar no Supabase o SQL da Etapa 2 (sql/gestor_etapa2.sql).' : error.message);
+  }
+  const { data: pref } = await supabaseAdmin.from('atendimento_preferencias').select('*').eq('hotel_id', hotelId).maybeSingle();
+  const { data: ultimos } = await supabaseAdmin.from('atendimento_resumos').select('origem, para, enviado_em, erro, criado_em')
+    .eq('hotel_id', hotelId).order('criado_em', { ascending: false }).limit(3);
+  const { data: caixas } = await supabaseAdmin.from('atendimento_canais').select('identificador').eq('hotel_id', hotelId).eq('tipo', 'EMAIL').eq('ativo', true).limit(1);
+  return Response.json({
+    ligado: pref?.resumo_semanal !== false, extras: pref?.resumo_emails_extras || '',
+    ultimos: ultimos || [], caixa: caixas?.[0]?.identificador || null, temResend: !!process.env.RESEND_API_KEY,
+  });
 }
 
 // Período do Painel (datas de João Pessoa) → instantes UTC

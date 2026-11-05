@@ -271,6 +271,101 @@ function SecaoGrupos({ g }) {
 }
 
 // ---------------------------------------------------------------------------
+// Funil em reais e meta do mês (M16). A meta é digitada pelo ADMIN (um hotel
+// escolhido no filtro); com "Todos os hotéis", soma as metas.
+function EditarMeta({ hotelId, mes, valor, onMudou }) {
+  const [aberto, setAberto] = useState(false);
+  const [texto, setTexto] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState('');
+  async function salvar() {
+    setOcupado(true); setErro('');
+    try { await chamarApi('/api/atendimento', { acao: 'meta_salvar', hotelId, mes, valor: texto }); setAberto(false); onMudou(); }
+    catch (e) { setErro(e.message); }
+    setOcupado(false);
+  }
+  if (!aberto) {
+    return <button type="button" className="at-link-pequeno" onClick={() => { setTexto(valor != null ? String(valor).replace('.', ',') : ''); setAberto(true); }}>{valor != null ? '✏️ Mudar a meta' : '🎯 Definir a meta'} de {rotuloMes(mes)}</button>;
+  }
+  return (
+    <span className="pi-meta-editar">
+      <label><span className="at-dica" style={{ margin: 0 }}>Meta de {rotuloMes(mes)} (R$)</span>
+        <input className="at-select" inputMode="decimal" value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="ex.: 150.000" aria-label={`Meta de vendas de ${rotuloMes(mes)} em reais`} /></label>
+      <button type="button" className="at-btn at-btn-verde" onClick={salvar} disabled={ocupado}>{ocupado ? 'Salvando…' : 'Salvar'}</button>
+      <button type="button" className="at-link-pequeno" onClick={() => setAberto(false)}>Cancelar</button>
+      <span className="at-dica" style={{ margin: 0 }}>Deixe em branco para tirar a meta.</span>
+      {erro && <span className="aviso-erro" style={{ margin: 0 }}>{erro}</span>}
+    </span>
+  );
+}
+
+function SecaoMetas({ m, hotelId, onMudou }) {
+  const atual = m.mes_atual;
+  const t = m.totais || {};
+  const etapas = [
+    ['Cotado', t.cotado, `${fmt(t.cotacoes)} cotações`],
+    ['Clicaram em Reservar agora', t.valor_clicado, `${fmt(t.clicaram)} cotações`],
+    ['Vendido (reservas das cotações)', t.vendido, `${fmt(t.reservas)} reservas`],
+  ];
+  const maxEtapa = Math.max(1, ...etapas.map(([, v]) => Number(v || 0)));
+  const barraMeta = atual?.meta ? Math.min(100, (atual.vendido / atual.meta) * 100) : 0;
+  const marcaDia = atual ? (atual.dia / atual.dias) * 100 : 0;
+  return (
+    <>
+      <h2 className="pi-secao">🎯 Funil em reais e meta</h2>
+      {atual && (
+        <section className="at-cartao">
+          <div className="at-canal-topo">
+            <h2>Meta de {rotuloMes(atual.mes)}</h2>
+            {m.pode_editar && <EditarMeta hotelId={hotelId} mes={atual.mes} valor={atual.meta} onMudou={onMudou} />}
+          </div>
+          <div className="pi-cartoes">
+            <Cartao rotulo="Vendido no mês" valor={reaisCurto(atual.vendido)} detalhe={`${fmt(atual.reservas)} reserva(s) das cotações · dia ${atual.dia} de ${atual.dias}`} />
+            <Cartao rotulo="Meta" valor={atual.meta != null ? reaisCurto(atual.meta) : '—'} detalhe={atual.meta != null ? `${pct(atual.vendido, atual.meta)} atingido · faltam ${reaisCurto(Math.max(0, atual.meta - atual.vendido))}` : (m.pode_editar ? 'Defina a meta no botão acima' : 'O administrador ainda não definiu')} />
+            <Cartao rotulo="No ritmo atual, o mês fecha em" valor={atual.projecao != null ? reaisCurto(atual.projecao) : '—'} detalhe={atual.meta ? `${pct(atual.projecao, atual.meta)} da meta` : 'Vendido até hoje ÷ dias passados × dias do mês'} />
+          </div>
+          {atual.meta != null && (
+            <div className="pi-meta-barra" role="img" aria-label={`${pct(atual.vendido, atual.meta)} da meta atingido; ${Math.round(marcaDia)}% do mês passado`}>
+              <span className="pi-meta-feito" style={{ width: `${barraMeta}%`, background: atual.vendido >= atual.meta ? CORES[2] : CORES[0] }} />
+              <span className="pi-meta-hoje" style={{ left: `${marcaDia}%` }} title="Hoje" />
+            </div>
+          )}
+          {atual.meta != null && <p className="at-dica" style={{ marginBottom: 0 }}>A linha fina marca quanto do mês já passou: se a barra azul está antes dela, as vendas estão abaixo do ritmo da meta.</p>}
+        </section>
+      )}
+      {m.sem_tabela_metas && <div className="aviso-erro">Para guardar a meta, falta rodar no Supabase o SQL da Etapa 2 (sql/gestor_etapa2.sql).</div>}
+      <div className="at-grade">
+        <section className="at-cartao">
+          <h2>Funil do período</h2>
+          {etapas.map(([rotulo, v, det], i) => (
+            <div key={rotulo} className="pi-barra-linha">
+              <span className="pi-barra-nome">{rotulo}<br /><small className="at-dica">{det}</small></span>
+              <span className="pi-barra-trilho"><span className="pi-barra" style={{ width: `${(Number(v || 0) / maxEtapa) * 100}%`, background: CORES[i] }} /></span>
+              <strong className="pi-barra-valor">{reaisCurto(v)}</strong>
+            </div>
+          ))}
+          <p className="at-dica" style={{ marginBottom: 0 }}>Cotado = valor “a partir de” das cotações enviadas no período. Vendido = valor das reservas que vieram delas (pelo dia em que a reserva entrou).</p>
+        </section>
+        <section className="at-cartao">
+          <h2>Mês a mês</h2>
+          <div className="at-tabela-rolagem">
+            <table className="at-tabela at-tabela-previa">
+              <thead><tr><th>Mês</th><th className="num">Cotado</th><th className="num">Vendido</th><th className="num">Meta</th><th className="num">Atingido</th></tr></thead>
+              <tbody>
+                {(m.meses || []).map((x) => (
+                  <tr key={x.mes}><td>{rotuloMes(x.mes)}</td><td className="num">{reaisCurto(x.cotado)}</td><td className="num">{reaisCurto(x.vendido)}</td>
+                    <td className="num">{x.meta != null ? reaisCurto(x.meta) : '—'}</td><td className="num">{x.meta ? pct(x.vendido, x.meta) : '—'}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Por que não fecharam (M15): motivo marcado ao arquivar a conversa
 function SecaoPerdas({ p }) {
   const lista = Object.entries(p.motivos || {}).sort((a, b) => b[1] - a[1]);
@@ -720,6 +815,8 @@ export function PainelIndicadores({ hoteis, nomes }) {
           </div>
 
           {dados.sla && Number(dados.sla.consideradas) > 0 && <SecaoPrazo sla={dados.sla} nomes={nomes} />}
+
+          {dados.metas && <SecaoMetas m={dados.metas} hotelId={hotel ? Number(hotel) : Number(idsHoteis.split(',')[0])} onMudou={() => setRecarregar((n) => n + 1)} />}
 
           {cot && (
             <>

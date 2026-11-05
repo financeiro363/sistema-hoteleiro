@@ -13,6 +13,7 @@
 // ficaram sem resposta (quando o webhook não teve tempo), em paralelo.
 // Automações (Fase 5): também em paralelo, agenda e envia os disparos.
 // Campanhas (Fase 6): também em paralelo, envia até 40 mensagens da fila.
+// Manutenção: avisos no celular dos chamados (que faltaram) e repetição dos urgentes.
 // Funções agendadas só rodam no site publicado (não nas prévias de deploy).
 // ============================================================================
 
@@ -39,7 +40,14 @@ export default async function sincronizarEmails() {
       console.log(`Caixa de Entrada — falha (${rotulo}):`, e.message);
     }
   };
-  await Promise.all([chamar('sincronizar', 'sincronização de e-mails'), chamar('robo_pendentes', 'robô'), chamar('automacoes_rodar', 'automações'), chamar('campanhas_rodar', 'campanhas')]);
+  // Manutenção (M22): avisos de chamado que faltaram e repetição dos urgentes
+  const manutencao = async () => {
+    try {
+      const resposta = await fetch(`${site}/api/manutencao-avisos`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-atendimento-agendado': senha }, body: '{}' });
+      console.log('Manutenção — avisos:', resposta.status, JSON.stringify(await resposta.json().catch(() => ({}))));
+    } catch (e) { console.log('Manutenção — falha:', e.message); }
+  };
+  await Promise.all([chamar('sincronizar', 'sincronização de e-mails'), chamar('robo_pendentes', 'robô'), chamar('automacoes_rodar', 'automações'), chamar('campanhas_rodar', 'campanhas'), manutencao()]);
 }
 
 export const config = {

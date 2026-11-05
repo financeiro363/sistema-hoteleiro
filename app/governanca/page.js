@@ -43,6 +43,7 @@ import { andarDoQuarto, nomeDoAndar, tipoDoQuarto, resumoProdutividade, media, L
 import PainelGovernanta from '../components/governanca/PainelGovernanta';
 import CamareirasCloudbeds from '../components/governanca/CamareirasCloudbeds';
 import AvisosNoCelular from '../components/governanca/AvisosNoCelular';
+import { chamarRota } from '../components/governanca/rota';
 import PedidosCamareira from '../components/governanca/PedidosCamareira';
 
 // ---- Constantes -------------------------------------------------------------
@@ -174,6 +175,7 @@ export default function Governanca() {
   const [configurandoWebhook, setConfigurandoWebhook] = useState(false);
   const [erroWebhook, setErroWebhook] = useState('');
   const [webhookAtivo, setWebhookAtivo] = useState(false);
+  const [webhookBloqueio, setWebhookBloqueio] = useState(false);
   const [webhookComSenha, setWebhookComSenha] = useState(true);
   const usuarioRef = useRef(null);
   const sessaoAtivaRef = useRef(null);
@@ -262,7 +264,7 @@ export default function Governanca() {
         const { data: sessao } = await supabase.auth.getSession();
         const resposta = await fetch('/api/governanca-configurar-webhook', { headers: { Authorization: `Bearer ${sessao.session.access_token}` } });
         const r = await resposta.json();
-        if (resposta.ok) { setWebhookAtivo(!!r.ativo); setWebhookComSenha(!!r.comSenha); }
+        if (resposta.ok) { setWebhookAtivo(!!r.ativo); setWebhookComSenha(!!r.comSenha); setWebhookBloqueio(!!r.bloqueio); }
       } catch (e) { /* a tela continua; o cartão mostra "desativado" */ }
     }
 
@@ -491,11 +493,13 @@ export default function Governanca() {
         foto = { foto_caminho: caminho, foto_nome: manutFoto.name };
       }
       const local = `Apartamento ${popupManutencao.quartoNumero}`;
-      const { error } = await supabase.from('manutencoes').insert({
+      const { data: criadoManut, error } = await supabase.from('manutencoes').insert({
         local, descricao: manutDescricao.trim(), prioridade: manutPrioridade,
         origem: 'GOVERNANCA', criado_por_id: usuario.id, hotel_id: usuario.hotel_id, ...foto,
-      });
+      }).select('id').single();
       if (!error) {
+        // Aviso no celular da Manutenção (se falhar, a função agendada manda depois)
+        if (criadoManut?.id) chamarRota('/api/manutencao-avisos', { chamadoId: criadoManut.id });
         await supabase.from('manutencoes_log').insert({
           usuario_id: usuario.id, local, acao: 'Chamado aberto',
           detalhe: `Chamado aberto via checklist da governança por ${usuario.nome} (prioridade ${PRIORIDADE_LABEL[manutPrioridade]}${foto.foto_caminho ? ', com foto' : ''}).`,
@@ -1370,11 +1374,21 @@ export default function Governanca() {
               Além da limpeza, o aviso acerta o estado do apartamento: check-out feito → &quot;Saída / Apt Sujo&quot;;
               quarto vago e limpo → &quot;Limpo / Apt limpo&quot;. &quot;Interditado&quot; e &quot;Serviços gerais&quot; só a equipe muda.
             </p>
+            <p className="texto-suave" style={{ fontSize: 13 }}>
+              Bloqueio feito direto na Cloudbeds: o quarto vira &quot;Interditado&quot; aqui, com a data de volta, e sai da lista das camareiras.
+              Ao desbloquear lá, volta sozinho como &quot;Saída / Apt Sujo&quot;.
+            </p>
             {webhookAtivo ? (
               <>
                 <p style={{ color: 'var(--sucesso-texto, #1E6B3C)', fontWeight: 700, fontSize: 14 }}>
-                  ✅ Ativado{webhookComSenha ? ' — com senha' : ''}
+                  ✅ Ativado{webhookComSenha ? ' — com senha' : ''}{webhookBloqueio ? ' · bloqueios incluídos' : ''}
                 </p>
+                {webhookComSenha && !webhookBloqueio && (
+                  <div className="gv-alerta" role="alert">
+                    Os bloqueios feitos direto na Cloudbeds ainda não chegam aqui. Clique em <strong>Reativar</strong> para incluir
+                    (a chave de API precisa do escopo &quot;Room Block&quot;).
+                  </div>
+                )}
                 {!webhookComSenha && (
                   <div className="gv-alerta" role="alert">
                     ⚠️ Estas notificações foram ativadas antes de existir a senha. Hoje qualquer pessoa que descobrir o endereço
@@ -1382,9 +1396,9 @@ export default function Governanca() {
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {!webhookComSenha && (
+                  {(!webhookComSenha || !webhookBloqueio) && (
                     <button type="button" className="botao botao-principal" onClick={() => configurarWebhook(true)} disabled={configurandoWebhook}>
-                      {configurandoWebhook ? 'Reativando…' : '🔐 Reativar com senha'}
+                      {configurandoWebhook ? 'Reativando…' : webhookComSenha ? '🔒 Reativar (incluir bloqueios)' : '🔐 Reativar com senha'}
                     </button>
                   )}
                   <button type="button" className="botao botao-suave" onClick={() => configurarWebhook(false)} disabled={configurandoWebhook}>

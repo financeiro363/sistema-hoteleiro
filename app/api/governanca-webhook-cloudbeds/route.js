@@ -19,11 +19,16 @@
 // Cloudbeds se o quarto está ocupado e aplica as regras de
 // lib/governanca/regras.js (ex.: saída feita → "Saída / Apt Sujo").
 // "Interditado" e "Serviços gerais" só a equipe muda.
+//
+// Bloqueio feito direto na Cloudbeds (roomblock/created, details_changed,
+// removed): o quarto vira "Interditado" com a data de volta e, ao desbloquear
+// lá, volta como "Saída / Apt Sujo" (lib/governanca/bloqueiosExternos.js).
 // ============================================================================
 
 import { clienteAdmin, lerSegredo } from '../../../lib/atendimento/servidor';
 import { carregarCloudbeds, situacaoNaCloudbeds, senhaWebhookConfere } from '../../../lib/governanca/cloudbeds';
-import { estadoAposCloudbeds } from '../../../lib/governanca/regras';
+import { estadoAposCloudbeds, hojeNoHotel } from '../../../lib/governanca/regras';
+import { lerEventoBloqueio, processarBloqueio } from '../../../lib/governanca/bloqueiosExternos';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +37,9 @@ const ok = () => Response.json({ recebido: true }, { status: 200 });
 export async function POST(request) {
   try {
     const corpo = await request.json().catch(() => null);
+    // Bloqueio feito direto na Cloudbeds (M23): roomblock/created, details_changed, removed
+    const bloqueio = lerEventoBloqueio(corpo);
+    if (bloqueio) return await tratarBloqueio(request, bloqueio);
     if (!corpo || corpo.event !== 'housekeeping/room_condition_changed') return ok();
 
     const propertyId = String(corpo.propertyId ?? corpo.propertyID ?? '');
@@ -74,4 +82,20 @@ export async function POST(request) {
     // Erro inesperado: a Cloudbeds tenta de novo em 1 minuto (até 5 vezes)
     return Response.json({ erro: erro.message }, { status: 500 });
   }
+}
+
+async function tratarBloqueio(request, b) {
+  let supabaseAdmin;
+  try { supabaseAdmin = clienteAdmin(); } catch (e) { return ok(); }
+  const { data: credencial } = await supabaseAdmin.from('cloudbeds_credenciais').select('hotel_id')
+    .eq('cloudbeds_property_id', b.propertyId).maybeSingle();
+  if (!credencial) return ok();
+  const hotelId = credencial.hotel_id;
+  // Bloqueio só é aceito com a senha (inscrições de bloqueio sempre têm senha)
+  const senha = await lerSegredo(supabaseAdmin, hotelId, 'governanca_webhook_senha');
+  if (!senha || !senhaWebhookConfere(new URL(request.url).searchParams.get('chave'), senha)) {
+    return Response.json({ erro: 'Senha do aviso não confere.' }, { status: 401 });
+  }
+  await processarBloqueio(supabaseAdmin, hotelId, b, hojeNoHotel());
+  return ok();
 }

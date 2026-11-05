@@ -392,6 +392,66 @@ export function FunilEtiquetas({ hoteis, hotelAtual, etapas, etiquetas, preferen
           <button type="button" className="at-btn at-btn-verde" onClick={salvarArquivar} disabled={ocupado}>Salvar</button>
         </div>
       </section>
+
+      <ResumoSemanal key={hotelId} hotelId={hotelId} />
     </>
+  );
+}
+
+// Resumo semanal por e-mail para o gestor (M17): segunda às 8h
+function ResumoSemanal({ hotelId }) {
+  const [dados, setDados] = useState(null);
+  const [ligado, setLigado] = useState(true);
+  const [extras, setExtras] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState('');
+  const [ok, setOk] = useState('');
+  const carregar = (corpo = {}) => chamarApi('/api/atendimento', { acao: 'resumo_config', hotelId, ...corpo })
+    .then((r) => { setDados(r); setLigado(r.ligado); setExtras(r.extras || ''); });
+  useEffect(() => { carregar().catch((e) => setErro(e.message)); }, [hotelId]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function salvar() {
+    setOcupado(true); setErro(''); setOk('');
+    try { await carregar({ salvar: true, ligado, extras }); setOk(ligado ? 'Salvo: o resumo vai toda segunda às 8h.' : 'Salvo: resumo desligado.'); }
+    catch (e) { setErro(e.message); }
+    setOcupado(false);
+  }
+  async function enviarAgora() {
+    setOcupado(true); setErro(''); setOk('');
+    try { const r = await chamarApi('/api/atendimento', { acao: 'resumo_enviar', hotelId }); setOk(`Enviado para ${r.para.join(', ')}.`); await carregar(); }
+    catch (e) { setErro(e.message); await carregar().catch(() => {}); }
+    setOcupado(false);
+  }
+  const quando = (v) => (v ? new Date(v).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' }) : '');
+  return (
+    <section className="at-cartao">
+      <h2>📬 Resumo semanal por e-mail</h2>
+      <p className="at-dica" style={{ marginTop: 0 }}>
+        Toda segunda às 8h, um e-mail com a semana anterior: atendimentos, tempo de resposta, cotações, vendas em R$, meta do mês,
+        motivos da perda, robô e custo da IA, chamados de manutenção. Vai para os administradores do hotel e os e-mails abaixo.
+      </p>
+      {dados && (
+        <p className="at-dica">
+          {dados.caixa ? `Sai pela caixa ${dados.caixa}.` : dados.temResend ? 'Sai pelo e-mail automático do sistema (Resend).' : '⚠️ O hotel não tem caixa de e-mail ligada (⚙️ Canais): sem ela o resumo não sai.'}
+        </p>
+      )}
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0' }}>
+        <input type="checkbox" checked={ligado} onChange={(e) => setLigado(e.target.checked)} /> Enviar toda segunda às 8h
+      </label>
+      <label className="rotulo" htmlFor="rs-extras">E-mails extras (separados por vírgula, opcional)</label>
+      <input id="rs-extras" className="campo" value={extras} onChange={(e) => setExtras(e.target.value)} placeholder="gerente@hotel.com, financeiro@hotel.com" />
+      {erro && <div className="aviso-erro" style={{ marginTop: 8 }}>{erro}</div>}
+      {ok && <div className="aviso-erro" style={{ marginTop: 8, background: '#E5F4EA', color: '#14532D' }}>{ok}</div>}
+      <div className="at-botoes">
+        <button type="button" className="at-btn at-btn-verde" onClick={salvar} disabled={ocupado}>Salvar</button>
+        <button type="button" className="at-btn" onClick={enviarAgora} disabled={ocupado}>{ocupado ? 'Enviando…' : '📨 Enviar agora (semana passada)'}</button>
+      </div>
+      {(dados?.ultimos || []).length > 0 && (
+        <ul className="at-dica" style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+          {dados.ultimos.map((u, i) => (
+            <li key={i}>{quando(u.criado_em)} · {u.origem === 'AGENDADO' ? 'automático' : 'pelo botão'} · {u.enviado_em ? `✅ enviado para ${u.para}` : `⚠️ ${u.erro}`}</li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

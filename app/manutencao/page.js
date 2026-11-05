@@ -19,6 +19,10 @@
 //   da camareira como "Saída / Apt Sujo"). Rota: /api/governanca-bloqueio-cloudbeds.
 // - Chamados abertos pela camareira na Governança chegam com origem
 //   GOVERNANCA ("Via checklist") e, se ela tirou, com a foto do problema
+// - Aviso no celular (M22): ao abrir um chamado, o técnico atribuído (ou toda
+//   a Manutenção) recebe um aviso; o urgente repete a cada 30 min enquanto
+//   ninguém pegar (lib/manutencaoAvisos.js). Em "Minhas Tarefas" o técnico
+//   liga os avisos e vê os chamados sem responsável, com o botão "Pegar".
 // ============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
@@ -27,6 +31,8 @@ import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { buscarTodos } from '../../lib/buscarTodos';
 import { dataDeVoltaInvalida, formatarDia, hojeNoHotel, compararNumero, bloqueioVencido } from '../../lib/governanca/regras';
+import AvisosNoCelular from '../components/governanca/AvisosNoCelular';
+import { chamarRota } from '../components/governanca/rota';
 
 // ---- Constantes -------------------------------------------------------------
 
@@ -230,6 +236,8 @@ export default function Manutencao() {
           : ` ⚠️ Apartamento ${quartoEscolhido.numero} ficou "Interditado" aqui, mas a Cloudbeds não bloqueou: ${r.erro} Bloqueie lá à mão.`;
     }
     setSalvando(false);
+    // Aviso no celular da Manutenção (se falhar, a função agendada manda depois)
+    chamarRota('/api/manutencao-avisos', { chamadoId: criado.id });
 
     await registrarLog(criado.local, 'Chamado aberto',
       `Chamado aberto por ${usuario.nome} (prioridade ${PRIORIDADE_LABEL[fPrioridade]}).`);
@@ -363,6 +371,23 @@ export default function Manutencao() {
 
   // ---- Minhas Tarefas (técnico) ----
   const minhas = chamados.filter((c) => c.responsavel_id === usuario?.id);
+  const semResponsavel = chamados.filter((c) => !c.responsavel_id && c.status === 'PENDENTE')
+    .sort((a, b) => (a.prioridade === 'ALTA') - (b.prioridade === 'ALTA') || new Date(a.criado_em) - new Date(b.criado_em)).reverse();
+
+  // Técnico pega um chamado sem responsável: fica com ele e já começa
+  async function pegarChamado(c) {
+    if (salvando) return;
+    setSalvando(true);
+    const { data, error } = await supabase.from('manutencoes')
+      .update({ responsavel_id: usuario.id, status: 'EM_EXECUCAO', iniciado_em: new Date().toISOString() })
+      .eq('id', c.id).is('responsavel_id', null).select('id');
+    setSalvando(false);
+    if (error) { mostrarAviso('Não foi possível pegar o chamado: ' + error.message); return; }
+    if (!data?.length) { mostrarAviso('Outra pessoa já pegou este chamado.'); carregarTudo(usuario); return; }
+    await registrarLog(c.local, 'Atribuído', `${usuario.nome} pegou o chamado e começou.`);
+    mostrarAviso('Chamado é seu! Está em execução.');
+    carregarTudo(usuario);
+  }
 
   // ---- Log filtrado ----
   const termoLog = buscaLog.trim().toLowerCase();
@@ -609,6 +634,31 @@ export default function Manutencao() {
       )}
 
       {/* ================= MINHAS TAREFAS (técnico) — quadro Kanban ================= */}
+      {!carregando && subAba === 'minhas' && usuario?.papel === 'MANUTENCAO' && <AvisosNoCelular manutencao />}
+      {!carregando && subAba === 'minhas' && semResponsavel.length > 0 && (
+        <section className="mn-sem-resp">
+          <h2>🙋 Chamados sem responsável ({semResponsavel.length})</h2>
+          <div className="mn-sem-resp-lista">
+            {semResponsavel.map((c) => (
+              <div key={c.id} className="mn-sem-resp-item">
+                <div>
+                  <strong>{c.local}</strong>{' '}
+                  <span className="mn-tag" style={{ background: PRIORIDADE_COR[c.prioridade]?.fundo, color: PRIORIDADE_COR[c.prioridade]?.texto }}>{PRIORIDADE_LABEL[c.prioridade] || c.prioridade}</span>
+                  <div className="mn-sem-resp-desc">{c.descricao}</div>
+                </div>
+                <button type="button" className="botao botao-principal" onClick={() => pegarChamado(c)} disabled={salvando}>Pegar</button>
+              </div>
+            ))}
+          </div>
+          <style>{`
+            .mn-sem-resp { background: #FFF8E6; border: 1px solid #F0DFA8; border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+            .mn-sem-resp h2 { font-size: 15px; margin: 0 0 8px; }
+            .mn-sem-resp-lista { display: flex; flex-direction: column; gap: 8px; }
+            .mn-sem-resp-item { display: flex; gap: 10px; justify-content: space-between; align-items: center; background: #fff; border-radius: 10px; padding: 10px; }
+            .mn-sem-resp-desc { font-size: 13px; color: var(--texto-suave); margin-top: 2px; }
+          `}</style>
+        </section>
+      )}
       {!carregando && subAba === 'minhas' && (
         <div className="mn-kanban">
           {['PENDENTE', 'EM_EXECUCAO', 'CONCLUIDO'].map((coluna) => {
