@@ -53,7 +53,7 @@ export function WhatsAppAvancado({ hoteis, hotelAtual, canais, onAbrirConversa }
         </div>
       </div>
       {numeros.length === 0 && <div className="aviso-erro">Este hotel ainda não tem número de WhatsApp ligado no sistema (aba ⚙️ Canais).</div>}
-      {numeros.length > 0 && secao === 'modelos' && <Modelos key={`m${hotelId}`} numeros={numeros} />}
+      {numeros.length > 0 && secao === 'modelos' && <Modelos key={`m${hotelId}`} numeros={numeros} hotelId={hotelId} />}
       {numeros.length > 0 && secao === 'campanhas' && <Campanhas key={`c${hotelId}`} hotelId={hotelId} onAbrirConversa={onAbrirConversa} />}
     </>
   );
@@ -74,7 +74,7 @@ function EscolherNumero({ numeros, valor, onMudar, id }) {
 // ===========================================================================
 // MODELOS
 // ===========================================================================
-function Modelos({ numeros }) {
+function Modelos({ numeros, hotelId }) {
   const [canalId, setCanalId] = useState((numeros.find((c) => c.ativo && c.config?.wabaId) || numeros[0]).id);
   const [lista, setLista] = useState(null);
   const [erro, setErro] = useState('');
@@ -115,7 +115,7 @@ function Modelos({ numeros }) {
       </p>
       {novo && (
         <FormModelo
-          canalId={canalId} existentes={lista || []} onFechar={() => setNovo(false)}
+          canalId={canalId} hotelId={hotelId} existentes={lista || []} onFechar={() => setNovo(false)}
           onCriado={(r) => { setNovo(false); setAviso(`✅ Modelo “${r.nome}” enviado para a Meta (${SITUACAO_MODELO[r.situacao]?.rotulo || r.situacao}). Clique em Atualizar daqui a pouco para ver se foi aprovado.`); carregar(); }}
         />
       )}
@@ -178,9 +178,9 @@ function Modelos({ numeros }) {
 const VAZIO = { nome: '', categoria: 'MARKETING', idioma: 'pt_BR', cabecalho: '', exemploCabecalho: '', corpo: '', exemplos: [], rodape: '', botoes: [] };
 const maiorVariavel = (texto) => Math.max(0, ...[...String(texto || '').matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((x) => Number(x[1])));
 
-function FormModelo({ canalId, existentes, onCriado, onFechar }) {
+function FormModelo({ canalId, hotelId, existentes, onCriado, onFechar }) {
   const origem = typeof window !== 'undefined' ? window.location.origin : '';
-  const prontos = useMemo(() => modelosProntos(origem), [origem]);
+  const prontos = useMemo(() => modelosProntos(origem, hotelId), [origem, hotelId]);
   const [m, setM] = useState(VAZIO);
   const [pronto, setPronto] = useState('');
   const [tentou, setTentou] = useState(false);
@@ -215,6 +215,7 @@ function FormModelo({ canalId, existentes, onCriado, onFechar }) {
 
   const mudarBotao = (i, campos) => setM({ ...m, botoes: m.botoes.map((b, k) => (k === i ? { ...b, ...campos } : b)) });
   const linkDoSistema = (b) => b.url === `${origem}/r/{{1}}`;
+  const linkDaFicha = (b) => b.url === `${origem}/f/{{1}}`;
 
   async function enviar() {
     setTentou(true);
@@ -309,7 +310,11 @@ function FormModelo({ canalId, existentes, onCriado, onFechar }) {
                 <input type="checkbox" checked={linkDoSistema(b)} onChange={(e) => mudarBotao(i, e.target.checked ? { url: `${origem}/r/{{1}}`, exemplo: 'AB12CD34-0' } : { url: 'https://', exemplo: '' })} />
                 Link “Reservar agora” da cotação (o sistema completa o final do link)
               </label>
-              {!linkDoSistema(b) && (
+              <label className="at-dica" style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '6px 0' }}>
+                <input type="checkbox" checked={linkDaFicha(b)} onChange={(e) => mudarBotao(i, e.target.checked ? { url: `${origem}/f/{{1}}`, exemplo: '4-AbCdEf1234' } : { url: 'https://', exemplo: '' })} />
+                Link da ficha de hóspede da reserva (o sistema completa o final do link)
+              </label>
+              {!linkDoSistema(b) && !linkDaFicha(b) && (
                 <div className="at-grade">
                   <label><span className="rotulo">Endereço (https://…; para um final que muda, termine com {'{{1}}'})</span>
                     <input className="campo" value={b.url} onChange={(e) => mudarBotao(i, { url: e.target.value })} /></label>
