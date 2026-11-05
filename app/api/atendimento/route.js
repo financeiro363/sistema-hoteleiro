@@ -69,6 +69,7 @@ import { estimarGrupo, estimarGruposPendentes } from '../../../lib/atendimento/g
 import { montarGrupoManual } from '../../../lib/atendimento/grupoManual';
 import { avisarVisitantesPorEmail } from '../../../lib/atendimento/chatSite';
 import { rodarAutomacoes, salvarAutomacao, testarAutomacao } from '../../../lib/atendimento/automacoes';
+import { temasDoTexto, TEMAS_PERGUNTAS } from '../../../lib/atendimento/vendasConfig';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDescricao, MAX_OUTROS_HOTEIS } from '../../../lib/atendimento/outrosHoteis';
 
@@ -141,6 +142,7 @@ export async function POST(request) {
       case 'equipe': return await acaoEquipe(supabaseAdmin, chamador);
       case 'minha_assinatura': return await acaoMinhaAssinatura(supabaseAdmin, chamador, corpo);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
+      case 'perguntas': return await acaoPerguntas(supabaseAdmin, chamador, corpo);
       case 'importar_contatos': return await acaoImportarContatos(supabaseAdmin, chamador, corpo);
       case 'cotacao_hoteis': return await acaoCotacaoHoteis(supabaseAdmin, chamador, corpo);
       case 'cotacao_buscar': return await acaoCotacaoBuscar(supabaseAdmin, chamador, corpo);
@@ -661,7 +663,91 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
     const { data: aut } = await supabaseAdmin.rpc('atendimento_painel_automacoes', { p_hoteis: hoteisAdmin, p_inicio: inicio, p_fim: fim });
     automacoes = aut || null; // sem o SQL da Fase 5: não aparece
   }
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null, grupos: grupos || null }, inicio, fim });
+  // Por que não fecharam: conversas arquivadas com motivo no período (sem o SQL das vendas: não aparece)
+  const perdas = await motivosDaPerda(supabaseAdmin, pedidos, inicio, fim);
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null, grupos: grupos || null, perdas }, inicio, fim });
+}
+
+// Período do Painel (datas de João Pessoa) → instantes UTC
+function limitesDoPeriodo(inicio, fim) {
+  return { de: new Date(`${inicio}T03:00:00Z`).toISOString(), ate: new Date(new Date(`${fim}T03:00:00Z`).getTime() + 86400000).toISOString() };
+}
+
+async function motivosDaPerda(supabaseAdmin, hoteis, inicio, fim) {
+  const { de, ate } = limitesDoPeriodo(inicio, fim);
+  const motivos = {};
+  let total = 0;
+  for (let pagina = 0; pagina < 20; pagina += 1) {
+    const { data, error } = await supabaseAdmin.from('atendimento_conversas').select('id, motivo_perda')
+      .in('hotel_id', hoteis).gte('motivo_perda_em', de).lt('motivo_perda_em', ate).not('motivo_perda', 'is', null)
+      .order('id').range(pagina * 1000, pagina * 1000 + 999);
+    if (error) return null;
+    (data || []).forEach((c) => { motivos[c.motivo_perda] = (motivos[c.motivo_perda] || 0) + 1; total += 1; });
+    if (!data || data.length < 1000) break;
+  }
+  return { total, motivos };
+}
+
+// ---------------------------------------------------------------- O QUE MAIS PERGUNTAM (M5)
+// Lê as mensagens dos clientes no período e agrupa por assunto (palavras-chave
+// em lib/atendimento/vendasConfig.js). Conta conversas, não mensagens. Também
+// mostra, por assunto, quantas perguntas o robô não soube responder. Devolve
+// só números: nenhum texto de cliente sai daqui.
+const MAX_MENSAGENS_PERGUNTAS = 20000;
+async function acaoPerguntas(supabaseAdmin, chamador, corpo) {
+  const pedidos = (Array.isArray(corpo.hoteis) && corpo.hoteis.length ? corpo.hoteis : chamador.hoteis)
+    .map(Number).filter((h) => chamador.hoteis.includes(h));
+  if (!pedidos.length) return respostaErro('Escolha um hotel.');
+  const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+  const fim = DATA_ISO.test(corpo.fim || '') ? corpo.fim : hoje;
+  const inicio = DATA_ISO.test(corpo.inicio || '') ? corpo.inicio : `${fim.slice(0, 7)}-01`;
+  if (inicio > fim) return respostaErro('A data inicial é depois da final.');
+  const { de, ate } = limitesDoPeriodo(inicio, fim);
+
+  const temasPorConversa = new Map();
+  let lidas = 0;
+  let cortado = false;
+  for (let pagina = 0; ; pagina += 1) {
+    const { data, error } = await supabaseAdmin.from('atendimento_mensagens').select('id, conversa_id, texto')
+      .in('hotel_id', pedidos).eq('direcao', 'ENTRADA').gte('criado_em', de).lt('criado_em', ate)
+      .order('criado_em', { ascending: false }).order('id', { ascending: false }).range(pagina * 1000, pagina * 1000 + 999);
+    if (error) throw error;
+    for (const m of data || []) {
+      if (!temasPorConversa.has(m.conversa_id)) temasPorConversa.set(m.conversa_id, new Set());
+      temasDoTexto(m.texto).forEach((t) => temasPorConversa.get(m.conversa_id).add(t));
+    }
+    lidas += (data || []).length;
+    if (!data || data.length < 1000) break;
+    if (lidas >= MAX_MENSAGENS_PERGUNTAS) { cortado = true; break; }
+  }
+  const conversas = {};
+  let semTema = 0;
+  for (const temas of temasPorConversa.values()) {
+    if (!temas.size) semTema += 1;
+    temas.forEach((t) => { conversas[t] = (conversas[t] || 0) + 1; });
+  }
+
+  // Perguntas que o robô não soube, pelo mesmo assunto
+  const lacunas = {};
+  let lacunasTotal = 0;
+  const { data: lac, error: erroLac } = await supabaseAdmin.from('atendimento_robo_lacunas').select('pergunta')
+    .in('hotel_id', pedidos).gte('criado_em', de).lt('criado_em', ate).limit(2000);
+  if (!erroLac) {
+    for (const l of lac || []) {
+      lacunasTotal += 1;
+      const temas = temasDoTexto(l.pergunta);
+      (temas.length ? temas : ['SEM_TEMA']).forEach((t) => { lacunas[t] = (lacunas[t] || 0) + 1; });
+    }
+  }
+  const temas = TEMAS_PERGUNTAS.map(([chave, rotulo]) => ({ chave, rotulo, conversas: conversas[chave] || 0, lacunas: lacunas[chave] || 0 }))
+    .filter((t) => t.conversas || t.lacunas).sort((a, b) => b.conversas - a.conversas || b.lacunas - a.lacunas);
+  return Response.json({
+    perguntas: {
+      conversas: temasPorConversa.size, mensagens: lidas, cortado, sem_tema: semTema, temas,
+      lacunas_total: erroLac ? null : lacunasTotal, lacunas_sem_tema: lacunas.SEM_TEMA || 0,
+    },
+    inicio, fim,
+  });
 }
 
 // ---------------------------------------------------------------- IMPORTAR CONTATOS

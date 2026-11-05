@@ -11,9 +11,35 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { chamarApi, dataHora, baixarCsv, telefoneBonito } from './util';
 import {
-  AUTOMACOES, AUTOMACAO_POR_TIPO, CAMPOS_VARIAVEL, SITUACOES_DISPARO, esperaTexto,
+  AUTOMACOES, AUTOMACAO_POR_TIPO, CAMPOS_VARIAVEL, SITUACOES_DISPARO, esperaTexto, AUTOMACOES_POR_HORA, VARIAVEIS_TEXTO,
 } from '../../../lib/atendimento/automacoesConfig';
+
+// Rótulo e dica do texto da mensagem normal (quando a conversa está aberta)
+const TEXTO_LIVRE = {
+  PESQUISA: ['Texto da pesquisa (quando a conversa ainda está aberta, até 24 h)', 'O cliente responde com um número de 1 a 5 e recebe “Obrigado pela avaliação!”. Depois de 24 h, só sai se houver modelo escolhido.'],
+  RETOMADA: ['Texto da retomada (mensagem normal, sem custo de modelo)', 'Curto e simpático. Sai antes de fechar a janela de 24 h; se cair fora do horário de envio, vai no fim do horário do dia anterior. Escolher um modelo é opcional (só serve se a janela já tiver fechado).'],
+  BOAS_VINDAS: ['Texto das boas-vindas quando o hóspede conversou nas últimas 24 h', 'Na maioria das vezes vai o modelo (o hóspede não escreveu nas últimas 24 h). Escreva aqui o mesmo conteúdo do modelo.'],
+  DIA_SAIDA: ['Texto do dia da saída quando o hóspede conversou nas últimas 24 h', 'Na maioria das vezes vai o modelo. Escreva aqui o mesmo conteúdo do modelo.'],
+};
+const caminhoDoBotao = (base) => {
+  if (typeof window === 'undefined') return null;
+  const b = base.replace(/^https?:\/\//i, '').toLowerCase();
+  const site = window.location.host.toLowerCase();
+  return b === `${site}/r/` ? 'r' : b === `${site}/f/` ? 'f' : null;
+};
+function resumoDaEspera(def, salvo) {
+  const hora = salvo?.config?.hora || def.configPadrao?.hora;
+  const dias = salvo?.config?.dias ?? def.configPadrao?.dias;
+  if (def.tipo === 'DIA_SAIDA') return `no dia da saída, às ${hora}`;
+  if (def.tipo === 'PRE_CHECKIN' || def.tipo === 'FICHA_VESPERA') return `${dias} dia(s) antes, às ${hora}`;
+  if (def.tipo === 'POS_CHECKOUT') return `${dias} dia(s) depois, às ${hora}`;
+  if (def.tipo === 'SEM_DISPONIBILIDADE') return `consulta a cada ${salvo?.config?.reverificar_horas || def.configPadrao.reverificar_horas} h`;
+  if (def.tipo === 'BOAS_VINDAS') return `olha a Cloudbeds a cada 20 min · espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois do check-in`;
+  if (def.tipo === 'RETOMADA') return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois da última mensagem do cliente`;
+  return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)}`;
+}
 import { rotuloVariavel, baseDoLink } from '../../../lib/atendimento/modelosTexto';
+import { textoDoHotel } from '../../../lib/atendimento/textosHospedagem';
 
 const COR_SITUACAO = {
   AGENDADO: { background: '#EAF2FC', color: '#1B4F8A' },
@@ -32,7 +58,7 @@ function separarEspera(minutos) {
   return { valor: m, unidade: 1 };
 }
 
-function formDe(def, salvo) {
+function formDe(def, salvo, hotelId) {
   const s = salvo || {};
   const esp = separarEspera(s.espera_minutos ?? def.espera);
   return {
@@ -43,7 +69,7 @@ function formDe(def, salvo) {
     modelo_idioma: s.modelo_idioma || '',
     variaveis: s.variaveis || [],
     variaveis_cabecalho: s.variaveis_cabecalho || [],
-    texto_livre: s.texto_livre ?? def.textoPadrao ?? '',
+    texto_livre: s.texto_livre ?? textoDoHotel(def.tipo, hotelId) ?? def.textoPadrao ?? '',
     espera_valor: esp.valor,
     espera_unidade: esp.unidade,
     janela_inicio: s.janela_inicio || '08:00',
@@ -68,14 +94,14 @@ function paraSalvar(f) {
 
 // ---------------------------------------------------------------------------
 function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
-  const [f, setF] = useState(() => formDe(def, salvo));
+  const [f, setF] = useState(() => formDe(def, salvo, hotelId));
   const [modelos, setModelos] = useState(null);
   const [lendo, setLendo] = useState(false);
   const [erro, setErro] = useState('');
   const [ok, setOk] = useState('');
   const [ocupado, setOcupado] = useState(false);
   const [telefone, setTelefone] = useState('');
-  const usaHora = def.tipo === 'PRE_CHECKIN' || def.tipo === 'POS_CHECKOUT';
+  const usaHora = AUTOMACOES_POR_HORA.includes(def.tipo);
 
   useEffect(() => {
     if (!f.canal_id) { setModelos(null); return undefined; }
@@ -113,7 +139,7 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
     setOcupado(true); setErro(''); setOk('');
     try {
       const r = await chamarApi('/api/atendimento', { acao: 'automacao_salvar', hotelId, automacao: paraSalvar({ ...f, ...extra }) });
-      setF(formDe(def, r.automacao));
+      setF(formDe(def, r.automacao, hotelId));
       setOk(r.automacao.ativo ? '✅ Salva e ligada.' : 'Salva (desligada).');
       onSalvo?.();
     } catch (e) { setErro(e.message); }
@@ -185,30 +211,37 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
           )}
           {(modelo.botoesLink || []).map((b) => {
             const base = baseDoLink(b.url);
-            const doSistema = typeof window !== 'undefined' && base.replace(/^https?:\/\//i, '').toLowerCase() === `${window.location.host.toLowerCase()}/r/`;
+            const caminho = caminhoDoBotao(base);
+            const certo = (caminho === 'r' && def.campos.includes('link_reservar')) || (caminho === 'f' && def.campos.includes('link_ficha'));
+            const esperado = def.campos.includes('link_ficha') ? '/f/{{1}}' : '/r/{{1}}';
             return (
-              <div key={b.indice} className="at-dica" style={{ margin: '8px 0 0', color: doSistema ? undefined : '#B42318' }}>
+              <div key={b.indice} className="at-dica" style={{ margin: '8px 0 0', color: certo ? undefined : '#B42318' }}>
                 🔘 Botão “{b.texto}” abre {base}…{' '}
-                {doSistema ? '(o link “Reservar agora” da cotação — certo)' : '— este link não é do sistema: crie na Meta um modelo com o botão abrindo ' + (typeof window !== 'undefined' ? window.location.origin : '') + '/r/{{1}}'}
+                {certo ? (caminho === 'f' ? '(o link da ficha de hóspede desta reserva — certo)' : '(o link “Reservar agora” da cotação — certo)')
+                  : '— este link não serve aqui: crie na Meta um modelo com o botão abrindo ' + (typeof window !== 'undefined' ? window.location.origin : '') + esperado}
               </div>
             );
           })}
         </div>
       )}
 
-      {def.tipo === 'PESQUISA' && (
+      {def.textoLivre && (
         <div style={{ marginTop: 8 }}>
-          <label className="rotulo" htmlFor="au-texto-pesquisa">Texto da pesquisa (quando a conversa ainda está aberta, até 24 h)</label>
-          <textarea id="au-texto-pesquisa" className="campo" rows={3} value={f.texto_livre} onChange={(e) => setF({ ...f, texto_livre: e.target.value })} />
-          <span className="at-dica" style={{ display: 'block', margin: 0 }}>Pode usar {'{nome}'} e {'{atendente}'}. O cliente responde com um número de 1 a 5 e recebe “Obrigado pela avaliação!”. Depois de 24 h, só sai se houver modelo escolhido.</span>
+          <label className="rotulo" htmlFor={`au-texto-${def.tipo}`}>{TEXTO_LIVRE[def.tipo]?.[0] || 'Texto da mensagem normal'}</label>
+          <textarea id={`au-texto-${def.tipo}`} className="campo" rows={def.tipo === 'PESQUISA' || def.tipo === 'RETOMADA' ? 3 : 6} value={f.texto_livre} onChange={(e) => setF({ ...f, texto_livre: e.target.value })} />
+          <span className="at-dica" style={{ display: 'block', margin: 0 }}>
+            Pode usar {(VARIAVEIS_TEXTO[def.tipo] || ['nome']).map((v) => `{${v}}`).join(', ')}. {TEXTO_LIVRE[def.tipo]?.[1] || ''}
+          </span>
         </div>
       )}
 
       <div className="at-grade" style={{ marginTop: 8 }}>
         {usaHora ? (
           <>
-            <label><span className="rotulo">{def.tipo === 'PRE_CHECKIN' ? 'Quantos dias antes da entrada' : 'Quantos dias depois da saída'}</span>
-              <input className="campo" type="number" min={0} max={7} value={f.dias} onChange={(e) => setF({ ...f, dias: e.target.value })} /></label>
+            {def.tipo !== 'DIA_SAIDA' && (
+              <label><span className="rotulo">{def.tipo === 'POS_CHECKOUT' ? 'Quantos dias depois da saída' : 'Quantos dias antes da entrada'}</span>
+                <input className="campo" type="number" min={0} max={7} value={f.dias} onChange={(e) => setF({ ...f, dias: e.target.value })} /></label>
+            )}
             <label><span className="rotulo">Hora do envio</span>
               <input className="campo" type="time" value={f.hora} onChange={(e) => setF({ ...f, hora: e.target.value })} /></label>
           </>
@@ -281,10 +314,10 @@ export function Automacoes({ hoteis, hotelAtual, onAbrirConversa }) {
   const stats = dados?.painel?.por_tipo || {};
 
   async function ligarDesligar(def, salvo, ligar) {
-    if (ligar && !salvo?.modelo_nome && !(def.tipo === 'PESQUISA' && salvo?.texto_livre)) { setAberta(def.tipo); return; }
+    if (ligar && !salvo?.modelo_nome && !(def.textoLivre && salvo?.texto_livre)) { setAberta(def.tipo); return; }
     setOcupado(true); setErro('');
     try {
-      await chamarApi('/api/atendimento', { acao: 'automacao_salvar', hotelId, automacao: paraSalvar({ ...formDe(def, salvo), ativo: ligar }) });
+      await chamarApi('/api/atendimento', { acao: 'automacao_salvar', hotelId, automacao: paraSalvar({ ...formDe(def, salvo, hotelId), ativo: ligar }) });
       await carregar();
     } catch (e) { setErro(e.message); }
     setOcupado(false);
@@ -325,10 +358,7 @@ export function Automacoes({ hoteis, hotelAtual, onAbrirConversa }) {
           {AUTOMACOES.map((def) => {
             const salvo = porTipo[def.tipo];
             const s = stats[def.tipo] || {};
-            const espera = def.tipo === 'PRE_CHECKIN' || def.tipo === 'POS_CHECKOUT'
-              ? `${salvo?.config?.dias ?? def.configPadrao.dias} dia(s) ${def.tipo === 'PRE_CHECKIN' ? 'antes' : 'depois'}, às ${salvo?.config?.hora || def.configPadrao.hora}`
-              : def.tipo === 'SEM_DISPONIBILIDADE' ? `consulta a cada ${salvo?.config?.reverificar_horas || def.configPadrao.reverificar_horas} h`
-                : `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)}`;
+            const espera = resumoDaEspera(def, salvo);
             return (
               <section key={def.tipo} className="at-cartao">
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
@@ -340,7 +370,7 @@ export function Automacoes({ hoteis, hotelAtual, onAbrirConversa }) {
                 </div>
                 <p className="at-dica" style={{ margin: '6px 0 2px' }}>{def.descricao}</p>
                 <p className="at-dica" style={{ margin: '0 0 2px' }}>
-                  {salvo?.modelo_nome ? `Modelo: ${salvo.modelo_nome}` : 'Modelo: (não escolhido)'} · {espera} · das {salvo?.janela_inicio || '08:00'} às {salvo?.janela_fim || '21:00'} · até {salvo?.limite_dia || 100} por dia
+                  {salvo?.modelo_nome ? `Modelo: ${salvo.modelo_nome}` : def.textoLivre && salvo?.texto_livre ? 'Mensagem normal (sem modelo)' : 'Modelo: (não escolhido)'} · {espera} · das {salvo?.janela_inicio || '08:00'} às {salvo?.janela_fim || '21:00'} · até {salvo?.limite_dia || 100} por dia
                 </p>
                 <p className="at-dica" style={{ margin: 0 }}>💡 {def.asksuite}</p>
                 {(Number(s.enviados) > 0 || Number(s.agendados) > 0 || Number(s.pulados) > 0) && (

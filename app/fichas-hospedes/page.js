@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { bloquearSeNaoPermitido } from '../../lib/restricaoAcesso';
 import { nomePais } from '../../lib/paises';
+import ChegadasFicha from '../components/ChegadasFicha';
 import { rotuloRaca, rotuloNecessidade, rotuloDeficiencia, rotuloMotivo, rotuloTransporte } from '../../lib/fnrhOpcoes';
 
 function formatarData(valor) {
@@ -83,6 +84,8 @@ export default function FichasHospedes() {
           </code>
         </p>
       </div>
+
+      {['ADMIN', 'COLABORADOR'].includes(usuario.papel) && <ChegadasFicha />}
 
       <nav className="fh-abas" aria-label="Seções">
         <button type="button" className={subAba === 'fichas' ? 'fh-aba fh-aba-ativa' : 'fh-aba'} onClick={() => setSubAba('fichas')}>Fichas Recebidas</button>

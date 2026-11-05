@@ -14,6 +14,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
 import { chamarApi, NOME_CANAL, ICONE_CANAL } from './util';
 import { MOTIVOS_PERDA } from '../../../lib/atendimento/gruposConfig';
+import { MOTIVOS_PERDA_CONVERSA } from '../../../lib/atendimento/vendasConfig';
 
 const FUSO = 'America/Fortaleza';
 // Paleta categórica validada (ordem fixa: azul, laranja, verde-água)
@@ -270,11 +271,95 @@ function SecaoGrupos({ g }) {
 }
 
 // ---------------------------------------------------------------------------
+// Por que não fecharam (M15): motivo marcado ao arquivar a conversa
+function SecaoPerdas({ p }) {
+  const lista = Object.entries(p.motivos || {}).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(1, ...lista.map(([, n]) => n));
+  return (
+    <section className="at-cartao">
+      <h2>🗄️ Por que não fecharam (conversas arquivadas)</h2>
+      {lista.length === 0 ? (
+        <p className="at-dica">Nenhuma conversa arquivada com motivo no período. O motivo é pedido quando alguém arquiva uma conversa sem reserva.</p>
+      ) : lista.map(([k, n]) => (
+        <div key={k} className="pi-barra-linha">
+          <span className="pi-barra-nome">{MOTIVOS_PERDA_CONVERSA[k] || k}</span>
+          <span className="pi-barra-trilho"><span className="pi-barra" style={{ width: `${(n / max) * 100}%`, background: CORES[1] }} /></span>
+          <strong className="pi-barra-valor">{inteiro.format(n)} · {pct(n, p.total)}</strong>
+        </div>
+      ))}
+      {lista.length > 0 && <p className="at-dica" style={{ marginBottom: 0 }}>{inteiro.format(p.total)} conversa(s) arquivada(s) com motivo no período. As que o sistema arquiva sozinho (sem conversa há dias) não entram.</p>}
+    </section>
+  );
+}
+
+// O que mais perguntam (M5): calculado na hora, só quando a pessoa pede
+function SecaoPerguntas({ hoteis, inicio, fim }) {
+  const [dados, setDados] = useState(null);
+  const [carregando, setCarregando] = useState(false);
+  const [erro, setErro] = useState('');
+  const chave = `${hoteis.join(',')}|${inicio}|${fim}`;
+  useEffect(() => { setDados(null); setErro(''); }, [chave]);
+  async function analisar() {
+    setCarregando(true); setErro('');
+    try { const r = await chamarApi('/api/atendimento', { acao: 'perguntas', hoteis, inicio, fim }); setDados(r.perguntas); }
+    catch (e) { setErro(e.message); }
+    setCarregando(false);
+  }
+  const temas = dados?.temas || [];
+  const max = Math.max(1, ...temas.map((t) => t.conversas));
+  return (
+    <section className="at-cartao">
+      <div className="at-canal-topo">
+        <h2>❓ O que mais perguntam</h2>
+        <button type="button" className="at-btn" onClick={analisar} disabled={carregando}>{carregando ? 'Lendo as mensagens…' : dados ? '🔄 Analisar de novo' : '🔎 Analisar as mensagens do período'}</button>
+      </div>
+      <p className="at-dica" style={{ marginTop: 0 }}>
+        Agrupa por assunto as mensagens dos clientes no período (conta conversas, não mensagens). Assunto com muitas perguntas que o robô não soube
+        é o que falta ensinar em Robô (IA) → Conteúdo, ou virar resposta pronta.
+      </p>
+      {erro && <div className="aviso-erro">{erro}</div>}
+      {dados && (
+        <>
+          <p className="at-dica">
+            {inteiro.format(dados.conversas)} conversa(s) · {inteiro.format(dados.mensagens)} mensagem(ns) de clientes
+            {dados.cortado ? ' (as mais recentes; escolha um período menor para ver tudo)' : ''} · {inteiro.format(dados.sem_tema)} sem assunto reconhecido (só “oi”, áudio, foto…)
+          </p>
+          {temas.length === 0 ? <p className="at-dica">Nenhum assunto reconhecido no período.</p> : (
+            <div className="at-tabela-rolagem">
+              <table className="at-tabela at-tabela-previa pi-perguntas">
+                <thead><tr><th>Assunto</th><th>Conversas</th><th className="num">%</th>{dados.lacunas_total != null && <th className="num">Robô não soube</th>}</tr></thead>
+                <tbody>
+                  {temas.map((t) => (
+                    <tr key={t.chave}>
+                      <td>{t.rotulo}</td>
+                      <td><span className="pi-barra-linha" style={{ margin: 0 }}>
+                        <span className="pi-barra-trilho"><span className="pi-barra" style={{ width: `${(t.conversas / max) * 100}%`, background: CORES[0] }} /></span>
+                        <strong className="pi-barra-valor">{inteiro.format(t.conversas)}</strong>
+                      </span></td>
+                      <td className="num">{pct(t.conversas, dados.conversas)}</td>
+                      {dados.lacunas_total != null && <td className="num">{t.lacunas ? <strong style={{ color: '#B42318' }}>{inteiro.format(t.lacunas)}</strong> : '—'}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {dados.lacunas_total > 0 && dados.lacunas_sem_tema > 0 && (
+            <p className="at-dica" style={{ marginBottom: 0 }}>Mais {inteiro.format(dados.lacunas_sem_tema)} pergunta(s) que o robô não soube, sobre outros assuntos: veja em Robô (IA) → Conteúdo.</p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Automações (Fase 5) e pesquisa de satisfação — só ADMIN
 const NOME_AUTOMACAO = {
   FUP_RESERVAR: 'Clicou e não reservou', FUP_COTACAO: 'Cotação sem clique', SEM_DISPONIBILIDADE: 'Abriu vaga (lista de espera)',
   GRUPO: 'Retomar grupo', CONFIRMACAO_RESERVA: 'Confirmação da reserva', PRE_CHECKIN: 'Véspera da chegada',
   POS_CHECKOUT: 'Depois da saída', PESQUISA: 'Pesquisa de satisfação',
+  RETOMADA: 'Retomar conversa parada', FICHA_VESPERA: 'Lembrete da ficha', BOAS_VINDAS: 'Boas-vindas no check-in', DIA_SAIDA: 'Dia da saída',
 };
 const notaTexto = (m) => (m == null ? '—' : `${String(m).replace('.', ',')} ⭐`);
 
@@ -676,6 +761,10 @@ export function PainelIndicadores({ hoteis, nomes }) {
           {vendas && Number(vendas.total?.cotacoes) > 0 && <SecaoVendas vendas={vendas} nomes={nomes} />}
 
           {dados.grupos && Number(dados.grupos.pedidos) > 0 && <SecaoGrupos g={dados.grupos} />}
+
+          <h2 className="pi-secao">🧭 Por que não fecham e o que perguntam</h2>
+          {dados.perdas && <SecaoPerdas p={dados.perdas} />}
+          <SecaoPerguntas hoteis={hotel ? [Number(hotel)] : idsHoteis.split(',').map(Number)} inicio={inicio} fim={fim} />
 
           {robo && (
             <>

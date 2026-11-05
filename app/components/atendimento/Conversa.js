@@ -22,6 +22,7 @@ import { ModalCotacao, ListaCotacoes } from './Cotacao';
 import { EditorHtml, EscolherModelo, aplicarVariaveisModelo, htmlParaTextoTela } from './ModelosEmail';
 import { montarTextoModelo, rotuloVariavel, baseDoLink } from '../../../lib/atendimento/modelosTexto';
 import { PAUSA_QUE_CONTINUA, pausaBloqueiaRobo } from '../../../lib/atendimento/roboConfig';
+import { MOTIVOS_PERDA_CONVERSA } from '../../../lib/atendimento/vendasConfig';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 
@@ -752,9 +753,11 @@ export function Conversa({
   const [mostrarCotacao, setMostrarCotacao] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
+  const [perguntarMotivo, setPerguntarMotivo] = useState(false);
   const fimRef = useRef(null);
   const listaRef = useRef(null);
   const ultimoTamanho = useRef({ id: null, n: 0 });
+  useEffect(() => { setPerguntarMotivo(false); }, [conversa.id]);
 
   const nomesAtendentes = useMemo(() => ({ ...(nomes || {}), ...Object.fromEntries((atendentes || []).map((a) => [a.id, a.nome])) }), [atendentes, nomes]);
   const nomeAtendente = (id) => (id ? (nomesAtendentes[id] || `Usuário #${id}`) : 'Sistema');
@@ -785,6 +788,32 @@ export function Conversa({
     avisarCabecalho();
     onRecarregar();
     return true;
+  }
+
+  // Arquivar: sem reserva, pergunta o motivo da perda (para o relatório de vendas)
+  const reservou = !!conversa.cloudbeds_reservation_id
+    || (etiquetas || []).some((e) => /^reservou$/i.test(String(e.nome || '').trim()) && (conversa.etiquetas || []).includes(e.id));
+  function arquivar() {
+    if (reservou) alterar({ status: 'ARQUIVADA' });
+    else setPerguntarMotivo(true);
+  }
+  async function arquivarComMotivo(motivo, obs) {
+    setSalvando(true);
+    setErro('');
+    const agora = new Date().toISOString();
+    const campos = { status: 'ARQUIVADA', motivo_perda: motivo, motivo_perda_obs: obs || null, motivo_perda_em: agora, motivo_perda_por_id: usuario?.id || null, atualizado_em: agora };
+    let { error } = await supabase.from('atendimento_conversas').update(campos).eq('id', conversa.id);
+    let semSql = false;
+    if (error && /motivo_perda/i.test(error.message || '')) {
+      semSql = true;
+      ({ error } = await supabase.from('atendimento_conversas').update({ status: 'ARQUIVADA', atualizado_em: agora }).eq('id', conversa.id));
+    }
+    setSalvando(false);
+    if (error) { setErro('Não foi possível arquivar: ' + error.message); return; }
+    setPerguntarMotivo(false);
+    if (semSql) setErro('Arquivada, mas o motivo não foi guardado: falta rodar no Supabase o SQL das vendas (sql/vendas_etapa1.sql).');
+    avisarCabecalho();
+    onRecarregar();
   }
 
   const nomeContato = nomeDaConversa(conversa);
@@ -828,14 +857,14 @@ export function Conversa({
             {(atendentes || []).map((a) => <option key={a.id} value={a.id}>{a.id === usuario.id ? `${a.nome} (eu)` : a.nome}</option>)}
           </select>
           <select className="at-select" value={conversa.status} disabled={salvando}
-            onChange={(e) => alterar({ status: e.target.value })} aria-label="Situação">
+            onChange={(e) => (e.target.value === 'ARQUIVADA' ? arquivar() : alterar({ status: e.target.value }))} aria-label="Situação">
             {Object.entries(STATUS_CONVERSA).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
           {!['RESOLVIDA', 'ARQUIVADA'].includes(conversa.status) && (
             <button type="button" className="at-btn at-btn-verde" onClick={() => alterar({ status: 'RESOLVIDA' })} disabled={salvando}>✓ Resolver</button>
           )}
           {conversa.status !== 'ARQUIVADA' && (
-            <button type="button" className="at-btn" onClick={() => alterar({ status: 'ARQUIVADA' })} disabled={salvando} title="Tira a conversa das listas (volta sozinha se o cliente escrever de novo)">🗄 Arquivar</button>
+            <button type="button" className="at-btn" onClick={arquivar} disabled={salvando} title="Tira a conversa das listas (volta sozinha se o cliente escrever de novo)">🗄 Arquivar</button>
           )}
           <button type="button" className="at-btn" onClick={onAlternarLateral} title="Dados do contato e reserva na Cloudbeds">
             👤 {lateralAberta ? 'Fechar contato' : 'Contato e reserva'}
@@ -848,6 +877,7 @@ export function Conversa({
           )}
         </div>
       </div>
+      {perguntarMotivo && <MotivoPerda salvando={salvando} onEscolher={arquivarComMotivo} onCancelar={() => setPerguntarMotivo(false)} />}
       <DetalhesConversa conversa={conversa} etapas={etapas} etiquetas={etiquetas} salvando={salvando} onAlterar={alterar} />
       <FaixaRobo conversa={conversa} robo={robo} usuario={usuario} salvando={salvando} onAlterar={alterar} />
       {erro && <div className="aviso-erro" style={{ margin: 8 }}>{erro}</div>}
@@ -1018,6 +1048,36 @@ export function lerValor(texto) {
 }
 
 // ---------------------------------------------------------------------------
+// Arquivar sem reserva: por que não fechou? (M15 — entra no Painel)
+function MotivoPerda({ salvando, onEscolher, onCancelar }) {
+  const [outro, setOutro] = useState(false);
+  const [obs, setObs] = useState('');
+  return (
+    <div className="at-motivo-perda" role="dialog" aria-label="Motivo da perda">
+      <strong>Por que não fechou?</strong>
+      <span className="at-dica" style={{ margin: 0 }}>Escolha o motivo para arquivar. Entra no Painel, em “Por que não fecharam”.</span>
+      <div className="at-motivo-botoes">
+        {Object.entries(MOTIVOS_PERDA_CONVERSA).map(([k, rotulo]) => (
+          k === 'OUTRO'
+            ? <button key={k} type="button" className={`at-btn ${outro ? 'at-btn-verde' : ''}`} disabled={salvando} onClick={() => setOutro(true)}>{rotulo}…</button>
+            : <button key={k} type="button" className="at-btn" disabled={salvando} onClick={() => onEscolher(k)}>{rotulo}</button>
+        ))}
+        <button type="button" className="at-link-pequeno" onClick={onCancelar} disabled={salvando}>Cancelar</button>
+      </div>
+      {outro && (
+        <div className="at-motivo-botoes">
+          <input className="campo" style={{ margin: 0, flex: '1 1 220px' }} maxLength={200} value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Qual foi o motivo? (opcional)" aria-label="Qual foi o motivo" />
+          <button type="button" className="at-btn at-btn-verde" disabled={salvando} onClick={() => onEscolher('OUTRO', obs.trim())}>Arquivar</button>
+        </div>
+      )}
+      <style>{`
+        .at-motivo-perda { display: flex; flex-direction: column; gap: 6px; margin: 8px; padding: 10px 12px; border: 1px solid #F0DFA8; background: #FFF8E6; border-radius: 10px; }
+        .at-motivo-botoes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      `}</style>
+    </div>
+  );
+}
+
 // Etapa do funil, etiquetas e valor da cotação (faixa abaixo do topo)
 export function DetalhesConversa({ conversa, etapas, etiquetas, salvando, onAlterar }) {
   const [valor, setValor] = useState(textoValor(conversa.valor_cotacao));

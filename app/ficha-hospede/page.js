@@ -155,6 +155,9 @@ function SeletorPais({ valor, onChange }) {
 function FichaHospede() {
   const parametros = useSearchParams();
   const hotelId = parametros.get('hotel_id');
+  // Link da mensagem automática (/f/<código>): marca de qual reserva é a ficha,
+  // para o hotel saber quem já preencheu. Não traz nenhum dado da reserva.
+  const codigoReserva = /^\d{1,9}-[A-Za-z0-9_-]{10}$/.test(parametros.get('r') || '') ? parametros.get('r') : null;
 
   const [carregandoHotel, setCarregandoHotel] = useState(true);
   const [nomeHotel, setNomeHotel] = useState('');
@@ -308,8 +311,14 @@ function FichaHospede() {
   // Grava a ficha. Proteção: se o banco ainda não tiver as colunas novas
   // (raça / necessidade especial — falta rodar o SQL), grava sem elas em
   // vez de travar o hóspede na frente da tela com um erro.
-  async function inserirFicha(dados) {
-    const resultado = await supabase.from('fichas_fnrh').insert(dados);
+  async function inserirFicha(dadosSemCodigo) {
+    let dados = codigoReserva ? { ...dadosSemCodigo, codigo_reserva: codigoReserva } : dadosSemCodigo;
+    let resultado = await supabase.from('fichas_fnrh').insert(dados);
+    if (resultado.error && codigoReserva && /codigo_reserva/i.test(resultado.error.message || '')) {
+      // Falta o SQL do link da ficha: grava sem o código
+      dados = dadosSemCodigo;
+      resultado = await supabase.from('fichas_fnrh').insert(dados);
+    }
     const msg = resultado.error?.message || '';
     if (resultado.error && /column/i.test(msg) && /raca|necessidade/i.test(msg)) {
       const { raca: _r, possui_necessidade_especial: _p, necessidades_especiais: _n, ...semNovos } = dados;
