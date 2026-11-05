@@ -1321,10 +1321,55 @@ function PainelContato({ conversa, onAbrirConversa }) {
   );
 }
 
+// Linha do tempo da reserva (M9): cotação → reserva → pagamento → ficha → check-in → check-out
+const ICONE_PASSO = { feito: '✅', atencao: '⚠️', pendente: '⚪', cancelado: '❌' };
+function LinhaDoTempo({ conversa }) {
+  const [dados, setDados] = useState(null);
+  const [carregando, setCarregando] = useState(false);
+  const [erro, setErro] = useState('');
+  async function carregar() {
+    setCarregando(true); setErro('');
+    try { setDados(await chamarApi('/api/atendimento', { acao: 'linha_do_tempo', conversaId: conversa.id })); }
+    catch (e) { setErro(e.message); }
+    setCarregando(false);
+  }
+  useEffect(() => { setDados(null); carregar(); }, [conversa.id, conversa.cloudbeds_reservation_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="at-lateral-bloco">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <p className="at-lateral-titulo" style={{ margin: 0 }}>Linha do tempo</p>
+        <button type="button" className="at-link-pequeno" onClick={carregar} disabled={carregando}>{carregando ? 'Atualizando…' : '🔄 Atualizar'}</button>
+      </div>
+      {erro && <div className="aviso-erro" style={{ fontSize: 13 }}>{erro}</div>}
+      {!dados && carregando && <p className="texto-suave" style={{ fontSize: 13 }}>Consultando…</p>}
+      {dados && (
+        <ol className="at-linha-tempo">
+          {dados.passos.map((p) => (
+            <li key={p.chave} className={`at-passo at-passo-${p.situacao}`}>
+              <span aria-hidden="true">{ICONE_PASSO[p.situacao]}</span>
+              <span><strong>{p.rotulo}</strong><br /><small>{p.detalhe}</small></span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {dados?.oferta && <p className="at-dica" style={{ margin: '6px 0 0' }}>🎁 Recebeu a oferta: {dados.oferta}</p>}
+      {dados?.erro && <p className="at-dica" style={{ margin: '6px 0 0' }}>A Cloudbeds não respondeu: {dados.erro}</p>}
+      <style>{`
+        .at-linha-tempo { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+        .at-passo { display: grid; grid-template-columns: 22px 1fr; gap: 6px; font-size: 13px; align-items: start; }
+        .at-passo small { color: var(--texto-suave); }
+        .at-passo-atencao small { color: #8A6100; }
+        .at-passo-pendente strong { color: var(--texto-suave); font-weight: 600; }
+      `}</style>
+    </div>
+  );
+}
+
 export function PainelLateral({ conversa, onMudou, onAbrirConversa }) {
   return (
     <>
       <PainelContato conversa={conversa} onAbrirConversa={onAbrirConversa} />
+      <LinhaDoTempo conversa={conversa} />
       <ListaCotacoes conversa={conversa} />
       <PainelReserva conversa={conversa} onMudou={onMudou} />
     </>

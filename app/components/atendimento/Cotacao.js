@@ -61,15 +61,17 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
   const ehEmail = canal?.tipo === 'EMAIL';
   const bloqueadoJanela = canal?.tipo === 'WHATSAPP' && !janelaAberta;
 
-  async function buscar(e, idHotel = hotelCotadoId) {
+  async function buscar(e, idHotel = hotelCotadoId, datas = null) {
     e?.preventDefault?.();
     setErro('');
-    if (!checkin || !checkout) { setErro('Escolha as datas de entrada e de saída.'); return; }
-    if (noites < 1) { setErro('A saída tem que ser depois da entrada.'); return; }
+    const ci = datas?.checkin || checkin;
+    const co = datas?.checkout || checkout;
+    if (!ci || !co) { setErro('Escolha as datas de entrada e de saída.'); return; }
+    if (noitesEntre(ci, co) < 1) { setErro('A saída tem que ser depois da entrada.'); return; }
     setBuscando(true);
     try {
       const r = await chamarApi('/api/atendimento', {
-        acao: 'cotacao_buscar', conversaId: conversa.id, checkin, checkout,
+        acao: 'cotacao_buscar', conversaId: conversa.id, checkin: ci, checkout: co,
         adultos: Number(adultos), criancas: Number(criancas), quartos: Number(quartos),
         ...(idHotel ? { hotelCotadoId: idHotel } : {}),
       });
@@ -178,6 +180,19 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
               <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600', marginTop: 10 }}>
                 Nenhum quarto disponível {resultado.hotelCotado ? `no ${resultado.hotelCotado.nome} ` : ''}para {dataBR(resultado.checkin)} a {dataBR(resultado.checkout)} com {Number(adultos) + Number(criancas)} hóspede(s). Tente outras datas.
                 {!resultado.hotelCotado && ' O pedido ficou registrado como demanda perdida (etiqueta “Indisponibilidade na cotação”).'}
+                {(resultado.alternativas || []).length > 0 && (
+                  <span style={{ display: 'block', marginTop: 10 }}>
+                    <strong>📅 Datas vizinhas com quarto (mesmas {resultado.noites} noite{resultado.noites > 1 ? 's' : ''}):</strong>
+                    <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                      {resultado.alternativas.map((a) => (
+                        <button key={a.checkin} type="button" className="at-btn" disabled={buscando}
+                          onClick={() => { setCheckin(a.checkin); setCheckout(a.checkout); buscar(null, hotelCotadoId, a); }}>
+                          {dataBR(a.checkin)} a {dataBR(a.checkout)} · a partir de {reais(a.a_partir_de)}
+                        </button>
+                      ))}
+                    </span>
+                  </span>
+                )}
                 {!resultado.hotelCotado && outros.length > 0 && (
                   <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
                     {outros.map((o) => (
