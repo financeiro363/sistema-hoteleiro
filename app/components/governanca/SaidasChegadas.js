@@ -57,6 +57,7 @@ export default function SaidasChegadas({ usuario, recarregar, mostrarAviso }) {
     (m.FICOU || []).length ? `${plural(m.FICOU.length, 'virou', 'viraram')} arrumação (${m.FICOU.join(', ')})` : null,
     (m.SAIU || []).length ? `${plural(m.SAIU.length, 'saída já feita', 'saídas já feitas')} (${m.SAIU.join(', ')})` : null,
     (m.CHEGADA || []).length ? `⭐ prioridade por chegada: ${m.CHEGADA.join(', ')}` : null,
+    (r.bloqueados || []).length ? `🔒 interditado por bloqueio feito na Cloudbeds: ${r.bloqueados.join(', ')}` : null,
   ].filter(Boolean);
 
   return (

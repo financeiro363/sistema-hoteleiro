@@ -8,6 +8,9 @@
 //                            senha e, se havia inscrição antiga, tenta apagá-la
 //   POST { ativar: false } → apaga a inscrição e a senha
 // A senha fica criptografada (atendimento_segredos) e nunca volta para a tela.
+// Junto, inscreve os avisos de bloqueio de quarto (roomblock: criado, mudou,
+// removido — M23). Se a chave da API não tiver o escopo de bloqueio, a
+// limpeza continua funcionando e a tela avisa.
 // Só administrador.
 // ============================================================================
 
@@ -20,6 +23,19 @@ export const dynamic = 'force-dynamic';
 const API_WEBHOOK = 'https://hotels.cloudbeds.com/api/v1.3';
 const URL_ENDPOINT_WEBHOOK = 'https://chokmahsystem.netlify.app/api/governanca-webhook-cloudbeds';
 const CHAVE_SENHA = 'governanca_webhook_senha';
+const ACOES_BLOQUEIO = ['created', 'details_changed', 'removed'];
+
+async function inscrever(cb, endpointUrl, object, action) {
+  const parametros = new URLSearchParams({ propertyID: cb.propertyId, endpointUrl, object, action });
+  const resposta = await fetch(`${API_WEBHOOK}/postWebhook`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cb.apiKey}`, 'x-property-id': cb.propertyId, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: parametros.toString(),
+  });
+  const dados = await resposta.json().catch(() => null);
+  if (!resposta.ok || dados?.success === false) throw new Error(dados?.message || 'A Cloudbeds recusou a inscrição.');
+  return String(dados?.data?.subscriptionID || dados?.data?.id || dados?.subscriptionID || dados?.id || 'ativo');
+}
 
 async function chamador(request) {
   const auth = await autenticarChamada(request);
@@ -33,9 +49,10 @@ export async function GET(request) {
     const auth = await chamador(request);
     if (auth.resposta) return auth.resposta;
     const { chamador: eu, supabaseAdmin } = auth;
-    const { data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).maybeSingle();
+    let { data: hotel, error } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id, governanca_webhook_bloqueio_ids').eq('id', eu.hotel_id).maybeSingle();
+    if (error) ({ data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).maybeSingle());
     const senha = await lerSegredo(supabaseAdmin, eu.hotel_id, CHAVE_SENHA);
-    return Response.json({ ativo: !!hotel?.governanca_webhook_id, comSenha: !!senha });
+    return Response.json({ ativo: !!hotel?.governanca_webhook_id, comSenha: !!senha, bloqueio: (hotel?.governanca_webhook_bloqueio_ids || []).length > 0, semSqlBloqueio: !!error });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
   }
@@ -61,8 +78,11 @@ export async function POST(request) {
     try { cb = await carregarCloudbeds(supabaseAdmin, eu.hotel_id, segredoCripto); }
     catch (e) { return Response.json({ erro: e.message }, { status: 400 }); }
 
-    const { data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).single();
+    let { data: hotel, error: erroHotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id, governanca_webhook_bloqueio_ids').eq('id', eu.hotel_id).single();
+    if (erroHotel) ({ data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).single());
     const antiga = hotel?.governanca_webhook_id || null;
+    const antigasBloqueio = hotel?.governanca_webhook_bloqueio_ids || [];
+    const apagarBloqueios = async () => { for (const id of antigasBloqueio) { try { await apagarInscricao(cb, id); } catch (e) { /* já não existe */ } } };
 
     if (ativar) {
       const senha = novaSenhaWebhook();
@@ -96,13 +116,33 @@ export async function POST(request) {
         try { await apagarInscricao(cb, antiga); }
         catch (e) { aviso = 'A inscrição antiga (sem senha) não pôde ser apagada na Cloudbeds, mas os avisos dela agora são recusados.'; }
       }
-      return Response.json({ sucesso: true, aviso });
+
+      // Bloqueios feitos na Cloudbeds (M23)
+      await apagarBloqueios();
+      let bloqueio = false;
+      if (erroHotel) {
+        aviso = [aviso, 'Para receber os bloqueios feitos na Cloudbeds, rode no Supabase o SQL da Etapa 2 e reative.'].filter(Boolean).join(' ');
+      } else {
+        const ids = [];
+        try {
+          for (const acao of ACOES_BLOQUEIO) ids.push(await inscrever(cb, `${URL_ENDPOINT_WEBHOOK}?chave=${encodeURIComponent(senha)}`, 'roomblock', acao));
+          bloqueio = true;
+        } catch (e) {
+          for (const id of ids) { try { await apagarInscricao(cb, id); } catch (e2) { /* segue */ } }
+          ids.length = 0;
+          aviso = [aviso, `A limpeza ficou ativada, mas os bloqueios não: ${e.message}${/scope|permission|unauthorized/i.test(e.message) ? ' — adicione o escopo "Room Block" (ler) à chave de API da Cloudbeds e reative.' : ''}`].filter(Boolean).join(' ');
+        }
+        await supabaseAdmin.from('hoteis').update({ governanca_webhook_bloqueio_ids: ids.length ? ids : null }).eq('id', eu.hotel_id);
+      }
+      return Response.json({ sucesso: true, aviso, bloqueio });
     }
 
     if (antiga && antiga !== 'ativo') {
       try { await apagarInscricao(cb, antiga); }
       catch (e) { return Response.json({ erro: e.message }, { status: 400 }); }
     }
+    await apagarBloqueios();
+    if (!erroHotel) await supabaseAdmin.from('hoteis').update({ governanca_webhook_bloqueio_ids: null }).eq('id', eu.hotel_id);
     await supabaseAdmin.from('hoteis').update({ governanca_webhook_id: null }).eq('id', eu.hotel_id);
     await supabaseAdmin.from('atendimento_segredos').delete().eq('hotel_id', eu.hotel_id).eq('canal_id', 0).eq('chave', CHAVE_SENHA);
     return Response.json({ sucesso: true });

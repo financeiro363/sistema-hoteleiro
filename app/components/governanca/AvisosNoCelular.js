@@ -24,7 +24,8 @@ function instalado() {
   return window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
 }
 
-export default function AvisosNoCelular() {
+export default function AvisosNoCelular({ manutencao = false }) {
+  const oQue = manutencao ? 'os chamados de manutenção' : 'os pedidos da recepção';
   const [situacao, setSituacao] = useState('carregando'); // carregando | sem-suporte | iphone-instalar | desligado | negado | ligado
   const [ocupado, setOcupado] = useState(false);
   const [mensagem, setMensagem] = useState('');
@@ -66,7 +67,7 @@ export default function AvisosNoCelular() {
       const r = await chamarRota('/api/push', { acao: 'inscrever', inscricao: inscricao.toJSON() });
       if (!r.ok) throw new Error(r.erro);
       setSituacao('ligado');
-      setMensagem('✅ Pronto! Os pedidos da recepção vão chegar como notificação neste celular.');
+      setMensagem(`✅ Pronto! ${oQue.charAt(0).toUpperCase()}${oQue.slice(1)} vão chegar como notificação neste celular.`);
     } catch (e) {
       setMensagem('⚠️ Não foi possível ligar os avisos: ' + (e.message || 'erro desconhecido'));
     }
@@ -116,7 +117,7 @@ export default function AvisosNoCelular() {
       <strong>🔔 Avisos no celular</strong>
       {situacao === 'desligado' && (
         <>
-          <p>Ligue para receber na hora os pedidos da recepção (toalha extra, travesseiro…), mesmo com a tela apagada.</p>
+          <p>{manutencao ? 'Ligue para receber na hora os chamados novos (os urgentes avisam de novo a cada 30 minutos se ninguém pegar), mesmo com a tela apagada.' : 'Ligue para receber na hora os pedidos da recepção (toalha extra, travesseiro…), mesmo com a tela apagada.'}</p>
           <button type="button" className="botao botao-principal gc-avisos-botao" onClick={ligar} disabled={ocupado}>
             {ocupado ? 'Ligando…' : '🔔 Ativar avisos neste celular'}
           </button>
