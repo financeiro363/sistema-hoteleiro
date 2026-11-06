@@ -73,6 +73,8 @@ import { temasDoTexto, TEMAS_PERGUNTAS } from '../../../lib/atendimento/vendasCo
 import { funilEmReais, lerValorMeta } from '../../../lib/atendimento/metas';
 import { enviarResumo, listaDeEmails } from '../../../lib/atendimento/resumoSemanal';
 import { linhaDoTempo } from '../../../lib/atendimento/linhaDoTempo';
+import { NOTA_BAIXA_ATE } from '../../../lib/atendimento/automacoesConfig';
+import { historicoDoContato } from '../../../lib/atendimento/historicoEstadias';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDescricao, MAX_OUTROS_HOTEIS } from '../../../lib/atendimento/outrosHoteis';
 
@@ -157,6 +159,10 @@ export async function POST(request) {
       case 'minha_assinatura': return await acaoMinhaAssinatura(supabaseAdmin, chamador, corpo);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
       case 'perguntas': return await acaoPerguntas(supabaseAdmin, chamador, corpo);
+      case 'historico_estadias': {
+        const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
+        return Response.json(await historicoDoContato(supabaseAdmin, conversa));
+      }
       case 'linha_do_tempo': {
         const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
         return Response.json(await linhaDoTempo(supabaseAdmin, conversa));
@@ -695,7 +701,27 @@ async function acaoPainel(supabaseAdmin, chamador, corpo) {
   let metas = null;
   try { metas = { ...(await funilEmReais(supabaseAdmin, pedidos, inicio, fim)), pode_editar: pedidos.length === 1 && chamador.hoteisAdmin.includes(pedidos[0]) }; }
   catch (e) { metas = null; }
-  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null, grupos: grupos || null, perdas, metas }, inicio, fim });
+  // Nota da estadia (M18): pesquisa do dia seguinte à saída, mês a mês
+  const notasEstadia = await notasDaEstadia(supabaseAdmin, pedidos, inicio, fim);
+  return Response.json({ painel: { ...data, cotacoes: cotacoes || null, historico: historico || null, robo: roboFinal || null, whatsapp, vendas: vendas || null, automacoes, sla: sla || null, grupos: grupos || null, perdas, metas, notas_estadia: notasEstadia }, inicio, fim });
+}
+
+async function notasDaEstadia(supabaseAdmin, hoteis, inicio, fim) {
+  const { de, ate } = limitesDoPeriodo(inicio, fim);
+  const { data, error } = await supabaseAdmin.from('atendimento_disparos').select('nota, nota_em')
+    .in('hotel_id', hoteis).eq('tipo', 'POS_CHECKOUT').not('nota', 'is', null).gte('nota_em', de).lt('nota_em', ate).limit(5000);
+  if (error || !data?.length) return null;
+  const meses = {};
+  for (const x of data) {
+    const mes = new Date(x.nota_em).toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' }).slice(0, 7);
+    const m = (meses[mes] ||= { mes, quantidade: 0, soma: 0, baixas: 0, por_nota: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } });
+    m.quantidade += 1; m.soma += Number(x.nota); m.por_nota[x.nota] += 1;
+    if (Number(x.nota) <= NOTA_BAIXA_ATE) m.baixas += 1;
+  }
+  const lista = Object.values(meses).sort((a, b) => a.mes.localeCompare(b.mes)).map(({ soma, ...m }) => ({ ...m, media: Math.round((soma / m.quantidade) * 10) / 10 }));
+  const total = lista.reduce((s, m) => s + m.quantidade, 0);
+  const soma = data.reduce((s, x) => s + Number(x.nota), 0);
+  return { meses: lista, quantidade: total, media: Math.round((soma / total) * 10) / 10, baixas: lista.reduce((s, m) => s + m.baixas, 0) };
 }
 
 // ---------------------------------------------------------------- META DE VENDAS (M16)

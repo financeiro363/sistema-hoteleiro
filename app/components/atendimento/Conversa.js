@@ -1321,6 +1321,44 @@ function PainelContato({ conversa, onAbrirConversa }) {
   );
 }
 
+// Histórico de estadias do contato (M11): quantas vezes veio, última, próxima e quanto gastou
+function HistoricoEstadias({ conversa }) {
+  const [dados, setDados] = useState(null);
+  const [aberto, setAberto] = useState(false);
+  const [erro, setErro] = useState('');
+  useEffect(() => {
+    let ativo = true;
+    setDados(null); setErro(''); setAberto(false);
+    chamarApi('/api/atendimento', { acao: 'historico_estadias', conversaId: conversa.id })
+      .then((r) => { if (ativo) setDados(r); }).catch((e) => { if (ativo) setErro(e.message); });
+    return () => { ativo = false; };
+  }, [conversa.id, conversa.contato_id]);
+  if (erro) return <div className="at-lateral-bloco"><p className="at-lateral-titulo">Estadias</p><div className="aviso-erro" style={{ fontSize: 13 }}>{erro}</div></div>;
+  if (!dados) return null;
+  const periodo = (e) => `${dataCurta(e.checkin)}${e.checkout ? ` → ${dataCurta(e.checkout)}` : ''}`;
+  return (
+    <div className="at-lateral-bloco">
+      <p className="at-lateral-titulo">Estadias {dados.volta && <span className="at-chip at-chip-resolvida" style={{ marginLeft: 6 }}>🔁 cliente que volta</span>}</p>
+      {dados.vezes === 0 && !dados.proxima ? <p className="texto-suave" style={{ fontSize: 13, margin: 0 }}>Nenhuma estadia encontrada (pelas fichas de hóspede e reservas ligadas).</p> : (
+        <>
+          <div className="at-dado"><span>Hospedou-se</span><span>{dados.vezes} vez(es){dados.primeira ? ` desde ${dataCurta(dados.primeira.checkin)}` : ''}</span></div>
+          {dados.ultima && <div className="at-dado"><span>Última</span><span>{periodo(dados.ultima)}</span></div>}
+          {dados.proxima && <div className="at-dado"><span>Próxima</span><span>{periodo(dados.proxima)}</span></div>}
+          {dados.gasto > 0 && <div className="at-dado"><span>Gastou</span><span>{dinheiro(dados.gasto)}{dados.gasto_parcial ? ' (só reservas ligadas)' : ''}</span></div>}
+          {dados.estadias.length > 1 && (
+            <button type="button" className="at-link-pequeno" onClick={() => setAberto(!aberto)}>{aberto ? 'Esconder' : `Ver as ${dados.estadias.length} estadias`}</button>
+          )}
+          {aberto && (
+            <ul className="at-dica" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              {dados.estadias.map((e) => <li key={e.checkin}>{periodo(e)}{e.total != null ? ` · ${dinheiro(e.total)}` : ''}{e.status === 'confirmed' || e.status === 'not_confirmed' ? ' · reservada' : ''}</li>)}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // Linha do tempo da reserva (M9): cotação → reserva → pagamento → ficha → check-in → check-out
 const ICONE_PASSO = { feito: '✅', atencao: '⚠️', pendente: '⚪', cancelado: '❌' };
 function LinhaDoTempo({ conversa }) {
@@ -1369,6 +1407,7 @@ export function PainelLateral({ conversa, onMudou, onAbrirConversa }) {
   return (
     <>
       <PainelContato conversa={conversa} onAbrirConversa={onAbrirConversa} />
+      <HistoricoEstadias conversa={conversa} />
       <LinhaDoTempo conversa={conversa} />
       <ListaCotacoes conversa={conversa} />
       <PainelReserva conversa={conversa} onMudou={onMudou} />

@@ -366,6 +366,31 @@ function SecaoMetas({ m, hotelId, onMudou }) {
 }
 
 // ---------------------------------------------------------------------------
+// Nota da estadia (M18): pesquisa do dia seguinte à saída
+function SecaoNotaEstadia({ n }) {
+  return (
+    <section className="at-cartao">
+      <h2>⭐ Nota da estadia (pesquisa depois da saída)</h2>
+      <div className="pi-cartoes">
+        <Cartao rotulo="Nota média" valor={`${String(n.media).replace('.', ',')} ⭐`} detalhe={`${fmt(n.quantidade)} resposta(s) no período`} />
+        <Cartao rotulo="Notas baixas (1 a 3)" valor={fmt(n.baixas)} detalhe={`${pct(n.baixas, n.quantidade)} das respostas · os administradores foram avisados`} />
+      </div>
+      <div className="at-tabela-rolagem">
+        <table className="at-tabela at-tabela-previa">
+          <thead><tr><th>Mês</th><th className="num">Respostas</th><th className="num">Média</th><th className="num">5</th><th className="num">4</th><th className="num">3</th><th className="num">2</th><th className="num">1</th></tr></thead>
+          <tbody>
+            {n.meses.map((m) => (
+              <tr key={m.mes}><td>{rotuloMes(m.mes)}</td><td className="num">{inteiro.format(m.quantidade)}</td><td className="num">{String(m.media).replace('.', ',')}</td>
+                {[5, 4, 3, 2, 1].map((k) => <td key={k} className="num">{inteiro.format(m.por_nota[k] || 0)}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Por que não fecharam (M15): motivo marcado ao arquivar a conversa
 function SecaoPerdas({ p }) {
   const lista = Object.entries(p.motivos || {}).sort((a, b) => b[1] - a[1]);
@@ -454,7 +479,7 @@ const NOME_AUTOMACAO = {
   FUP_RESERVAR: 'Clicou e não reservou', FUP_COTACAO: 'Cotação sem clique', SEM_DISPONIBILIDADE: 'Abriu vaga (lista de espera)',
   GRUPO: 'Retomar grupo', CONFIRMACAO_RESERVA: 'Confirmação da reserva', PRE_CHECKIN: 'Véspera da chegada',
   POS_CHECKOUT: 'Depois da saída', PESQUISA: 'Pesquisa de satisfação',
-  RETOMADA: 'Retomar conversa parada', OFERTA: 'Segunda tentativa com oferta', FICHA_VESPERA: 'Lembrete da ficha', BOAS_VINDAS: 'Boas-vindas no check-in', DIA_SAIDA: 'Dia da saída',
+  ANIVERSARIO: 'Aniversário', REATIVACAO: 'Cliente que não volta', RETOMADA: 'Retomar conversa parada', OFERTA: 'Segunda tentativa com oferta', FICHA_VESPERA: 'Lembrete da ficha', BOAS_VINDAS: 'Boas-vindas no check-in', DIA_SAIDA: 'Dia da saída',
 };
 const notaTexto = (m) => (m == null ? '—' : `${String(m).replace('.', ',')} ⭐`);
 
@@ -858,6 +883,8 @@ export function PainelIndicadores({ hoteis, nomes }) {
           {vendas && Number(vendas.total?.cotacoes) > 0 && <SecaoVendas vendas={vendas} nomes={nomes} />}
 
           {dados.grupos && Number(dados.grupos.pedidos) > 0 && <SecaoGrupos g={dados.grupos} />}
+
+          {dados.notas_estadia && <><h2 className="pi-secao">🛏️ Depois da estadia</h2><SecaoNotaEstadia n={dados.notas_estadia} /></>}
 
           <h2 className="pi-secao">🧭 Por que não fecham e o que perguntam</h2>
           {dados.perdas && <SecaoPerdas p={dados.perdas} />}
