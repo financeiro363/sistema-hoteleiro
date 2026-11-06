@@ -583,6 +583,8 @@ export const ESTILOS_ATENDIMENTO = `
   .pi-legenda { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--texto-suave); margin-top: 4px; }
   .pi-legenda span { display: inline-flex; align-items: center; gap: 6px; }
   .pi-legenda i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .at-audio-bloco { display: flex; flex-direction: column; gap: 4px; }
+  .at-transcricao { font-size: 13px; color: var(--texto-suave); max-width: 320px; white-space: pre-wrap; }
   .pi-meta-barra { position: relative; height: 14px; border-radius: 7px; background: #EEF1EE; margin-top: 12px; overflow: visible; }
   .pi-meta-feito { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 7px; }
   .pi-meta-hoje { position: absolute; top: -4px; bottom: -4px; width: 2px; background: #1F2A26; }

@@ -116,6 +116,7 @@ export default function Recepcao() {
                   {c.fonte && <span className="rc-tag rc-cinza">{c.fonte}</span>}
                 </div>
                 {c.oferta && <div className="rc-oferta">🎁 Combinado na oferta: <strong>{c.oferta}</strong></div>}
+                {c.aceitou && <div className="rc-oferta">🛎️ Aceitou na véspera: <strong>{c.aceitou}</strong> — lançar na reserva</div>}
               </li>
             ))}
           </ul>

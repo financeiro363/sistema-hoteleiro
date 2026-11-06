@@ -36,6 +36,7 @@ function resumoDaEspera(def, salvo) {
   if (def.tipo === 'POS_CHECKOUT') return `${dias} dia(s) depois, às ${hora}`;
   if (def.tipo === 'SEM_DISPONIBILIDADE') return `consulta a cada ${salvo?.config?.reverificar_horas || def.configPadrao.reverificar_horas} h`;
   if (def.tipo === 'BOAS_VINDAS') return `olha a Cloudbeds a cada 20 min · espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois do check-in`;
+  if (def.tipo === 'UPGRADE') return `${dias} dia(s) antes, às ${hora}${salvo?.config?.upgrade_preco ? ` · upgrade R$ ${salvo.config.upgrade_preco}/noite` : ''}${salvo?.config?.late_preco ? ` · late check-out R$ ${salvo.config.late_preco}` : ''}`;
   if (def.tipo === 'OFERTA') return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois da cotação · só abaixo de ${salvo?.config?.ocupacao_max ?? 60}% de ocupação${salvo?.config?.beneficio ? ` · benefício: ${salvo.config.beneficio}` : ''}`;
   if (def.tipo === 'RETOMADA') return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)} depois da última mensagem do cliente`;
   return `espera ${esperaTexto(salvo?.espera_minutos ?? def.espera)}`;
@@ -83,8 +84,16 @@ function formDe(def, salvo, hotelId) {
     parar_robo: s.config?.parar_robo ?? !!def.pararRobo,
     beneficio: s.config?.beneficio ?? def.configPadrao?.beneficio ?? '',
     ocupacao_max: s.config?.ocupacao_max ?? def.configPadrao?.ocupacao_max ?? 60,
+    modelo_en: s.config?.modelos_idioma?.en ? `${s.config.modelos_idioma.en.nome}|${s.config.modelos_idioma.en.idioma}` : '',
+    modelo_es: s.config?.modelos_idioma?.es ? `${s.config.modelos_idioma.es.nome}|${s.config.modelos_idioma.es.idioma}` : '',
+    upgrade_quarto: s.config?.upgrade_quarto ?? '',
+    upgrade_preco: s.config?.upgrade_preco ?? '',
+    late_hora: s.config?.late_hora ?? def.configPadrao?.late_hora ?? '14:00',
+    late_preco: s.config?.late_preco ?? '',
   };
 }
+
+const parModelo = (v) => { const [nome, idioma] = String(v || '').split('|'); return nome ? { nome, idioma } : null; };
 
 function paraSalvar(f) {
   return {
@@ -92,7 +101,11 @@ function paraSalvar(f) {
     variaveis: f.variaveis, variaveis_cabecalho: f.variaveis_cabecalho, texto_livre: f.texto_livre,
     espera_minutos: Math.round(Number(f.espera_valor || 0) * Number(f.espera_unidade || 1)),
     janela_inicio: f.janela_inicio, janela_fim: f.janela_fim, limite_dia: Number(f.limite_dia),
-    config: { hora: f.hora, dias: Number(f.dias), reverificar_horas: Number(f.reverificar_horas), parar_robo: !!f.parar_robo, beneficio: f.beneficio, ocupacao_max: Number(f.ocupacao_max) },
+    config: {
+      hora: f.hora, dias: Number(f.dias), reverificar_horas: Number(f.reverificar_horas), parar_robo: !!f.parar_robo, beneficio: f.beneficio, ocupacao_max: Number(f.ocupacao_max),
+      upgrade_quarto: f.upgrade_quarto, upgrade_preco: f.upgrade_preco, late_hora: f.late_hora, late_preco: f.late_preco,
+    },
+    modelos_idioma: { en: parModelo(f.modelo_en), es: parModelo(f.modelo_es) },
   };
 }
 
@@ -189,6 +202,22 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
         </div>
       </div>
 
+      {f.modelo_nome && (
+        <details className="at-dica" style={{ margin: '8px 0 0' }} open={!!(f.modelo_en || f.modelo_es)}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>🌎 Versões em inglês e espanhol (opcional)</summary>
+          <p style={{ margin: '6px 0' }}>Para cliente que escreve em inglês ou espanhol (ou estrangeiro na Cloudbeds), vai a versão traduzida, com as mesmas variáveis na mesma ordem e os mesmos botões. Sem versão, vai a em português.</p>
+          <div className="at-grade">
+            {[['en', 'Inglês'], ['es', 'Espanhol']].map(([k, rotulo]) => (
+              <label key={k}><span className="rotulo">Modelo em {rotulo}</span>
+                <select className="campo" value={f[`modelo_${k}`]} onChange={(e) => setF({ ...f, [`modelo_${k}`]: e.target.value })} disabled={!modelos}>
+                  <option value="">(nenhum: vai em português)</option>
+                  {(modelos || []).filter((m) => m.nome !== f.modelo_nome || m.idioma !== f.modelo_idioma).map((m) => <option key={`${m.nome}|${m.idioma}`} value={`${m.nome}|${m.idioma}`}>{m.nome} ({m.idioma})</option>)}
+                </select></label>
+            ))}
+          </div>
+        </details>
+      )}
+
       {modelo && (
         <div className="at-reserva" style={{ marginTop: 8 }}>
           <div className="at-dica" style={{ margin: '0 0 6px' }}>Texto do modelo:</div>
@@ -226,6 +255,23 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {def.tipo === 'UPGRADE' && (
+        <div className="at-grade" style={{ marginTop: 8 }}>
+          <label><span className="rotulo">Upgrade para o quarto (nome como na Cloudbeds)</span>
+            <input className="campo" maxLength={80} value={f.upgrade_quarto} onChange={(e) => setF({ ...f, upgrade_quarto: e.target.value })} placeholder="ex.: Apartamento Luxo" /></label>
+          <label><span className="rotulo">Preço do upgrade por noite (R$)</span>
+            <input className="campo" inputMode="decimal" value={f.upgrade_preco} onChange={(e) => setF({ ...f, upgrade_preco: e.target.value })} placeholder="ex.: 80" /></label>
+          <label><span className="rotulo">Late check-out até</span>
+            <input className="campo" type="time" value={f.late_hora} onChange={(e) => setF({ ...f, late_hora: e.target.value })} /></label>
+          <label><span className="rotulo">Preço do late check-out (R$)</span>
+            <input className="campo" inputMode="decimal" value={f.late_preco} onChange={(e) => setF({ ...f, late_preco: e.target.value })} placeholder="ex.: 60 (em branco: não oferece)" /></label>
+          <span className="at-dica" style={{ margin: 0, gridColumn: '1 / -1' }}>
+            Deixe o preço em branco para não oferecer aquela opção. O upgrade só é oferecido se a Cloudbeds tiver o quarto melhor livre nas datas da reserva.
+            Quando o hóspede aceita, a conversa vai para “Pendente” e a recepção lança o valor na reserva (aparece na tela de chegadas).
+          </span>
         </div>
       )}
 

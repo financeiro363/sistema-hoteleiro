@@ -479,7 +479,7 @@ const NOME_AUTOMACAO = {
   FUP_RESERVAR: 'Clicou e não reservou', FUP_COTACAO: 'Cotação sem clique', SEM_DISPONIBILIDADE: 'Abriu vaga (lista de espera)',
   GRUPO: 'Retomar grupo', CONFIRMACAO_RESERVA: 'Confirmação da reserva', PRE_CHECKIN: 'Véspera da chegada',
   POS_CHECKOUT: 'Depois da saída', PESQUISA: 'Pesquisa de satisfação',
-  ANIVERSARIO: 'Aniversário', REATIVACAO: 'Cliente que não volta', RETOMADA: 'Retomar conversa parada', OFERTA: 'Segunda tentativa com oferta', FICHA_VESPERA: 'Lembrete da ficha', BOAS_VINDAS: 'Boas-vindas no check-in', DIA_SAIDA: 'Dia da saída',
+  UPGRADE: 'Upgrade na véspera', ANIVERSARIO: 'Aniversário', REATIVACAO: 'Cliente que não volta', RETOMADA: 'Retomar conversa parada', OFERTA: 'Segunda tentativa com oferta', FICHA_VESPERA: 'Lembrete da ficha', BOAS_VINDAS: 'Boas-vindas no check-in', DIA_SAIDA: 'Dia da saída',
 };
 const notaTexto = (m) => (m == null ? '—' : `${String(m).replace('.', ',')} ⭐`);
 
