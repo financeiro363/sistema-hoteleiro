@@ -31,6 +31,8 @@
 //                       também calcula o valor estimado dos pedidos de grupo novos
 //   grupo_estimar     → recalcula pela Cloudbeds o valor estimado de um pedido de grupo
 //   grupo_registrar   → registra à mão um pedido de grupo (telefone, balcão, e-mail…)
+//   robo_fontes…      → fontes do conteúdo do robô (site e PDF) e as sugestões (ADMIN, M21)
+//   robo_fontes_rechecar → relê as páginas do site uma vez por mês (agendada)
 //   automacoes_rodar  → automações da Fase 5: agenda e envia os disparos (agendada)
 //   automacoes        → lista as automações, os disparos e os números (ADMIN)
 //   automacao_salvar  → liga/desliga e configura uma automação (ADMIN)
@@ -78,6 +80,8 @@ import { historicoDoContato } from '../../../lib/atendimento/historicoEstadias';
 import { CHAVE_GROQ, chaveGroqValida, transcreverMensagem } from '../../../lib/atendimento/transcricao';
 import { sugerirResposta } from '../../../lib/atendimento/robo';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
+import { listarFontes, adicionarFonte, linksDaPagina, apagarFonte, decidirSugestao, lerFonte, sugerirDaFonte, rechecarFontes } from '../../../lib/atendimento/roboFontesServidor';
+import { dividirTexto } from '../../../lib/atendimento/roboFontes';
 import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDescricao, MAX_OUTROS_HOTEIS } from '../../../lib/atendimento/outrosHoteis';
 
 export const dynamic = 'force-dynamic';
@@ -102,6 +106,12 @@ export async function POST(request) {
       let chatSite = null;
       try { chatSite = await avisarVisitantesPorEmail(supabaseAdmin, { prazo: Date.now() + 5000 }); } catch (e) { chatSite = { erro: e.message }; }
       return Response.json({ ...emails, reservas, arquivadas: arquivadas ?? null, chatSite });
+    } catch (e) { return respostaErro(e.message, 500); }
+  }
+  // Fontes do conteúdo do robô (M21): rechecagem mensal das páginas do site
+  if (corpo?.acao === 'robo_fontes_rechecar' && chamadaAgendadaValida(request)) {
+    try {
+      return Response.json(await rechecarFontes(clienteAdmin(), { prazo: Date.now() + 8500, origem: origemDoSite(request) }));
     } catch (e) { return respostaErro(e.message, 500); }
   }
   // Automações (Fase 5): agenda e envia os disparos que chegaram a hora
@@ -221,6 +231,9 @@ export async function POST(request) {
       case 'robo_info_hotel': return await acaoRoboInfoHotel(supabaseAdmin, chamador, corpo);
       case 'robo_testar': return await acaoRoboTestar(supabaseAdmin, chamador, corpo, request);
       case 'robo_revisar': return await acaoRoboRevisar(supabaseAdmin, chamador, corpo);
+      case 'robo_fontes': case 'robo_fonte_adicionar': case 'robo_fonte_links': case 'robo_fonte_ler':
+      case 'robo_fonte_sugerir': case 'robo_fonte_apagar': case 'robo_sugestao_decidir':
+        return await acaoRoboFontes(supabaseAdmin, chamador, corpo);
       case 'grupo_estimar': return await acaoGrupoEstimar(supabaseAdmin, chamador, corpo);
       case 'grupo_registrar': return await acaoGrupoRegistrar(supabaseAdmin, chamador, corpo);
       case 'automacoes': return await acaoAutomacoes(supabaseAdmin, chamador, corpo);
@@ -1266,6 +1279,29 @@ async function acaoRoboTestar(supabaseAdmin, chamador, corpo, request) {
   try {
     const r = await testarRobo(supabaseAdmin, hotelId, { mensagens: corpo.mensagens, usarRascunho: !!corpo.usarRascunho, origem: origemDoSite(request) });
     return Response.json({ sucesso: true, ...r });
+  } catch (e) { return respostaErro(e.message); }
+}
+
+// Fontes do conteúdo do robô (M21): só o ADMIN do hotel
+async function acaoRoboFontes(supabaseAdmin, chamador, corpo) {
+  const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+  try {
+    switch (corpo.acao) {
+      case 'robo_fontes': return Response.json(await listarFontes(supabaseAdmin, hotelId));
+      case 'robo_fonte_adicionar': return Response.json({ sucesso: true, fonte: await adicionarFonte(supabaseAdmin, hotelId, chamador.id, corpo) });
+      case 'robo_fonte_links': return Response.json(await linksDaPagina(corpo.url));
+      case 'robo_fonte_apagar': return Response.json(await apagarFonte(supabaseAdmin, hotelId, corpo.fonteId));
+      case 'robo_sugestao_decidir': return Response.json(await decidirSugestao(supabaseAdmin, hotelId, chamador.id, { id: corpo.id, aceitar: !!corpo.aceitar }));
+      case 'robo_fonte_ler': {
+        const { data: f } = await supabaseAdmin.from('atendimento_robo_fontes').select('*').eq('hotel_id', hotelId).eq('id', Number(corpo.fonteId) || 0).maybeSingle();
+        if (!f) return respostaErro('Fonte não encontrada.', 404);
+        const r = await lerFonte(supabaseAdmin, f, { tempoMs: 7000 });
+        return Response.json({ sucesso: true, mudou: r.mudou, caracteres: r.texto.length, partes: dividirTexto(r.texto).length });
+      }
+      case 'robo_fonte_sugerir':
+        return Response.json({ sucesso: true, ...(await sugerirDaFonte(supabaseAdmin, hotelId, { fonteId: corpo.fonteId, parte: corpo.parte, assuntos: corpo.assuntos })) });
+      default: return respostaErro('Ação desconhecida.');
+    }
   } catch (e) { return respostaErro(e.message); }
 }
 

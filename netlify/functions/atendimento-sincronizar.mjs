@@ -14,6 +14,7 @@
 // Automações (Fase 5): também em paralelo, agenda e envia os disparos.
 // Campanhas (Fase 6): também em paralelo, envia até 40 mensagens da fila.
 // Manutenção: avisos no celular dos chamados (que faltaram) e repetição dos urgentes.
+// Robô (M21): relê as páginas do site cadastradas como fonte, uma vez por mês cada.
 // Funções agendadas só rodam no site publicado (não nas prévias de deploy).
 // ============================================================================
 
@@ -47,7 +48,7 @@ export default async function sincronizarEmails() {
       console.log('Manutenção — avisos:', resposta.status, JSON.stringify(await resposta.json().catch(() => ({}))));
     } catch (e) { console.log('Manutenção — falha:', e.message); }
   };
-  await Promise.all([chamar('sincronizar', 'sincronização de e-mails'), chamar('robo_pendentes', 'robô'), chamar('automacoes_rodar', 'automações'), chamar('campanhas_rodar', 'campanhas'), manutencao()]);
+  await Promise.all([chamar('sincronizar', 'sincronização de e-mails'), chamar('robo_pendentes', 'robô'), chamar('automacoes_rodar', 'automações'), chamar('campanhas_rodar', 'campanhas'), chamar('robo_fontes_rechecar', 'fontes do robô'), manutencao()]);
 }
 
 export const config = {

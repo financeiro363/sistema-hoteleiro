@@ -10,16 +10,19 @@
 // - Conteúdo: o que o robô sabe do hotel, em assuntos, com rascunho e
 //   publicação (as versões publicadas ficam guardadas); o botão "Procurar
 //   contradições" pede à IA que aponte informações que não batem
+// - Fontes do conteúdo (M21): páginas do site e PDFs; a IA compara com o
+//   conteúdo e sugere o que é novo ou diferente (aceitar vai para o rascunho)
 // - Testar: conversa de mentira com o robô, sem enviar nada a cliente
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
-import { chamarApi, dataHora } from './util';
+import { chamarApi, dataHora, subirArquivo } from './util';
 import {
   MODELOS_IA, MODELO_PADRAO, CANAIS_ROBO, ASSUNTOS_SUGERIDOS, dolares,
 } from '../../../lib/atendimento/roboConfig';
 import { TIPOS_REVISAO, indiceDoAssunto, posicaoDoTrecho } from '../../../lib/atendimento/roboRevisao';
+import { TIPOS_SUGESTAO, MAX_PDF_MB, RECHECAR_DIAS, aplicarSugestao } from '../../../lib/atendimento/roboFontes';
 
 const SEM_SQL = 'Falta rodar no Supabase o SQL da Fase 4 (sql/caixa_de_entrada_fase4.sql).';
 const PADRAO = { ligado: false, canais: ['WHATSAPP'], modelo: MODELO_PADRAO, nome_assistente: '', horas_retomar: 12, limite_mensal_usd: 30, email_solicitacoes: '', modo_economico: true, outros_hoteis: [] };
@@ -523,6 +526,228 @@ function Revisao({ revisao, velha, onAbrir, onIgnorar, onFechar }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// FONTES DO CONTEÚDO (M21): site e PDFs → lista de sugestões
+// ---------------------------------------------------------------------------
+const SITUACAO_FONTE = {
+  NOVA: ['rb-chip', 'ainda não lida'],
+  OK: ['rb-chip rb-chip-ok', 'lida'],
+  MUDOU: ['rb-chip rb-chip-alerta', '⚠️ mudou'],
+  ERRO: ['rb-chip rb-chip-erro', '❌ erro'],
+};
+
+function Fontes({ hotelId, assuntos, onAceitar }) {
+  const [dados, setDados] = useState(null);
+  const [erro, setErro] = useState('');
+  const [msg, setMsg] = useState('');
+  const [url, setUrl] = useState('');
+  const [links, setLinks] = useState(null); // páginas achadas no site
+  const [marcados, setMarcados] = useState([]);
+  const [ocupado, setOcupado] = useState('');
+  const [progresso, setProgresso] = useState(null);
+  const [editados, setEditados] = useState({});
+  const arquivoRef = useRef(null);
+
+  const carregar = useCallback(async () => {
+    try { setDados(await chamarApi('/api/atendimento', { acao: 'robo_fontes', hotelId })); }
+    catch (e) { setErro(erroAmigavel(e)); }
+  }, [hotelId]);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  async function agir(rotulo, fn) {
+    setOcupado(rotulo); setErro(''); setMsg('');
+    try { await fn(); } catch (e) { setErro(erroAmigavel(e)); }
+    setOcupado(''); setProgresso(null);
+  }
+
+  const adicionarUrl = (u, nome) => chamarApi('/api/atendimento', { acao: 'robo_fonte_adicionar', hotelId, tipo: 'SITE', url: u, nome });
+  const adicionar = () => agir('adicionar', async () => {
+    await adicionarUrl(url.trim());
+    setUrl(''); setMsg('Página adicionada. Clique em “✨ Gerar sugestões” para a IA ler.');
+    await carregar();
+  });
+  const verPaginas = () => agir('links', async () => {
+    const r = await chamarApi('/api/atendimento', { acao: 'robo_fonte_links', hotelId, url: url.trim() });
+    const jaTem = new Set((dados?.fontes || []).map((f) => f.url));
+    setLinks({ ...r, links: [{ url: r.url, texto: r.titulo || 'Página inicial' }, ...r.links].filter((l) => !jaTem.has(l.url)) });
+    setMarcados([]);
+  });
+  const adicionarMarcadas = () => agir('adicionar', async () => {
+    const lista = links.links.filter((l) => marcados.includes(l.url));
+    const falhas = [];
+    for (const l of lista) { try { await adicionarUrl(l.url, l.texto); } catch (e) { falhas.push(`${l.texto}: ${e.message}`); } }
+    setLinks(null); setUrl('');
+    setMsg(`${lista.length - falhas.length} página(s) adicionada(s).${falhas.length ? ` Não entraram: ${falhas.join('; ')}` : ''}`);
+    await carregar();
+  });
+  const enviarPdf = (arquivo) => agir('pdf', async () => {
+    if (!arquivo) return;
+    if (!/\.pdf$/i.test(arquivo.name) && arquivo.type !== 'application/pdf') throw new Error('Escolha um arquivo PDF.');
+    if (arquivo.size > MAX_PDF_MB * 1048576) throw new Error(`O PDF passa de ${MAX_PDF_MB} MB.`);
+    const nome = arquivo.name.replace(/\.pdf$/i, '');
+    const sub = await subirArquivo(arquivo.name.toLowerCase().endsWith('.pdf') ? arquivo : new File([arquivo], `${nome}.pdf`, { type: 'application/pdf' }), hotelId);
+    await chamarApi('/api/atendimento', { acao: 'robo_fonte_adicionar', hotelId, tipo: 'PDF', caminho: sub.caminho, nome });
+    setMsg('PDF adicionado. Clique em “✨ Gerar sugestões” para a IA ler.');
+    if (arquivoRef.current) arquivoRef.current.value = '';
+    await carregar();
+  });
+  const apagar = (f) => {
+    if (!window.confirm(`Tirar “${f.nome}” das fontes? O conteúdo do robô não muda.`)) return;
+    agir('apagar', async () => { await chamarApi('/api/atendimento', { acao: 'robo_fonte_apagar', hotelId, fonteId: f.id }); await carregar(); });
+  };
+  const gerar = (f) => agir(`gerar-${f.id}`, async () => {
+    setProgresso({ fonte: f.nome, texto: 'lendo a fonte…' });
+    const lida = await chamarApi('/api/atendimento', { acao: 'robo_fonte_ler', hotelId, fonteId: f.id });
+    let novas = 0;
+    for (let parte = 0; parte < lida.partes; parte += 1) {
+      setProgresso({ fonte: f.nome, texto: `a IA está comparando${lida.partes > 1 ? ` (parte ${parte + 1} de ${lida.partes})` : ''}…` });
+      const r = await chamarApi('/api/atendimento', { acao: 'robo_fonte_sugerir', hotelId, fonteId: f.id, parte, assuntos });
+      novas += (r.sugestoes || []).length;
+    }
+    await carregar();
+    setMsg(novas ? `${novas} sugestão(ões) de “${f.nome}”. Confira abaixo.` : `Nada novo em “${f.nome}”: o conteúdo do robô já tem o que está lá.`);
+  });
+
+  const textoDe = (s) => (editados[s.id] ?? s.texto_sugerido);
+  async function decidir(s, aceitar) {
+    const r = aceitar ? await onAceitar({ ...s, texto_sugerido: textoDe(s).trim() || s.texto_sugerido }) : null;
+    await chamarApi('/api/atendimento', { acao: 'robo_sugestao_decidir', hotelId, id: s.id, aceitar });
+    setDados((d) => ({ ...d, sugestoes: d.sugestoes.filter((x) => x.id !== s.id) }));
+    return r;
+  }
+  const aceitarUma = (s) => agir(`s-${s.id}`, async () => {
+    const r = await decidir(s, true);
+    setMsg(r?.como === 'ja_tinha' ? 'O robô já tinha esta informação; nada foi repetido.' : `Foi para o rascunho, no assunto “${s.assunto}”. Publique para o robô usar.`);
+  });
+  const recusarUma = (s) => agir(`s-${s.id}`, () => decidir(s, false));
+  const aceitarTodas = () => {
+    if (!window.confirm(`Aceitar as ${sugestoes.length} sugestões? Todas vão para o rascunho (o robô só usa depois de publicar).`)) return;
+    agir('todas', async () => { for (const s of sugestoes) await decidir(s, true); setMsg('Todas foram para o rascunho. Confira os assuntos e publique.'); });
+  };
+
+  const fontes = dados?.fontes || [];
+  const sugestoes = dados?.sugestoes || [];
+  const nomeDaFonte = (id) => fontes.find((f) => f.id === id)?.nome || 'fonte apagada';
+  const mudaram = fontes.filter((f) => f.situacao === 'MUDOU');
+
+  return (
+    <section className="at-cartao" id="rb-fontes">
+      <h2>🌐 Fontes do conteúdo (site e PDFs)</h2>
+      <p className="at-dica" style={{ marginTop: 0 }}>
+        Cadastre as páginas do site do hotel e os PDFs (como o cardápio) que valem como informação oficial. A IA lê cada fonte, compara com o que o robô já sabe e
+        sugere o que é <strong>novo</strong> ou <strong>diferente</strong>. Você aceita ou recusa uma por uma: o que aceitar vai para o rascunho e só vale depois de <strong>🚀 Publicar</strong>.
+        A cada {RECHECAR_DIAS} dias o sistema relê as páginas do site e avisa no celular e no e-mail dos administradores se alguma mudou.
+      </p>
+      {erro && <div className="aviso-erro">{erro}</div>}
+      {msg && <p className="at-dica" style={{ color: '#14532D' }}>{msg}</p>}
+      {mudaram.length > 0 && (
+        <div className="aviso-erro" style={{ background: '#FFF4D6', color: '#7A5600' }}>
+          ⚠️ {mudaram.length === 1 ? 'Uma página mudou' : `${mudaram.length} páginas mudaram`} desde a última leitura: {mudaram.map((f) => f.nome).join(', ')}. Clique em “✨ Gerar sugestões” nela.
+        </div>
+      )}
+
+      <div className="rb-fonte-add">
+        <input className="campo" type="url" inputMode="url" placeholder="https://www.seuhotel.com.br/pagina" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Endereço da página" />
+        <button type="button" className="at-btn at-btn-verde" onClick={adicionar} disabled={!!ocupado || !url.trim()}>{ocupado === 'adicionar' ? 'Adicionando…' : '+ Adicionar página'}</button>
+        <button type="button" className="at-btn" onClick={verPaginas} disabled={!!ocupado || !url.trim()} title="Abre o endereço e lista as outras páginas do mesmo site">{ocupado === 'links' ? 'Abrindo…' : '🔗 Ver as páginas deste site'}</button>
+        <label className={`at-btn ${ocupado ? 'rb-desligado' : ''}`} style={{ cursor: 'pointer' }}>
+          {ocupado === 'pdf' ? 'Enviando…' : '📄 Enviar PDF'}
+          <input ref={arquivoRef} type="file" accept="application/pdf,.pdf" hidden disabled={!!ocupado} onChange={(e) => enviarPdf(e.target.files?.[0])} />
+        </label>
+      </div>
+
+      {links && (
+        <div className="at-reserva" style={{ margin: '10px 0' }}>
+          <strong>Páginas de {links.url.replace(/^https?:\/\//, '').split('/')[0]}</strong>
+          <p className="at-dica" style={{ margin: '4px 0 8px' }}>Marque as que têm informação para o cliente (serviços, regras, café, lazer, localização, cardápio). Não precisa de página de reserva nem de fotos.</p>
+          {!links.links.length && <p className="at-dica">Nenhuma página nova encontrada.</p>}
+          <div className="rb-links">
+            {links.links.map((l) => (
+              <label key={l.url} className="rb-link">
+                <input type="checkbox" checked={marcados.includes(l.url)} onChange={(e) => setMarcados(e.target.checked ? [...marcados, l.url] : marcados.filter((x) => x !== l.url))} />
+                <span><strong>{l.texto}</strong>{l.pdf ? ' (PDF)' : ''}<span className="at-dica" style={{ display: 'block', margin: 0, overflowWrap: 'anywhere' }}>{l.url}</span></span>
+              </label>
+            ))}
+          </div>
+          <div className="at-botoes">
+            <button type="button" className="at-btn at-btn-verde" onClick={adicionarMarcadas} disabled={!!ocupado || !marcados.length}>Adicionar {marcados.length || ''} marcada(s)</button>
+            <button type="button" className="at-btn" onClick={() => setLinks(null)}>Fechar</button>
+          </div>
+        </div>
+      )}
+
+      {dados && !fontes.length && <p className="at-dica">Nenhuma fonte cadastrada ainda.</p>}
+      {fontes.length > 0 && (
+        <ul className="rb-fontes">
+          {fontes.map((f) => {
+            const [classe, rotulo] = SITUACAO_FONTE[f.situacao] || SITUACAO_FONTE.NOVA;
+            return (
+              <li key={f.id} className="rb-fonte">
+                <div style={{ minWidth: 0, flex: '1 1 260px' }}>
+                  <strong>{f.tipo === 'PDF' ? '📄' : '🌐'} {f.nome}</strong> <span className={classe}>{rotulo}</span>
+                  <span className="at-dica" style={{ display: 'block', margin: 0, overflowWrap: 'anywhere' }}>
+                    {f.tipo === 'SITE' ? <a href={f.url} target="_blank" rel="noopener noreferrer">{f.url}</a> : 'Arquivo PDF'}
+                    {f.conferida_em ? ` · lida em ${dataHora(f.conferida_em)}` : ''}{f.caracteres ? ` · ${Number(f.caracteres).toLocaleString('pt-BR')} letras` : ''}
+                    {f.sugerida_em ? ` · sugestões em ${dataHora(f.sugerida_em)}` : ''}
+                  </span>
+                  {f.situacao === 'ERRO' && f.erro && <span className="at-erro-envio" style={{ display: 'block' }}>{f.erro}</span>}
+                </div>
+                <div className="rb-fonte-botoes">
+                  <button type="button" className="at-btn" onClick={() => gerar(f)} disabled={!!ocupado}>{ocupado === `gerar-${f.id}` ? '✨ Lendo…' : '✨ Gerar sugestões'}</button>
+                  <button type="button" className="at-link-pequeno" onClick={() => apagar(f)} disabled={!!ocupado}>Tirar</button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {progresso && <p className="at-dica">⏳ {progresso.fonte}: {progresso.texto}</p>}
+
+      {sugestoes.length > 0 && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline', marginTop: 14 }}>
+            <h3 style={{ margin: 0 }}>💡 Sugestões para conferir ({sugestoes.length})</h3>
+            <button type="button" className="at-btn" onClick={aceitarTodas} disabled={!!ocupado}>Aceitar todas</button>
+          </div>
+          <p className="at-dica" style={{ margin: '4px 0 0' }}>Pode corrigir o texto sugerido antes de aceitar. A IA pode errar: confira com a fonte.</p>
+          {sugestoes.map((s) => (
+            <div key={s.id} className="at-reserva rb-sugestao">
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                <strong>{s.tipo === 'MUDOU' ? '✏️' : '➕'} {TIPOS_SUGESTAO[s.tipo]} · {s.assunto}</strong>
+                <span className="at-dica" style={{ margin: 0 }}>de {nomeDaFonte(s.fonte_id)}</span>
+              </div>
+              <p style={{ margin: '6px 0 4px' }}>{s.explicacao}</p>
+              <div className="at-dica" style={{ margin: '2px 0', overflowWrap: 'anywhere' }}><strong style={{ color: 'var(--tinta)' }}>Na fonte:</strong> “{s.trecho_fonte}”</div>
+              {s.tipo === 'MUDOU' && s.trecho_atual && <div className="at-dica" style={{ margin: '2px 0', overflowWrap: 'anywhere' }}><strong style={{ color: 'var(--tinta)' }}>Hoje o robô diz:</strong> “{s.trecho_atual}”</div>}
+              <label className="rotulo" htmlFor={`rb-sug-${s.id}`} style={{ marginTop: 6 }}>{s.tipo === 'MUDOU' ? 'Trocar por' : 'Acrescentar'}</label>
+              <textarea id={`rb-sug-${s.id}`} className="campo at-campo-pequeno" rows={Math.min(6, Math.max(2, Math.ceil(textoDe(s).length / 90)))} value={textoDe(s)} onChange={(e) => setEditados({ ...editados, [s.id]: e.target.value })} />
+              <div className="at-botoes">
+                <button type="button" className="at-btn at-btn-verde" onClick={() => aceitarUma(s)} disabled={!!ocupado}>✅ Aceitar</button>
+                <button type="button" className="at-btn" onClick={() => recusarUma(s)} disabled={!!ocupado}>Recusar</button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+      <style>{`
+        .rb-fonte-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+        .rb-fonte-add .campo { flex: 1 1 280px; min-width: 0; }
+        .rb-desligado { opacity: .5; pointer-events: none; }
+        .rb-links { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; }
+        .rb-link { display: flex; gap: 8px; align-items: flex-start; }
+        .rb-fontes { list-style: none; margin: 8px 0 0; padding: 0; }
+        .rb-fonte { display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--borda); padding: 10px 0; }
+        .rb-fonte-botoes { display: flex; gap: 10px; align-items: center; }
+        .rb-chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #F1F1EE; color: #5B6762; font-weight: 600; }
+        .rb-chip-ok { background: #DDF2E4; color: #1E6B3C; }
+        .rb-chip-alerta { background: #FDF3D7; color: #8A6100; }
+        .rb-chip-erro { background: #FDE2E1; color: #9B1C1C; }
+        .rb-sugestao { margin: 10px 0 0; }
+      `}</style>
+    </section>
+  );
+}
+
 function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRascunhoSalvo }) {
   const [assuntos, setAssuntos] = useState(() => (Array.isArray(conteudo?.rascunho) && conteudo.rascunho.length ? conteudo.rascunho : conteudo?.publicado || []));
   const [ocupado, setOcupado] = useState(false);
@@ -659,6 +884,14 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRas
     setAssuntos(nova);
   };
   const alterar = (i, campos) => setAssuntos(assuntos.map((a, k) => (k === i ? { ...a, ...campos } : a)));
+  // Sugestão aceita (fontes do site/PDF): entra no rascunho na hora
+  async function aceitarSugestao(sug) {
+    const r = aplicarSugestao(assuntosRef.current, sug);
+    await salvarRascunho(r.assuntos, null);
+    assuntosRef.current = normalizarAssuntos(r.assuntos); // a próxima ("Aceitar todas") já parte desta
+    setAberto(r.indice);
+    return r;
+  }
   const adicionar = (titulo = 'Novo assunto') => { setAssuntos([...assuntos, { titulo, texto: '' }]); setAberto(assuntos.length); };
 
   // A IA lê os assuntos desta tela (mesmo antes de publicar) e a Cloudbeds
@@ -744,6 +977,8 @@ function Conteudo({ hotelId, nomeHotel, conteudo, setErro, setOk, onMudou, onRas
         </div>
         <p className="at-dica">{assuntos.length} assunto(s) · {caracteres.toLocaleString('pt-BR')} caracteres{caracteres > 40000 ? ' — está grande; textos muito longos deixam o robô mais caro e mais lento.' : ''}</p>
       </section>
+
+      {!bloqueado && <Fontes hotelId={hotelId} assuntos={atuais} onAceitar={aceitarSugestao} />}
 
       {revisao && (
         <Revisao revisao={revisao} velha={revisaoVelha} onAbrir={abrirTrecho} onIgnorar={ignorarAchado} onFechar={() => setRevisao(null)} />
