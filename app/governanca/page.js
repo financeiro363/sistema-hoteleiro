@@ -264,7 +264,7 @@ export default function Governanca() {
         const { data: sessao } = await supabase.auth.getSession();
         const resposta = await fetch('/api/governanca-configurar-webhook', { headers: { Authorization: `Bearer ${sessao.session.access_token}` } });
         const r = await resposta.json();
-        if (resposta.ok) { setWebhookAtivo(!!r.ativo); setWebhookComSenha(!!r.comSenha); setWebhookBloqueio(!!r.bloqueio); }
+        if (resposta.ok) { setWebhookAtivo(!!r.ativo); setWebhookComSenha(!!r.comSenha); setWebhookBloqueio(!!r.bloqueio && r.reservas !== false); }
       } catch (e) { /* a tela continua; o cartão mostra "desativado" */ }
     }
 
@@ -1377,16 +1377,17 @@ export default function Governanca() {
             <p className="texto-suave" style={{ fontSize: 13 }}>
               Bloqueio feito direto na Cloudbeds: o quarto vira &quot;Interditado&quot; aqui, com a data de volta, e sai da lista das camareiras.
               Ao desbloquear lá, volta sozinho como &quot;Saída / Apt Sujo&quot;.
+              Reserva cancelada ou com datas novas na Cloudbeds vira uma nota na conversa do cliente, na Caixa de Entrada.
             </p>
             {webhookAtivo ? (
               <>
                 <p style={{ color: 'var(--sucesso-texto, #1E6B3C)', fontWeight: 700, fontSize: 14 }}>
-                  ✅ Ativado{webhookComSenha ? ' — com senha' : ''}{webhookBloqueio ? ' · bloqueios incluídos' : ''}
+                  ✅ Ativado{webhookComSenha ? ' — com senha' : ''}{webhookBloqueio ? ' · bloqueios e reservas incluídos' : ''}
                 </p>
                 {webhookComSenha && !webhookBloqueio && (
                   <div className="gv-alerta" role="alert">
-                    Os bloqueios feitos direto na Cloudbeds ainda não chegam aqui. Clique em <strong>Reativar</strong> para incluir
-                    (a chave de API precisa do escopo &quot;Room Block&quot;).
+                    Os bloqueios e as reservas canceladas ou alteradas na Cloudbeds ainda não chegam aqui. Clique em <strong>Reativar</strong> para incluir
+                    (a chave de API precisa dos escopos &quot;Room Block&quot; e &quot;Reservation&quot;).
                   </div>
                 )}
                 {!webhookComSenha && (
@@ -1398,7 +1399,7 @@ export default function Governanca() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {(!webhookComSenha || !webhookBloqueio) && (
                     <button type="button" className="botao botao-principal" onClick={() => configurarWebhook(true)} disabled={configurandoWebhook}>
-                      {configurandoWebhook ? 'Reativando…' : webhookComSenha ? '🔒 Reativar (incluir bloqueios)' : '🔐 Reativar com senha'}
+                      {configurandoWebhook ? 'Reativando…' : webhookComSenha ? '🔒 Reativar (incluir bloqueios e reservas)' : '🔐 Reativar com senha'}
                     </button>
                   )}
                   <button type="button" className="botao botao-suave" onClick={() => configurarWebhook(false)} disabled={configurandoWebhook}>

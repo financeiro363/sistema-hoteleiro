@@ -24,6 +24,8 @@ const API_WEBHOOK = 'https://hotels.cloudbeds.com/api/v1.3';
 const URL_ENDPOINT_WEBHOOK = 'https://chokmahsystem.netlify.app/api/governanca-webhook-cloudbeds';
 const CHAVE_SENHA = 'governanca_webhook_senha';
 const ACOES_BLOQUEIO = ['created', 'details_changed', 'removed'];
+// Reserva cancelada ou com datas novas (M10): nota na conversa do cliente
+const ACOES_RESERVA = ['status_changed', 'dates_changed'];
 
 async function inscrever(cb, endpointUrl, object, action) {
   const parametros = new URLSearchParams({ propertyID: cb.propertyId, endpointUrl, object, action });
@@ -49,10 +51,10 @@ export async function GET(request) {
     const auth = await chamador(request);
     if (auth.resposta) return auth.resposta;
     const { chamador: eu, supabaseAdmin } = auth;
-    let { data: hotel, error } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id, governanca_webhook_bloqueio_ids').eq('id', eu.hotel_id).maybeSingle();
-    if (error) ({ data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).maybeSingle());
+    let { data: hotel, error } = await supabaseAdmin.from('hoteis').select('*').eq('id', eu.hotel_id).maybeSingle();
+    error = error || (hotel && !('governanca_webhook_bloqueio_ids' in hotel) ? { message: 'sem coluna' } : null);
     const senha = await lerSegredo(supabaseAdmin, eu.hotel_id, CHAVE_SENHA);
-    return Response.json({ ativo: !!hotel?.governanca_webhook_id, comSenha: !!senha, bloqueio: (hotel?.governanca_webhook_bloqueio_ids || []).length > 0, semSqlBloqueio: !!error });
+    return Response.json({ ativo: !!hotel?.governanca_webhook_id, comSenha: !!senha, bloqueio: (hotel?.governanca_webhook_bloqueio_ids || []).length > 0, reservas: (hotel?.governanca_webhook_reserva_ids || []).length > 0, semSqlBloqueio: !!error });
   } catch (erro) {
     return Response.json({ erro: 'Erro inesperado no servidor: ' + erro.message }, { status: 500 });
   }
@@ -78,10 +80,11 @@ export async function POST(request) {
     try { cb = await carregarCloudbeds(supabaseAdmin, eu.hotel_id, segredoCripto); }
     catch (e) { return Response.json({ erro: e.message }, { status: 400 }); }
 
-    let { data: hotel, error: erroHotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id, governanca_webhook_bloqueio_ids').eq('id', eu.hotel_id).single();
-    if (erroHotel) ({ data: hotel } = await supabaseAdmin.from('hoteis').select('governanca_webhook_id').eq('id', eu.hotel_id).single());
+    let { data: hotel, error: erroHotel } = await supabaseAdmin.from('hoteis').select('*').eq('id', eu.hotel_id).single();
+    erroHotel = erroHotel || (hotel && !('governanca_webhook_bloqueio_ids' in hotel) ? { message: 'sem coluna' } : null);
+    const temColunaReservas = !!hotel && 'governanca_webhook_reserva_ids' in hotel;
     const antiga = hotel?.governanca_webhook_id || null;
-    const antigasBloqueio = hotel?.governanca_webhook_bloqueio_ids || [];
+    const antigasBloqueio = [...(hotel?.governanca_webhook_bloqueio_ids || []), ...(hotel?.governanca_webhook_reserva_ids || [])];
     const apagarBloqueios = async () => { for (const id of antigasBloqueio) { try { await apagarInscricao(cb, id); } catch (e) { /* já não existe */ } } };
 
     if (ativar) {
@@ -134,7 +137,21 @@ export async function POST(request) {
         }
         await supabaseAdmin.from('hoteis').update({ governanca_webhook_bloqueio_ids: ids.length ? ids : null }).eq('id', eu.hotel_id);
       }
-      return Response.json({ sucesso: true, aviso, bloqueio });
+      // Reservas (M10)
+      let reservas = false;
+      if (temColunaReservas) {
+        const ids = [];
+        try {
+          for (const acao of ACOES_RESERVA) ids.push(await inscrever(cb, `${URL_ENDPOINT_WEBHOOK}?chave=${encodeURIComponent(senha)}`, 'reservation', acao));
+          reservas = true;
+        } catch (e) {
+          for (const id of ids) { try { await apagarInscricao(cb, id); } catch (e2) { /* segue */ } }
+          ids.length = 0;
+          aviso = [aviso, `Os avisos de reserva cancelada/alterada não foram ativados: ${e.message}`].filter(Boolean).join(' ');
+        }
+        await supabaseAdmin.from('hoteis').update({ governanca_webhook_reserva_ids: ids.length ? ids : null }).eq('id', eu.hotel_id);
+      }
+      return Response.json({ sucesso: true, aviso, bloqueio, reservas });
     }
 
     if (antiga && antiga !== 'ativo') {
@@ -143,6 +160,7 @@ export async function POST(request) {
     }
     await apagarBloqueios();
     if (!erroHotel) await supabaseAdmin.from('hoteis').update({ governanca_webhook_bloqueio_ids: null }).eq('id', eu.hotel_id);
+    if (temColunaReservas) await supabaseAdmin.from('hoteis').update({ governanca_webhook_reserva_ids: null }).eq('id', eu.hotel_id);
     await supabaseAdmin.from('hoteis').update({ governanca_webhook_id: null }).eq('id', eu.hotel_id);
     await supabaseAdmin.from('atendimento_segredos').delete().eq('hotel_id', eu.hotel_id).eq('canal_id', 0).eq('chave', CHAVE_SENHA);
     return Response.json({ sucesso: true });

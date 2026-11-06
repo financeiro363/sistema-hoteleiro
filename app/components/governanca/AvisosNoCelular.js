@@ -24,8 +24,8 @@ function instalado() {
   return window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
 }
 
-export default function AvisosNoCelular({ manutencao = false }) {
-  const oQue = manutencao ? 'os chamados de manutenção' : 'os pedidos da recepção';
+export default function AvisosNoCelular({ manutencao = false, gestor = false }) {
+  const oQue = gestor ? 'os avisos de nota baixa na estadia' : manutencao ? 'os chamados de manutenção' : 'os pedidos da recepção';
   const [situacao, setSituacao] = useState('carregando'); // carregando | sem-suporte | iphone-instalar | desligado | negado | ligado
   const [ocupado, setOcupado] = useState(false);
   const [mensagem, setMensagem] = useState('');
@@ -117,7 +117,7 @@ export default function AvisosNoCelular({ manutencao = false }) {
       <strong>🔔 Avisos no celular</strong>
       {situacao === 'desligado' && (
         <>
-          <p>{manutencao ? 'Ligue para receber na hora os chamados novos (os urgentes avisam de novo a cada 30 minutos se ninguém pegar), mesmo com a tela apagada.' : 'Ligue para receber na hora os pedidos da recepção (toalha extra, travesseiro…), mesmo com a tela apagada.'}</p>
+          <p>{gestor ? 'Ligue para receber na hora o aviso quando um hóspede der nota 1, 2 ou 3 para a estadia, mesmo com a tela apagada.' : manutencao ? 'Ligue para receber na hora os chamados novos (os urgentes avisam de novo a cada 30 minutos se ninguém pegar), mesmo com a tela apagada.' : 'Ligue para receber na hora os pedidos da recepção (toalha extra, travesseiro…), mesmo com a tela apagada.'}</p>
           <button type="button" className="botao botao-principal gc-avisos-botao" onClick={ligar} disabled={ocupado}>
             {ocupado ? 'Ligando…' : '🔔 Ativar avisos neste celular'}
           </button>

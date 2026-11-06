@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { chamarApi, dataHora, baixarCsv, telefoneBonito } from './util';
 import {
-  AUTOMACOES, AUTOMACAO_POR_TIPO, CAMPOS_VARIAVEL, SITUACOES_DISPARO, esperaTexto, AUTOMACOES_POR_HORA, VARIAVEIS_TEXTO,
+  AUTOMACOES, AUTOMACAO_POR_TIPO, CAMPOS_VARIAVEL, SITUACOES_DISPARO, esperaTexto, AUTOMACOES_POR_HORA, AUTOMACOES_DA_FICHA, VARIAVEIS_TEXTO,
 } from '../../../lib/atendimento/automacoesConfig';
 
 // Rótulo e dica do texto da mensagem normal (quando a conversa está aberta)
@@ -31,6 +31,7 @@ function resumoDaEspera(def, salvo) {
   const hora = salvo?.config?.hora || def.configPadrao?.hora;
   const dias = salvo?.config?.dias ?? def.configPadrao?.dias;
   if (def.tipo === 'DIA_SAIDA') return `no dia da saída, às ${hora}`;
+  if (AUTOMACOES_DA_FICHA.includes(def.tipo)) return `confere as fichas todo dia às ${hora}`;
   if (def.tipo === 'PRE_CHECKIN' || def.tipo === 'FICHA_VESPERA') return `${dias} dia(s) antes, às ${hora}`;
   if (def.tipo === 'POS_CHECKOUT') return `${dias} dia(s) depois, às ${hora}`;
   if (def.tipo === 'SEM_DISPONIBILIDADE') return `consulta a cada ${salvo?.config?.reverificar_horas || def.configPadrao.reverificar_horas} h`;
@@ -104,7 +105,7 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
   const [ok, setOk] = useState('');
   const [ocupado, setOcupado] = useState(false);
   const [telefone, setTelefone] = useState('');
-  const usaHora = AUTOMACOES_POR_HORA.includes(def.tipo);
+  const usaHora = AUTOMACOES_POR_HORA.includes(def.tipo) || AUTOMACOES_DA_FICHA.includes(def.tipo);
 
   useEffect(() => {
     if (!f.canal_id) { setModelos(null); return undefined; }
@@ -251,7 +252,7 @@ function Formulario({ def, salvo, canais, hotelId, onSalvo, onFechar }) {
       <div className="at-grade" style={{ marginTop: 8 }}>
         {usaHora ? (
           <>
-            {def.tipo !== 'DIA_SAIDA' && (
+            {def.tipo !== 'DIA_SAIDA' && !AUTOMACOES_DA_FICHA.includes(def.tipo) && (
               <label><span className="rotulo">{def.tipo === 'POS_CHECKOUT' ? 'Quantos dias depois da saída' : 'Quantos dias antes da entrada'}</span>
                 <input className="campo" type="number" min={0} max={7} value={f.dias} onChange={(e) => setF({ ...f, dias: e.target.value })} /></label>
             )}

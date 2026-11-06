@@ -23,12 +23,16 @@
 // Bloqueio feito direto na Cloudbeds (roomblock/created, details_changed,
 // removed): o quarto vira "Interditado" com a data de volta e, ao desbloquear
 // lá, volta como "Saída / Apt Sujo" (lib/governanca/bloqueiosExternos.js).
+//
+// Reserva cancelada ou com datas novas (reservation/status_changed e
+// dates_changed): nota na conversa do cliente (lib/atendimento/reservaMudou.js).
 // ============================================================================
 
 import { clienteAdmin, lerSegredo } from '../../../lib/atendimento/servidor';
 import { carregarCloudbeds, situacaoNaCloudbeds, senhaWebhookConfere } from '../../../lib/governanca/cloudbeds';
 import { estadoAposCloudbeds, hojeNoHotel } from '../../../lib/governanca/regras';
 import { lerEventoBloqueio, processarBloqueio } from '../../../lib/governanca/bloqueiosExternos';
+import { lerEventoReserva, processarMudancaReserva } from '../../../lib/atendimento/reservaMudou';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,6 +44,9 @@ export async function POST(request) {
     // Bloqueio feito direto na Cloudbeds (M23): roomblock/created, details_changed, removed
     const bloqueio = lerEventoBloqueio(corpo);
     if (bloqueio) return await tratarBloqueio(request, bloqueio);
+    // Reserva cancelada ou com datas novas (M10): nota na conversa do cliente
+    const reserva = lerEventoReserva(corpo);
+    if (reserva) return await tratarReserva(request, reserva);
     if (!corpo || corpo.event !== 'housekeeping/room_condition_changed') return ok();
 
     const propertyId = String(corpo.propertyId ?? corpo.propertyID ?? '');
@@ -82,6 +89,24 @@ export async function POST(request) {
     // Erro inesperado: a Cloudbeds tenta de novo em 1 minuto (até 5 vezes)
     return Response.json({ erro: erro.message }, { status: 500 });
   }
+}
+
+async function hotelComSenha(request, propertyId) {
+  let supabaseAdmin;
+  try { supabaseAdmin = clienteAdmin(); } catch (e) { return {}; }
+  const { data: credencial } = await supabaseAdmin.from('cloudbeds_credenciais').select('hotel_id').eq('cloudbeds_property_id', propertyId).maybeSingle();
+  if (!credencial) return {};
+  const senha = await lerSegredo(supabaseAdmin, credencial.hotel_id, 'governanca_webhook_senha');
+  if (!senha || !senhaWebhookConfere(new URL(request.url).searchParams.get('chave'), senha)) return { recusado: true };
+  return { supabaseAdmin, hotelId: credencial.hotel_id };
+}
+
+async function tratarReserva(request, ev) {
+  const h = await hotelComSenha(request, ev.propertyId);
+  if (h.recusado) return Response.json({ erro: 'Senha do aviso não confere.' }, { status: 401 });
+  if (!h.supabaseAdmin) return ok();
+  await processarMudancaReserva(h.supabaseAdmin, h.hotelId, ev);
+  return ok();
 }
 
 async function tratarBloqueio(request, b) {

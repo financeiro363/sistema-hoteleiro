@@ -53,7 +53,7 @@ export async function POST(request) {
 
     if (corpo.acao === 'testar') {
       const r = await enviarPush(supabaseAdmin, chamador.hotel_id, [chamador.id], {
-        titulo: '🔔 Teste de aviso', corpo: `Tudo certo, ${String(chamador.nome || '').split(' ')[0]}! ${chamador.papel === 'MANUTENCAO' ? 'Os chamados de manutenção' : 'Os pedidos da recepção'} chegam assim.`,
+        titulo: '🔔 Teste de aviso', corpo: `Tudo certo, ${String(chamador.nome || '').split(' ')[0]}! ${chamador.papel === 'MANUTENCAO' ? 'Os chamados de manutenção' : chamador.papel === 'ADMIN' ? 'Os avisos do sistema' : 'Os pedidos da recepção'} chegam assim.`,
         url: chamador.papel === 'MANUTENCAO' ? '/manutencao' : '/governanca', tag: 'teste',
       });
       if (!r.enviados) return erro('Nenhum aviso chegou. Desligue e ligue os avisos de novo neste celular.');
