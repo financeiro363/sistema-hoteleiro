@@ -75,6 +75,8 @@ import { enviarResumo, listaDeEmails } from '../../../lib/atendimento/resumoSema
 import { linhaDoTempo } from '../../../lib/atendimento/linhaDoTempo';
 import { NOTA_BAIXA_ATE } from '../../../lib/atendimento/automacoesConfig';
 import { historicoDoContato } from '../../../lib/atendimento/historicoEstadias';
+import { CHAVE_GROQ, chaveGroqValida, transcreverMensagem } from '../../../lib/atendimento/transcricao';
+import { sugerirResposta } from '../../../lib/atendimento/robo';
 import { gravarSegredo, lerSegredo } from '../../../lib/atendimento/servidor';
 import { carregarOutrosHoteis, outroHotelLiberado, listaOutrosHoteis, limparDescricao, MAX_OUTROS_HOTEIS } from '../../../lib/atendimento/outrosHoteis';
 
@@ -159,6 +161,38 @@ export async function POST(request) {
       case 'minha_assinatura': return await acaoMinhaAssinatura(supabaseAdmin, chamador, corpo);
       case 'painel': return await acaoPainel(supabaseAdmin, chamador, corpo);
       case 'perguntas': return await acaoPerguntas(supabaseAdmin, chamador, corpo);
+      case 'transcrever': {
+        const { data: msg } = await supabaseAdmin.from('atendimento_mensagens').select('*').eq('id', Number(corpo.mensagemId) || 0).maybeSingle();
+        if (!msg) return respostaErro('Mensagem não encontrada.', 404);
+        await carregarConversa(supabaseAdmin, chamador, msg.conversa_id); // confere o acesso
+        const r = await transcreverMensagem(supabaseAdmin, msg);
+        return r.erro ? respostaErro(r.erro) : Response.json({ sucesso: true, transcricao: r.mensagem.anexos[0].transcricao });
+      }
+      case 'sugerir_resposta': {
+        const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
+        try { return Response.json({ sucesso: true, ...(await sugerirResposta(supabaseAdmin, conversa, { origem: origemDoSite(request), autor: { id: chamador.id } })) }); }
+        catch (e) { return respostaErro(e.message); }
+      }
+      case 'groq_chave': {
+        const hotelId = hotelDoAdmin(chamador, corpo.hotelId);
+        if (corpo.apagar) {
+          await supabaseAdmin.from('atendimento_segredos').delete().eq('hotel_id', hotelId).eq('canal_id', 0).eq('chave', CHAVE_GROQ);
+          return Response.json({ sucesso: true, salva: false });
+        }
+        if (corpo.salvar) {
+          const chave = String(corpo.chave || '').trim();
+          if (!chaveGroqValida(chave)) return respostaErro('Cole a chave da Groq (começa com gsk_).');
+          // Confere a chave na Groq antes de guardar
+          try {
+            const r = await fetch('https://api.groq.com/openai/v1/models', { headers: { Authorization: `Bearer ${chave}` } });
+            if (r.status === 401) return respostaErro('A Groq não aceitou esta chave. Confira se copiou inteira.');
+          } catch (e) { return respostaErro('Não foi possível falar com a Groq para conferir a chave. Tente de novo.'); }
+          await gravarSegredo(supabaseAdmin, hotelId, CHAVE_GROQ, chave);
+          return Response.json({ sucesso: true, salva: true });
+        }
+        const atual = await lerSegredo(supabaseAdmin, hotelId, CHAVE_GROQ);
+        return Response.json({ salva: !!atual });
+      }
       case 'historico_estadias': {
         const conversa = await carregarConversa(supabaseAdmin, chamador, corpo.conversaId);
         return Response.json(await historicoDoContato(supabaseAdmin, conversa));

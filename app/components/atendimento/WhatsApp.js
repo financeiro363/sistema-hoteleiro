@@ -200,7 +200,7 @@ function FormModelo({ canalId, hotelId, existentes, onCriado, onFechar }) {
     setPronto(chave);
     const p = prontos.find((x) => x.chave === chave);
     if (!p) { setM(VAZIO); return; }
-    setM({ ...VAZIO, nome: p.chave, categoria: p.categoria, cabecalho: p.cabecalho || '', corpo: p.corpo, exemplos: [...p.exemplos], rodape: p.rodape || '', botoes: p.botoes.map((b) => ({ ...b })) });
+    setM({ ...VAZIO, nome: p.nome || p.chave, idioma: p.idioma || 'pt_BR', categoria: p.categoria, cabecalho: p.cabecalho || '', corpo: p.corpo, exemplos: [...p.exemplos], rodape: p.rodape || '', botoes: p.botoes.map((b) => ({ ...b })) });
   }
 
   function addVariavel() {

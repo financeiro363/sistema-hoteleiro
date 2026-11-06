@@ -14,8 +14,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
 import { chamarApi, dataHora } from './util';
 import {
-  textoCotacao, ABERTURA_PADRAO, ABERTURA_OUTRO_HOTEL, ABERTURA_OUTRO_HOTEL_ROBO, FINAL_PADRAO, reais, dataBR,
+  textoCotacao, textosDoIdioma, ABERTURA_PADRAO, ABERTURA_OUTRO_HOTEL, ABERTURA_OUTRO_HOTEL_ROBO, FINAL_PADRAO, reais, dataBR,
 } from '../../../lib/atendimento/cotacaoTexto';
+import { IDIOMAS } from '../../../lib/atendimento/idiomas';
 
 const DIA_MS = 86400000;
 const hoje = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
@@ -32,6 +33,15 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
   const [escolhidos, setEscolhidos] = useState([]);
   const [abertura, setAbertura] = useState('');
   const [final, setFinal] = useState('');
+  // Idioma da cotação (M7): o da conversa; em inglês/espanhol troca abertura e final
+  const [idioma, setIdioma] = useState(['en', 'es'].includes(conversa.idioma) ? conversa.idioma : 'pt');
+  function trocarIdioma(novo) {
+    setIdioma(novo);
+    if (!resultado) return;
+    const pt = { abertura: resultado.abertura || (resultado.hotelCotado ? ABERTURA_OUTRO_HOTEL : ABERTURA_PADRAO), final: resultado.final || FINAL_PADRAO };
+    const t = novo === 'pt' ? pt : textosDoIdioma(novo, { ...pt, outroHotel: !!resultado.hotelCotado });
+    setAbertura(t.abertura); setFinal(t.final);
+  }
   const [editarTexto, setEditarTexto] = useState(false);
   const [buscando, setBuscando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -77,8 +87,11 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
       });
       setResultado(r);
       setEscolhidos(r.itens.slice(0, 8).map((i) => i.tipoId));
-      setAbertura((atual) => atual || r.abertura || (r.hotelCotado ? ABERTURA_OUTRO_HOTEL : ABERTURA_PADRAO));
-      setFinal((atual) => atual || r.final || FINAL_PADRAO);
+      const ptA = r.abertura || (r.hotelCotado ? ABERTURA_OUTRO_HOTEL : ABERTURA_PADRAO);
+      const ptF = r.final || FINAL_PADRAO;
+      const tr = idioma === 'pt' ? { abertura: ptA, final: ptF } : textosDoIdioma(idioma, { abertura: ptA, final: ptF, outroHotel: !!r.hotelCotado });
+      setAbertura((atual) => atual || tr.abertura);
+      setFinal((atual) => atual || tr.final);
     } catch (er) { setErro(er.message); setResultado(null); }
     setBuscando(false);
   }
@@ -103,7 +116,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
   const previa = resultado && itensEscolhidos.length
     ? textoCotacao({
       cot: resultado, itens: itensEscolhidos, links: itensEscolhidos.map((_, n) => `https://…/r/••••-${n + 1}`),
-      abertura, final, nomeCliente: conversa.contato_nome, nomeHotel: resultado.nomeHotel,
+      abertura, final, nomeCliente: conversa.contato_nome, nomeHotel: resultado.nomeHotel, idioma,
       extra: { origem: resultado.nomeOrigem, descricao: resultado.hotelCotado?.descricao || '' },
     })
     : '';
@@ -115,7 +128,7 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
       await chamarApi('/api/atendimento', {
         acao: 'cotacao_enviar', conversaId: conversa.id, checkin, checkout,
         adultos: Number(adultos), criancas: Number(criancas), quartos: Number(quartos),
-        tipos: escolhidos, abertura, final,
+        tipos: escolhidos, abertura, final, idioma,
         ...(resultado?.hotelCotado ? { hotelCotadoId: resultado.hotelCotado.id } : {}),
       });
       onEnviada();
@@ -235,7 +248,12 @@ export function ModalCotacao({ conversa, canal, janelaAberta, onFechar, onEnviad
               <>
                 <div className="at-canal-topo" style={{ marginTop: 12 }}>
                   <p className="at-lateral-titulo" style={{ margin: 0 }}>Prévia {ehEmail ? 'do e-mail (vai com foto e botão “Reservar agora”)' : 'da mensagem'}</p>
-                  <button type="button" className="at-link-pequeno" onClick={() => setEditarTexto(!editarTexto)}>{editarTexto ? 'Fechar edição' : 'Editar abertura e final'}</button>
+                  <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select className="at-select" value={idioma} onChange={(e) => trocarIdioma(e.target.value)} aria-label="Idioma da cotação">
+                      {Object.entries(IDIOMAS).map(([k, v]) => <option key={k} value={k}>🌎 {v}</option>)}
+                    </select>
+                    <button type="button" className="at-link-pequeno" onClick={() => setEditarTexto(!editarTexto)}>{editarTexto ? 'Fechar edição' : 'Editar abertura e final'}</button>
+                  </span>
                 </div>
                 {editarTexto && (
                   <div className="ct-editar">

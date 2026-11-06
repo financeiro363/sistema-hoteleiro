@@ -219,6 +219,50 @@ function Item({ ok: certo, children }) {
   return <div className="at-dado"><span>{children}</span><span className={certo ? 'at-ok' : 'at-ruim'}>{certo ? '✓ Pronto' : '✗ Falta'}</span></div>;
 }
 
+// Áudio (M6): chave da Groq, que transcreve os áudios do WhatsApp
+function ChaveGroq({ hotelId }) {
+  const [salva, setSalva] = useState(null);
+  const [chave, setChave] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [erro, setErro] = useState('');
+  useEffect(() => {
+    chamarApi('/api/atendimento', { acao: 'groq_chave', hotelId }).then((r) => setSalva(r.salva)).catch(() => setSalva(false));
+  }, [hotelId]);
+  async function agir(corpo, ok) {
+    setOcupado(true); setErro(''); setMsg('');
+    try { const r = await chamarApi('/api/atendimento', { acao: 'groq_chave', hotelId, ...corpo }); setSalva(r.salva); setChave(''); setMsg(ok); }
+    catch (e) { setErro(e.message); }
+    setOcupado(false);
+  }
+  return (
+    <section className="at-cartao">
+      <h2>🎤 Áudio dos clientes (transcrição)</h2>
+      <p className="at-dica" style={{ marginTop: 0 }}>
+        A IA não ouve áudio. Com a chave da Groq, o robô transforma em texto os áudios do WhatsApp antes de responder, e a equipe vê o texto embaixo de cada áudio
+        (ou aperta “Transcrever”). Custa cerca de US$ 0,0007 por minuto de áudio, cobrado pela Groq.
+        {salva === true ? ' ✅ Chave guardada (por segurança, ela não volta para a tela).' : salva === false ? ' Nenhuma chave guardada: o robô pede para o cliente escrever.' : ''}
+      </p>
+      <details style={{ marginBottom: 10 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Como conseguir a chave</summary>
+        <ol className="at-dica" style={{ paddingLeft: 18 }}>
+          <li>Entre em <a href="https://console.groq.com" target="_blank" rel="noreferrer">console.groq.com</a> e crie a conta do hotel.</li>
+          <li>Em <strong>Settings → Billing</strong>, ative o plano pago (sem ele há um limite pequeno por dia).</li>
+          <li>Em <strong>API Keys</strong>, clique em <strong>Create API Key</strong>, dê o nome “Chokmah — áudio”.</li>
+          <li>Copie a chave (começa com <code>gsk_</code>) e cole aqui. Não mande a chave por e-mail nem por mensagem.</li>
+        </ol>
+      </details>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input className="campo" style={{ flex: '1 1 320px' }} type="password" autoComplete="off" value={chave} onChange={(e) => setChave(e.target.value)} placeholder="gsk_…" aria-label="Chave da Groq" />
+        <button type="button" className="at-btn at-btn-verde" onClick={() => agir({ salvar: true, chave: chave.trim() }, 'Chave conferida e guardada.')} disabled={ocupado || !chave.trim()}>Testar e guardar</button>
+        {salva && <button type="button" className="at-btn at-btn-perigo" onClick={() => agir({ apagar: true }, 'Chave apagada.')} disabled={ocupado}>Apagar a chave</button>}
+      </div>
+      {msg && <p className="at-dica" style={{ color: '#14532D' }}>{msg}</p>}
+      {erro && <div className="aviso-erro">{erro}</div>}
+    </section>
+  );
+}
+
 function Configuracao({
   hotelId, nomeHotel, config, form, setForm, resumo, conteudo, temWhatsApp, motor, ocupado, setOcupado, setErro, setOk, onMudou, irPara,
 }) {
@@ -315,6 +359,8 @@ function Configuracao({
           </div>
         )}
       </section>
+
+      <ChaveGroq hotelId={hotelId} />
 
       <section className="at-cartao">
         <h2>⚙️ Como o robô trabalha</h2>

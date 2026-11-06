@@ -88,10 +88,17 @@ function Anexo({ mensagem, anexo, indice, carregarSozinho }) {
   }
 
   if (erro) return <div className="at-erro-envio">⚠️ {anexo.nome || 'Arquivo'}: {erro}</div>;
+  if (url && (mime.startsWith('audio/') || mensagem?.tipo === 'audio')) {
+    return (
+      <div className="at-audio-bloco">
+        <audio className="at-anexo-audio" controls preload="metadata" src={url} />
+        {mensagem.direcao === 'ENTRADA' && <Transcricao mensagem={mensagem} anexo={anexo} />}
+      </div>
+    );
+  }
   if (url && mime.startsWith('image/')) {
     return <img className="at-anexo-img" src={url} alt={anexo.nome || 'imagem'} onClick={() => window.open(url, '_blank', 'noopener')} />;
   }
-  if (url && mime.startsWith('audio/')) return <audio className="at-anexo-audio" controls preload="metadata" src={url} />;
   if (url && mime.startsWith('video/')) return <video className="at-anexo-video" controls preload="metadata" src={url} />;
   const icone = mime.startsWith('image/') ? '🖼️' : mime.startsWith('audio/') ? '🎤' : mime.startsWith('video/') ? '🎬' : mime.includes('pdf') ? '📕' : '📄';
   return (
@@ -100,6 +107,28 @@ function Anexo({ mensagem, anexo, indice, carregarSozinho }) {
       {anexo.tamanho ? <small>({tamanhoArquivo(anexo.tamanho)})</small> : null}
       {abrindo && <small>…</small>}
     </button>
+  );
+}
+
+// Áudio do cliente em texto (M6): o robô transcreve sozinho os que responde;
+// aqui o atendente vê o texto ou pede a transcrição
+function Transcricao({ mensagem, anexo }) {
+  const [texto, setTexto] = useState(anexo.transcricao || '');
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState('');
+  useEffect(() => { setTexto(anexo.transcricao || ''); }, [anexo.transcricao]);
+  async function transcrever() {
+    setOcupado(true); setErro('');
+    try { const r = await chamarApi('/api/atendimento', { acao: 'transcrever', mensagemId: mensagem.id }); setTexto(r.transcricao); }
+    catch (e) { setErro(e.message); }
+    setOcupado(false);
+  }
+  if (texto) return <div className="at-transcricao"><span aria-hidden="true">📝</span> <em>{texto}</em></div>;
+  return (
+    <div className="at-transcricao">
+      <button type="button" className="at-link-pequeno" onClick={transcrever} disabled={ocupado}>{ocupado ? 'Transcrevendo…' : '📝 Transcrever o áudio'}</button>
+      {erro && <span className="at-erro-envio" style={{ display: 'block' }}>{erro}</span>}
+    </div>
   );
 }
 
@@ -342,7 +371,19 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
   const [cc, setCc] = useState('');
   const [indiceSugestao, setIndiceSugestao] = useState(0);
   const [listaRespostas, setListaRespostas] = useState(false);
+  const [sugerindo, setSugerindo] = useState(false);
   const campoRef = useRef(null);
+
+  // Copiloto (M8): a IA sugere; o texto entra no campo para o atendente editar e enviar
+  async function sugerir() {
+    setSugerindo(true); setErro('');
+    try {
+      const r = await chamarApi('/api/atendimento', { acao: 'sugerir_resposta', conversaId: conversa.id });
+      setTexto((atual) => (atual.trim() ? `${atual.trim()}\n\n${r.texto}` : r.texto));
+      setTimeout(() => campoRef.current?.focus(), 50);
+    } catch (e) { setErro(e.message); }
+    setSugerindo(false);
+  }
   const arquivoRef = useRef(null);
   const ehEmail = canal?.tipo === 'EMAIL';
   const ehSite = canal?.tipo === 'SITE';
@@ -597,6 +638,10 @@ function Escrever({ conversa, canal, usuario, respostas, modelos, nomeHotel, jan
           </>
         )}
         <button type="button" className="at-ferramenta" onClick={() => setListaRespostas(!listaRespostas)}>⚡ Respostas prontas</button>
+        {!nota && (
+          <button type="button" className="at-ferramenta" onClick={sugerir} disabled={sugerindo || canalDesligado}
+            title="A IA escreve uma sugestão com o conteúdo do robô; você revisa e envia">{sugerindo ? '✨ Pensando…' : '✨ Sugerir resposta'}</button>
+        )}
         {!nota && (
           <button type="button" className="at-ferramenta" onClick={() => setEscolherModelo(true)} disabled={canalDesligado || bloqueadoPelaJanela}
             title={ehEmail ? 'Usar um modelo de e-mail formatado' : 'Usar o texto de um modelo de e-mail'}>📄 Modelo de e-mail</button>
